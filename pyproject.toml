@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openappforge"
+version = "0.1.0"
+description = "Agentic, pipeline-driven software application production system"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "Apache-2.0"}
+authors = [{name = "OpenAppForge contributors"}]
+dependencies = [
+  "PyYAML>=6.0",
+  "jsonschema>=4.20",
+  "typer>=0.12",
+  "rich>=13.7",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Software Development :: Code Generators",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-cov>=5", "build>=1.2"]
+
+[project.scripts]
+appforge = "appforge.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["appforge*"]
+
+[tool.setuptools.package-data]
+appforge = [
+  "resources/pipeline_defs/*.yaml",
+  "resources/skills/**/*.md",
+  "resources/schemas/*.json",
+  "resources/schemas/artifacts/*.json",
+  "resources/templates/**/*",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

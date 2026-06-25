@@ -1,0 +1,5 @@
+---
+description: OpenAppForge autonomous software-production contract
+alwaysApply: true
+---
+Read `AGENT_GUIDE.md` and follow its pipeline, artifact, review, gate, and checkpoint loop. Do not replace execution with a plan. Do not deploy or publish without explicit permission.

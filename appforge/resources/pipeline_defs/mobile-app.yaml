@@ -1,0 +1,248 @@
+name: mobile-app
+version: '1.0'
+category: greenfield
+description: Mobile application with accessible UX, platform compatibility, security, and release artifacts.
+match:
+  keywords:
+  - mobile
+  - android
+  - ios
+  - flutter
+  - react native
+  - 모바일
+  - 안드로이드
+  - 아이폰
+orchestration:
+  default_mode: autonomous
+  max_stage_attempts: 3
+stages:
+- name: intake
+  description: Turn the raw request into a bounded product brief without blocking on routine ambiguity.
+  skill: stages/intake.md
+  produces:
+  - product_brief
+  tools:
+  - workspace_tree
+  checkpoint: true
+  approval: false
+  review_focus:
+  - Problem and users are explicit
+  - Constraints and assumptions are separated
+  - Non-goals prevent accidental scope growth
+  success_criteria:
+  - The brief is actionable
+  - Open questions have safe defaults or are true blockers
+  gates: []
+- name: specification
+  description: Translate the brief into traceable functional and non-functional requirements.
+  skill: stages/specification.md
+  produces:
+  - requirements_spec
+  tools:
+  - workspace_tree
+  - search_text
+  checkpoint: true
+  approval: false
+  review_focus:
+  - Requirements are testable
+  - Priorities and scope are explicit
+  - Acceptance criteria cover unhappy paths
+  success_criteria:
+  - Each requirement has a stable ID
+  - Non-functional requirements have measurable targets
+  gates: []
+- name: architecture
+  description: Select the smallest coherent architecture and document irreversible tradeoffs.
+  skill: stages/architecture.md
+  produces:
+  - architecture_spec
+  tools:
+  - detect_stack
+  - workspace_tree
+  checkpoint: true
+  approval: true
+  review_focus:
+  - Components have clear responsibilities
+  - Data flow and trust boundaries are visible
+  - Technology choices fit constraints
+  success_criteria:
+  - Architecture can be implemented incrementally
+  - Major alternatives and tradeoffs are recorded
+  gates: []
+- name: experience
+  description: Design user journeys, surfaces, states, content, responsiveness, and accessibility.
+  skill: stages/experience.md
+  produces:
+  - experience_spec
+  tools:
+  - workspace_tree
+  checkpoint: true
+  approval: true
+  review_focus:
+  - Every journey has success and failure states
+  - Loading, empty, error, and permission states exist
+  - Accessibility is built into interactions
+  success_criteria:
+  - Screens map to requirements
+  - The design is implementable without hidden behavior
+  gates: []
+- name: implementation
+  description: Implement the accepted scope completely, including tests and operationally useful documentation.
+  skill: stages/implementation.md
+  produces:
+  - implementation_report
+  tools:
+  - detect_stack
+  - run_command
+  - install_dependencies
+  - git_status
+  - git_diff
+  - write_text
+  - read_text
+  - search_text
+  checkpoint: true
+  approval: false
+  review_focus:
+  - Code matches repository conventions
+  - Requirements are covered by implementation and tests
+  - No placeholder logic or fake success remains
+  success_criteria:
+  - Application starts or library imports
+  - Changed behavior is documented
+  - Known gaps are truthful
+  gates:
+  - tool: detect_stack
+    required: true
+- name: verification
+  description: Run automated and targeted manual checks against every acceptance criterion.
+  skill: stages/verification.md
+  produces:
+  - verification_report
+  tools:
+  - detect_quality_commands
+  - run_tests
+  - run_lint
+  - run_typecheck
+  - run_build
+  - http_probe
+  checkpoint: true
+  approval: false
+  review_focus:
+  - Evidence comes from executed commands
+  - Acceptance criteria are traced
+  - Failures are not hidden or reclassified
+  success_criteria:
+  - Required tests and build pass
+  - Manual checks cover behavior automation cannot
+  gates:
+  - tool: run_tests
+    required: true
+  - tool: run_lint
+    required: false
+  - tool: run_typecheck
+    required: false
+  - tool: run_build
+    required: true
+- name: security
+  description: Threat-model the implemented system and run practical security checks.
+  skill: stages/security.md
+  produces:
+  - security_report
+  tools:
+  - secret_scan
+  - dependency_audit
+  - generate_sbom
+  - search_text
+  checkpoint: true
+  approval: false
+  review_focus:
+  - Trust boundaries and abuse cases are reviewed
+  - Secrets and dependencies are checked
+  - Residual risk is explicit
+  success_criteria:
+  - No likely committed credential remains
+  - Critical findings are fixed or block release
+  gates:
+  - tool: secret_scan
+    required: true
+  - tool: dependency_audit
+    required: false
+  - tool: generate_sbom
+    required: false
+- name: compatibility
+  description: Verify supported platforms, versions, clients, and upgrade paths.
+  skill: stages/compatibility.md
+  produces:
+  - compatibility_report
+  tools:
+  - run_tests
+  - run_build
+  - detect_stack
+  checkpoint: true
+  approval: false
+  review_focus:
+  - Target matrix reflects product promise
+  - Breaking changes and fallbacks are explicit
+  - Evidence exists per target
+  success_criteria:
+  - Required targets pass
+  - Unsupported targets are clearly stated
+  gates:
+  - tool: run_tests
+    required: true
+  - tool: run_build
+    required: true
+- name: release
+  description: Produce a reproducible, release-ready build and complete release documentation.
+  skill: stages/release.md
+  produces:
+  - release_report
+  tools:
+  - run_build
+  - secret_scan
+  - release_readiness
+  - artifact_inventory
+  - generate_sbom
+  checkpoint: true
+  approval: true
+  review_focus:
+  - Build is reproducible
+  - Install and rollback steps are tested
+  - Known issues are explicit
+  success_criteria:
+  - Required release checks pass
+  - No deployment occurs without explicit approval
+  gates:
+  - tool: run_build
+    required: true
+  - tool: secret_scan
+    required: true
+  - tool: release_readiness
+    required: true
+  - tool: artifact_inventory
+    required: false
+- name: handoff
+  description: Deliver source, quickstart, verification evidence, architecture pointers, and remaining work.
+  skill: stages/handoff.md
+  produces:
+  - handoff_report
+  tools:
+  - release_readiness
+  - archive_workspace
+  - artifact_inventory
+  checkpoint: true
+  approval: false
+  review_focus:
+  - Quickstart is executable
+  - Deliverables and open items are unambiguous
+  - Verification evidence is easy to find
+  success_criteria:
+  - A new engineer can continue
+  - A source archive is produced
+  gates:
+  - tool: release_readiness
+    required: true
+  - tool: archive_workspace
+    required: true
+  - tool: artifact_inventory
+    required: false

@@ -1,0 +1,3 @@
+# Python stack skill
+
+Prefer a `pyproject.toml`-based project, an isolated virtual environment, explicit package layout, and one documented entry point. Use type hints at public boundaries and dataclasses or validated models for structured data. Keep I/O at the edges and domain logic easy to test. Use `pytest` when available, otherwise `unittest`; avoid tests that depend on ordering, global state, or real network services. Never catch `Exception` without re-raising or producing a justified boundary error. Pin direct dependencies through the project metadata and lock mechanism used by the repository.
