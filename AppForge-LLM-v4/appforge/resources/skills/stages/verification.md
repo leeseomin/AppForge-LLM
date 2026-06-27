@@ -2,7 +2,7 @@
 
 Treat verification as an attempt to disprove readiness. Start from requirement IDs and acceptance criteria, then map each to automated or manual evidence.
 
-Run the repository's test suite, lint, type check, format check, and production build where available. If a required command is missing, add a conventional project script rather than claiming the check cannot exist. Use a local HTTP smoke test, CLI invocation, import check, or packaged-artifact check for the primary path.
+Run the repository's test suite, lint, type check, format check, and production build where available. If a required command is missing, add a conventional project script rather than claiming the check cannot exist — for Node projects this means adding `"test"` to `package.json` scripts and creating a test file the command can run; do not report `run_tests` as skippable. Use a local HTTP smoke test, CLI invocation, import check, or packaged-artifact check for the primary path.
 
 Test failure and boundary behavior: invalid input, empty state, permissions, configuration absence, retries, concurrency, cancellation, and migration as applicable. Do not rely solely on mocked tests for external boundaries; include at least one contract or integration check when practical.
 

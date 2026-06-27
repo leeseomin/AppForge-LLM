@@ -43,29 +43,71 @@ def _redact_text(text: str) -> str:
     return redact(truncate(text, MAX_CAPTURE_CHARS))
 
 
+def _find_outermost_json_object(text: str) -> str | None:
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape:
+            escape = False
+            continue
+        if in_string:
+            if ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
 def _extract_json_object(text: str) -> dict[str, Any]:
     stripped = text.strip()
     if not stripped:
         raise DriverError("LLM bridge returned an empty response")
     try:
         payload = json.loads(stripped)
+        if isinstance(payload, dict):
+            return payload
     except json.JSONDecodeError:
-        fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", stripped, flags=re.DOTALL)
-        candidate = fence.group(1) if fence else ""
+        pass
+    fence = re.search(r"```(?:json)?\s*(\{.*\})\s*```", stripped, flags=re.DOTALL)
+    if fence:
+        try:
+            payload = json.loads(fence.group(1))
+            if isinstance(payload, dict):
+                return payload
+        except json.JSONDecodeError:
+            pass
+    scan = stripped
+    while True:
+        candidate = _find_outermost_json_object(scan)
         if not candidate:
-            start = stripped.find("{")
-            end = stripped.rfind("}")
-            if start >= 0 and end > start:
-                candidate = stripped[start : end + 1]
-        if not candidate:
-            raise DriverError("LLM bridge response did not contain a JSON object")
+            break
         try:
             payload = json.loads(candidate)
-        except json.JSONDecodeError as exc:
-            raise DriverError(f"LLM bridge response was not valid JSON: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise DriverError("LLM bridge response JSON must be an object")
-    return payload
+            if isinstance(payload, dict):
+                return payload
+        except json.JSONDecodeError:
+            brace_start = scan.find("{")
+            next_start = scan.find("{", brace_start + 1)
+            if next_start < 0:
+                raise DriverError(f"LLM bridge response was not valid JSON: invalid object at position {brace_start}") from None
+            scan = scan[next_start:]
+            continue
+    raise DriverError("LLM bridge response did not contain a JSON object")
 
 
 def _safe_workspace_path(layout: ProjectLayout, relative_path: str) -> Path:

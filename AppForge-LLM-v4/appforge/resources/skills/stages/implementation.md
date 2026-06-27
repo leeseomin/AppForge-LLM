@@ -6,7 +6,7 @@ Work in small integrated increments. Implement domain behavior, interfaces, vali
 
 Add dependencies only when they materially reduce risk or complexity. Prefer maintained, focused packages and pin them through the ecosystem lockfile. Keep secrets in environment variables and provide `.env.example` with placeholders.
 
-Write tests for acceptance behavior and important failure paths. Ensure the application can start, the library can import, or the command can execute in the available environment. Update README with setup and run instructions. Remove placeholders, debug output, dead code, and temporary files.
+Write tests for acceptance behavior and important failure paths. Ensure the application can start, the library can import, or the command can execute in the available environment. **Register a runnable test command in the project manifest** — for Node projects add `"test"` to `package.json` scripts; for Python ensure `pytest` or `unittest` discovery works; for Go use `go test ./...`. The verification stage requires a detected test command and will fail if none exists. Update README with setup and run instructions. Remove placeholders, debug output, dead code, and temporary files.
 
 Before completion, inspect the diff for unrelated changes and run the narrowest relevant checks. The implementation report must name changed files, covered requirements, commands run, decisions, and any honest gap.
 
