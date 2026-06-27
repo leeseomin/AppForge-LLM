@@ -451,8 +451,24 @@ class JobManager:
             return path, str(job["download"]["filename"] or path.name)
 
     def shutdown(self) -> None:
-        # Worker threads are daemon threads so a local web server can stop immediately.
-        return
+        with self._lock:
+            active_jobs = [
+                job
+                for job in self._jobs.values()
+                if job.get("status") in ACTIVE_JOB_STATUSES
+            ]
+            for job in active_jobs:
+                job_id = str(job["id"])
+                cancel_event = self._cancel_events.setdefault(job_id, threading.Event())
+                cancel_event.set()
+                stage = str(job.get("active_stage") or "") or None
+                error = self._make_error(
+                    "JOB_CANCELLED",
+                    "세션 종료로 실행 중인 작업을 취소했습니다.",
+                    action="앱을 다시 시작한 뒤 필요하면 새 요청을 실행하세요.",
+                    stage=stage,
+                )
+                self._mark_cancelled_locked(job, error, stage=stage)
 
     def _run_job(self, job_id: str) -> None:
         layout: ProjectLayout | None = None
