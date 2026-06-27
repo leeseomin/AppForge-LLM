@@ -5,7 +5,7 @@
   "stage": "implementation",
   "status": "completed",
   "attempt": 1,
-  "timestamp": "2026-06-27T15:52:57+00:00",
+  "timestamp": "2026-06-27T16:02:15+00:00",
   "artifacts": {
     "implementation_report": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/implementation_report.json"
   },
@@ -62,51 +62,33 @@
     "stage_result": {
       "stage": "implementation",
       "status": "completed",
-      "summary": "Implemented Phase4 compact provider payloads, lazy model loading, ModelSelect fuzzy search, bounded chips, tests, and rebuilt assets.",
+      "summary": "Fixed the CLI model summary regression by reading compact provider model_count before falling back to models length, with regression coverage.",
       "files_changed": [
         ".appforge/artifacts/implementation_report.json",
-        "frontend/src/components/ModelSelect.vue",
-        "frontend/src/components/ProviderSettings.vue",
-        "frontend/src/styles.css",
-        "frontend/src/types.ts",
-        "llm_bridge/src/registry.ts",
-        "llm_bridge/src/server.ts",
-        "llm_bridge/src/types.ts",
-        "llm_bridge/test/registry.test.ts",
-        "llm_bridge/test/server.test.ts",
-        "appforge/resources/web/index.html",
-        "appforge/resources/web/assets/index-B8h20RM6.js",
-        "appforge/resources/web/assets/index-CJQsWsDa.css"
+        "appforge/llm_auth.py",
+        "tests/test_llm_auth.py"
       ],
       "commands_run": [
         {
-          "command": "bun run typecheck in llm_bridge",
+          "command": ".venv/bin/python -m pytest tests/test_llm_auth.py -q",
+          "result": "passed; 14 tests"
+        },
+        {
+          "command": ".venv/bin/ruff check appforge/llm_auth.py tests/test_llm_auth.py",
           "result": "passed"
-        },
-        {
-          "command": "bun test in llm_bridge",
-          "result": "passed; 8 tests"
-        },
-        {
-          "command": "npm run typecheck in frontend",
-          "result": "passed"
-        },
-        {
-          "command": "npm run build in frontend",
-          "result": "passed; rebuilt packaged assets"
         }
       ],
       "checks": [
         {
           "name": "Implementation report schema",
           "passed": true,
-          "evidence": "implementation_report.json lists completed features, files, commands, decisions, and covered requirements"
+          "evidence": "implementation_report.json records the CLI model_count follow-up fix"
         }
       ],
       "decisions": [
         {
-          "decision": "Keep ModelSelect dependency-free.",
-          "reason": "Phase4 requested external dependency count zero and the existing frontend stack can support the required matching directly."
+          "decision": "Prefer model_count over len(models) in provider summary.",
+          "reason": "Compact /providers intentionally returns models=[] while preserving the real count in model_count."
         }
       ],
       "unresolved": []

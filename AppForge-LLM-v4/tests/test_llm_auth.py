@@ -205,6 +205,28 @@ def test_cmd_models_refresh(monkeypatch):
     assert llm_auth.cmd_models("http://127.0.0.1:8788", refresh=True) == 0
 
 
+def test_cmd_models_summary_uses_compact_model_count(monkeypatch, capsys):
+    monkeypatch.setattr(llm_auth.llm_bridge, "ping", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(
+        llm_auth.llm_bridge,
+        "list_providers",
+        lambda *a, **k: {
+            "providers": [
+                {
+                    "id": "openrouter",
+                    "name": "OpenRouter",
+                    "models": [],
+                    "model_count": 338,
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(llm_auth.llm_bridge, "get_active", lambda *a, **k: {"provider": "openrouter", "model": None})
+
+    assert llm_auth.cmd_models("http://127.0.0.1:8788") == 0
+    assert "338" in capsys.readouterr().out
+
+
 def test_cmd_login_oauth_success(monkeypatch):
     monkeypatch.setattr(llm_auth.llm_bridge, "ping", lambda *a, **k: {"ok": True})
     monkeypatch.setattr(

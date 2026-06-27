@@ -35,7 +35,7 @@
     {
       "check": "Python quality",
       "passed": "passed",
-      "evidence": "pytest passed 78 tests and ruff passed"
+      "evidence": "pytest passed 78 tests and ruff passed; targeted llm_auth regression passed 14 tests"
     },
     {
       "check": "Payload and smoke",

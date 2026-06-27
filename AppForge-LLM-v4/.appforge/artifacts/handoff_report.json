@@ -7,6 +7,7 @@
     "Reusable ModelSelect fuzzy model picker",
     "Lazy provider model loading with in-memory cache and failure hints",
     "Bounded advanced model chips with more/collapse controls",
+    "CLI model summary now displays compact provider model_count",
     "Updated bridge tests and rebuilt web assets"
   ],
   "quickstart": [
@@ -24,6 +25,7 @@
     "bun run typecheck passed",
     "npm run typecheck and npm run build passed",
     ".venv/bin/python -m pytest -q passed 78 tests",
+    ".venv/bin/python -m pytest tests/test_llm_auth.py -q passed 14 tests",
     ".venv/bin/ruff check appforge tests passed",
     "Payload probe: /providers 40552 bytes vs include_models 287573 bytes",
     "./build.sh --smoke passed for http://127.0.0.1:8787"

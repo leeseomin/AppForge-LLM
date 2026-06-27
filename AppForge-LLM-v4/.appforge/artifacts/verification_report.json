@@ -9,6 +9,8 @@
     "npm run build",
     ".venv/bin/python -m pytest -q",
     ".venv/bin/ruff check appforge tests",
+    ".venv/bin/python -m pytest tests/test_llm_auth.py -q",
+    ".venv/bin/ruff check appforge/llm_auth.py tests/test_llm_auth.py",
     "APPFORGE_MODELS_DEV_URL=http://127.0.0.1:1 bun -e payload probe",
     "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_SKIP_LLM_BRIDGE=1 ./build.sh --smoke"
   ],
@@ -44,6 +46,16 @@
       "evidence": ".venv/bin/ruff check appforge tests returned All checks passed"
     },
     {
+      "check": "CLI compact model count regression",
+      "passed": "passed",
+      "evidence": ".venv/bin/python -m pytest tests/test_llm_auth.py -q passed 14 tests; new test asserts model_count=338 is printed when models=[]"
+    },
+    {
+      "check": "CLI auth targeted lint",
+      "passed": "passed",
+      "evidence": ".venv/bin/ruff check appforge/llm_auth.py tests/test_llm_auth.py returned All checks passed"
+    },
+    {
       "check": "Payload probe",
       "passed": "passed",
       "evidence": "/providers bytes=40552, /providers?include_models=true bytes=287573, /providers/openrouter/models bytes=20374 using local models.dev cache"
@@ -58,7 +70,7 @@
     {
       "requirement": "FR-001",
       "passed": "passed",
-      "evidence": "server.test verifies compact /providers models=[] and model_count>0; payload probe confirms compact response is far smaller than include_models"
+      "evidence": "server.test verifies compact /providers models=[] and model_count>0; payload probe confirms compact response is far smaller than include_models; test_cmd_models_summary_uses_compact_model_count verifies CLI uses model_count"
     },
     {
       "requirement": "FR-002",

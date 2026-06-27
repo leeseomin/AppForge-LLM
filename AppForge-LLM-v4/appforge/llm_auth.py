@@ -413,7 +413,7 @@ def cmd_models(
                 table.add_row(
                     s["id"],
                     s["name"],
-                    str(len(s.get("models", []))),
+                    str(s.get("model_count", len(s.get("models", [])))),
                     "[green]✓[/green]" if is_active else "-",
                 )
             console.print(table)
