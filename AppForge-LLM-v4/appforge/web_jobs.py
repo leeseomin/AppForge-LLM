@@ -111,6 +111,10 @@ class WebJobError(RuntimeError):
         }
 
 
+DEFAULT_LLM_BRIDGE_URL = "http://127.0.0.1:8788"
+LLM_BRIDGE_DRIVER_ALIASES = {"llm-bridge", "llm_bridge", "llm"}
+
+
 @dataclass(frozen=True)
 class WebConfig:
     projects_dir: Path = field(default_factory=lambda: Path("projects"))
@@ -125,6 +129,8 @@ class WebConfig:
     stage_timeout: int = 3600
     max_turns: int | None = None
     prompt_max_chars: int = 20_000
+    llm_bridge_url: str = DEFAULT_LLM_BRIDGE_URL
+    llm_provider: str | None = None
 
     @classmethod
     def from_env(cls) -> "WebConfig":
@@ -141,6 +147,8 @@ class WebConfig:
             stage_timeout=_env_int("APPFORGE_STAGE_TIMEOUT", 3600, minimum=60),
             max_turns=_env_optional_int("APPFORGE_MAX_TURNS"),
             prompt_max_chars=_env_int("APPFORGE_PROMPT_MAX_CHARS", 20_000, minimum=100),
+            llm_bridge_url=os.environ.get("APPFORGE_LLM_BRIDGE_URL", DEFAULT_LLM_BRIDGE_URL),
+            llm_provider=os.environ.get("APPFORGE_LLM_PROVIDER") or None,
         )
 
 
@@ -210,6 +218,8 @@ class JobManager:
 
     def driver_readiness(self) -> dict[str, Any]:
         requested = self.config.driver.casefold().strip()
+        if requested in LLM_BRIDGE_DRIVER_ALIASES:
+            return self._llm_bridge_readiness()
         if requested == "auto":
             if command_exists("codex"):
                 return {
@@ -303,7 +313,71 @@ class JobManager:
             "selected": None,
             "label": "알 수 없는 실행기",
             "message": f"지원하지 않는 드라이버입니다: {self.config.driver}",
-            "action": "APPFORGE_DRIVER를 auto, codex, claude 또는 generic으로 설정하세요.",
+            "action": "APPFORGE_DRIVER를 auto, codex, claude, generic 또는 llm-bridge로 설정하세요.",
+        }
+
+    def _llm_bridge_readiness(self) -> dict[str, Any]:
+        from . import llm_bridge
+
+        bridge_url = self.config.llm_bridge_url
+        try:
+            llm_bridge.ping(bridge_url)
+            active = llm_bridge.get_active(bridge_url)
+            provider_payload = llm_bridge.list_providers(bridge_url)
+        except llm_bridge.BridgeError as exc:
+            return {
+                "ready": False,
+                "requested": "llm-bridge",
+                "selected": None,
+                "label": "LLM 브릿지",
+                "message": str(exc),
+                "action": "llm_bridge 폴더에서 `bun install` 후 `bun run dev` 로 브릿지를 시작하세요.",
+            }
+        provider = active.get("provider") or self.config.llm_provider
+        model = active.get("model") or self.config.model
+        if not provider:
+            return {
+                "ready": False,
+                "requested": "llm-bridge",
+                "selected": None,
+                "label": "LLM 브릿지",
+                "message": "브릿지는 실행 중이지만 활성 프로바이더가 없습니다.",
+                "action": "설정 패널에서 프로바이더와 모델을 선택하세요.",
+            }
+        statuses = provider_payload.get("providers", [])
+        provider_status = next(
+            (
+                item
+                for item in statuses
+                if isinstance(item, dict) and item.get("id") == provider
+            ),
+            None,
+        )
+        if not provider_status:
+            return {
+                "ready": False,
+                "requested": "llm-bridge",
+                "selected": None,
+                "label": "LLM 브릿지",
+                "message": f"알 수 없는 프로바이더입니다: {provider}",
+                "action": "설정 패널에서 지원되는 프로바이더를 선택하세요.",
+            }
+        if not provider_status.get("configured"):
+            return {
+                "ready": False,
+                "requested": "llm-bridge",
+                "selected": None,
+                "label": "LLM 브릿지",
+                "message": f"{provider} 프로바이더 설정이 완료되지 않았습니다.",
+                "action": "설정 패널에서 API 키와 필요한 Base URL을 저장하세요.",
+            }
+        return {
+            "ready": True,
+            "requested": "llm-bridge",
+            "selected": "llm-bridge",
+            "label": f"LLM 브릿지 · {provider}",
+            "message": f"{provider}/{model or '기본 모델'} 을(를) 사용합니다.",
+            "action": "",
         }
 
     def create_job(self, prompt: str) -> dict[str, Any]:
@@ -454,6 +528,8 @@ class JobManager:
                     model=self.config.model,
                     agent_cmd=self.config.agent_cmd,
                     max_turns=self.config.max_turns,
+                    bridge_url=self.config.llm_bridge_url,
+                    llm_provider=self.config.llm_provider,
                 )
             except DriverError as exc:
                 error = self._make_error(

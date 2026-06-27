@@ -1,0 +1,79 @@
+{
+  "version": "1.0",
+  "pipeline": "feature",
+  "pipeline_version": "1.1",
+  "stage": "memory_engineering",
+  "status": "completed",
+  "attempt": 1,
+  "timestamp": "2026-06-27T08:32:28+00:00",
+  "artifacts": {
+    "memory_spec": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/memory_spec.json"
+  },
+  "gates": [
+    {
+      "kind": "artifact",
+      "name": "memory_spec",
+      "required": true,
+      "passed": true,
+      "path": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/memory_spec.json"
+    }
+  ],
+  "review": {
+    "passed": true,
+    "critical_count": 0,
+    "finding_count": 0,
+    "review_focus": [
+      "Sources of truth, readers, writers, retention, and invalidation are explicit",
+      "Restart, refresh, retry, migration, and stale-data behavior are designed",
+      "Sensitive data and secrets are excluded or protected by documented policy"
+    ],
+    "findings": []
+  },
+  "driver": {},
+  "metadata": {
+    "stage_result": {
+      "stage": "memory_engineering",
+      "status": "completed",
+      "summary": "Defined provider config, registry metadata, transient settings UI state, readiness state, AppForge stage evidence, and frontend dependency lock memory surfaces.",
+      "files_changed": [
+        ".appforge/artifacts/memory_spec.json",
+        ".appforge/stage-result.json"
+      ],
+      "commands_run": [
+        {
+          "command": ".venv/bin/python -m appforge prompt . --output .appforge/current-stage.md",
+          "result": "passed; generated the memory_engineering stage packet"
+        },
+        {
+          "command": "sed -n ... llm_bridge/src/config.ts llm_bridge/src/registry.ts appforge/llm_bridge.py",
+          "result": "passed; inspected bridge config path, registry metadata, and FastAPI bridge client behavior"
+        }
+      ],
+      "checks": [
+        {
+          "name": "memory-surfaces-named",
+          "passed": true,
+          "evidence": "memory_spec.json defines MEM-001 through MEM-006."
+        },
+        {
+          "name": "secrets-policy-explicit",
+          "passed": true,
+          "evidence": "MEM-001 and privacy rules state raw keys stay local and are not returned to the browser or logs."
+        },
+        {
+          "name": "lifecycle-boundaries-covered",
+          "passed": true,
+          "evidence": "memory_spec covers durable bridge config, transient browser state, recomputed health, stage evidence, and dependency lock retention."
+        }
+      ],
+      "decisions": [
+        {
+          "decision": "Treat /api/health readiness as recomputed memory rather than persisted state.",
+          "reason": "Bridge reachability and configured-provider status can change outside the web process, so persistent readiness would become stale."
+        }
+      ],
+      "unresolved": []
+    },
+    "manual_completion": true
+  }
+}

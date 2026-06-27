@@ -1,0 +1,125 @@
+{
+  "schema_version": "1.0",
+  "summary": "Verification passed for the LLM bridge feature after fixing the root no-isolation Python build environment by adding setuptools and wheel to the dev extra and resyncing uv.",
+  "passed": true,
+  "test_commands": [
+    ".venv/bin/python -m pytest -q",
+    "bun test (llm_bridge/)",
+    "bun run typecheck (llm_bridge/)",
+    "npm run typecheck (frontend/)",
+    "npm run build (frontend/)",
+    "env PATH=.venv/bin:... .venv/bin/python -m appforge tool run run_tests --project . --input '{}'",
+    "env PATH=.venv/bin:... .venv/bin/python -m appforge tool run run_build --project . --input '{}'"
+  ],
+  "results": [
+    {
+      "check": "Python test suite",
+      "passed": "passed",
+      "evidence": ".venv/bin/python -m pytest -q returned 0: 23 passed with one StarletteDeprecationWarning from FastAPI/TestClient."
+    },
+    {
+      "check": "Bridge secret echo regression",
+      "passed": "passed",
+      "evidence": "bun test in llm_bridge/ returned 0: 1 test passed, 0 failed, including provider upsert response does not echo stored api key."
+    },
+    {
+      "check": "Bridge TypeScript typecheck",
+      "passed": "passed",
+      "evidence": "bun run typecheck in llm_bridge/ returned 0 and ran tsc --noEmit."
+    },
+    {
+      "check": "Frontend TypeScript/Vue typecheck",
+      "passed": "passed",
+      "evidence": "npm run typecheck in frontend/ returned 0 and ran vue-tsc --noEmit."
+    },
+    {
+      "check": "Frontend production build",
+      "passed": "passed",
+      "evidence": "npm run build in frontend/ returned 0; Vite transformed 32 modules and wrote index-Bto0ykgx.js plus index-C_67LZJ9.css under appforge/resources/web/assets."
+    },
+    {
+      "check": "AppForge native run_tests gate",
+      "passed": "passed",
+      "evidence": "run_tests tool returned success with command python -m pytest -q, skipped=false, 23 passed."
+    },
+    {
+      "check": "AppForge native run_build gate",
+      "passed": "passed",
+      "evidence": "Initial run_build failed because setuptools.build_meta was unavailable. After adding setuptools>=69 and wheel>=0.43 to the dev extra and running uv sync --extra dev, run_build returned success and built openappforge-0.4.0.tar.gz plus openappforge-0.4.0-py3-none-any.whl. Setuptools license deprecation warnings remain non-blocking."
+    },
+    {
+      "check": "Quality command detection",
+      "passed": "passed",
+      "evidence": "detect_quality_commands with .venv/bin on PATH detected tests [python -m pytest -q] and build [python -m build --no-isolation]."
+    }
+  ],
+  "acceptance_results": [
+    {
+      "requirement": "FR-001",
+      "passed": "passed",
+      "evidence": "TopBar emits open-settings, App.vue renders ProviderSettings, and npm run typecheck/build passed."
+    },
+    {
+      "requirement": "FR-002",
+      "passed": "passed",
+      "evidence": "ProviderSettings uses typed API helpers for providers, models, save/delete, test, active selection, and health refresh; frontend typecheck/build passed."
+    },
+    {
+      "requirement": "FR-003",
+      "passed": "passed",
+      "evidence": "tests/test_web.py test_llm_provider_api_proxies_to_bridge passed as part of the full 23-test suite."
+    },
+    {
+      "requirement": "FR-004",
+      "passed": "passed",
+      "evidence": "tests/test_web.py test_llm_bridge_health_requires_configured_active_provider passed; create_driver and readiness paths are covered by full pytest and source inspection."
+    },
+    {
+      "requirement": "FR-005",
+      "passed": "passed",
+      "evidence": "llm_bridge server/config/registry/type surfaces passed bun run typecheck."
+    },
+    {
+      "requirement": "NFR-001",
+      "passed": "passed",
+      "evidence": "bun test confirms provider upsert responses do not echo saved API keys; source inspection confirms provider status uses has_key/key_source metadata; full secret scan is handled by the dedicated security stage."
+    },
+    {
+      "requirement": "NFR-002",
+      "passed": "passed",
+      "evidence": "Full Python suite passed and AppForge run_tests gate passed; existing non-bridge driver branches remain present."
+    },
+    {
+      "requirement": "NFR-003",
+      "passed": "passed",
+      "evidence": "npm run typecheck, npm run build, and bun run typecheck all returned 0."
+    },
+    {
+      "requirement": "NFR-004",
+      "passed": "passed",
+      "evidence": "Frontend lockfile build path passed after package-lock registry normalization and .npmrc replace-registry-host=always."
+    }
+  ],
+  "coverage": "Automated coverage includes full Python suite, targeted FastAPI readiness/proxy tests, bridge TypeScript type contracts, frontend Vue/TypeScript contracts, frontend production packaging, and root Python package build. Live provider calls are intentionally manual because they require user credentials and third-party availability.",
+  "failures": [],
+  "manual_checks": [
+    "Inspected appforge/llm_bridge.py, llm_bridge/src/config.ts, llm_bridge/src/server.ts, and llm_bridge/src/registry.ts to verify bridge config path, redacted provider status, no raw saved config echo, and local same-origin proxy boundary.",
+    "Verified appforge/tooling quality detection needs .venv/bin on PATH because this shell has no bare python executable.",
+    "Verified generated Python build artifacts live under ignored dist/ and are not source changes.",
+    "Live provider connectivity was not run because no user API key was supplied; ProviderSettings exposes manual test action for that path."
+  ],
+  "v4_contract_checks": [
+    {
+      "contract": "workflow",
+      "evidence": "WF-002 through WF-007 map to provider UI/proxy/readiness/generation checks."
+    },
+    {
+      "contract": "memory",
+      "evidence": "MEM-001/MEM-004 are covered by readiness/proxy tests and source inspection; MEM-006 by frontend lock/build verification."
+    },
+    {
+      "contract": "loop",
+      "evidence": "LOOP-003 terminal readiness states are tested; LOOP-005 verification loop recorded initial build failure and successful rerun after fix."
+    }
+  ]
+}

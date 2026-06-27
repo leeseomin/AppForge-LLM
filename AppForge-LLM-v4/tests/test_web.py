@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from appforge import llm_bridge
 from appforge.web import create_app
 from appforge.web_jobs import WebConfig
 
@@ -161,3 +162,137 @@ def test_web_job_preserves_agent_exit_code_and_stage_details(tmp_path: Path) -> 
         assert error["technical"]["driver"]["exit_code"] == 7
         assert error["technical"]["failed_checks"]
         assert error["action"]
+
+
+def test_llm_bridge_health_requires_configured_active_provider(tmp_path: Path, monkeypatch) -> None:
+    provider_payload = {
+        "providers": [
+            {
+                "id": "openai",
+                "name": "OpenAI",
+                "configured": False,
+                "has_key": False,
+                "key_source": "none",
+                "models": [{"id": "gpt-4o-mini"}],
+            }
+        ]
+    }
+    monkeypatch.setattr(llm_bridge, "ping", lambda url: {"ok": True})
+    monkeypatch.setattr(llm_bridge, "get_active", lambda url: {"provider": "openai", "model": "gpt-4o-mini"})
+    monkeypatch.setattr(llm_bridge, "list_providers", lambda url: provider_payload)
+
+    config = WebConfig(
+        projects_dir=tmp_path / "projects",
+        data_dir=tmp_path / "web-state",
+        driver="llm-bridge",
+        llm_bridge_url="http://bridge.test",
+    )
+    app = create_app(config)
+    with TestClient(app) as client:
+        health = client.get("/api/health").json()
+        assert health["ready"] is False
+        assert health["driver"]["selected"] is None
+        assert "openai" in health["driver"]["message"]
+
+        provider_payload["providers"][0]["configured"] = True
+        provider_payload["providers"][0]["has_key"] = True
+        provider_payload["providers"][0]["key_source"] = "stored"
+
+        health = client.get("/api/health").json()
+        assert health["ready"] is True
+        assert health["driver"]["selected"] == "llm-bridge"
+        assert "openai/gpt-4o-mini" in health["driver"]["message"]
+
+
+def test_llm_provider_api_proxies_to_bridge(tmp_path: Path, monkeypatch) -> None:
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    def remember(name: str, *args: object, **kwargs: object) -> None:
+        calls.append((name, args, kwargs))
+
+    def fake_list(url: str) -> dict:
+        remember("list", url)
+        return {
+            "providers": [
+                {
+                    "id": "openai",
+                    "name": "OpenAI",
+                    "kind": "api-key",
+                    "configured": True,
+                    "has_key": True,
+                    "key_source": "stored",
+                    "models": [{"id": "gpt-4o-mini"}],
+                }
+            ]
+        }
+
+    monkeypatch.setattr(llm_bridge, "list_providers", fake_list)
+    monkeypatch.setattr(
+        llm_bridge,
+        "provider_models",
+        lambda url, provider_id: (
+            remember("models", url, provider_id)
+            or {"id": provider_id, "name": "OpenAI", "models": [{"id": "gpt-4o-mini"}]}
+        ),
+    )
+    monkeypatch.setattr(
+        llm_bridge,
+        "upsert_provider",
+        lambda url, provider_id, **kwargs: (
+            remember("upsert", url, provider_id, **kwargs)
+            or {"status": {"id": provider_id, "name": "OpenAI", "configured": True}}
+        ),
+    )
+    monkeypatch.setattr(
+        llm_bridge,
+        "test_provider",
+        lambda url, provider_id, **kwargs: (
+            remember("test", url, provider_id, **kwargs)
+            or {"ok": True, "text": "ok", "provider": provider_id, "model": kwargs.get("model")}
+        ),
+    )
+    monkeypatch.setattr(
+        llm_bridge,
+        "get_active",
+        lambda url: remember("get_active", url) or {"provider": "openai", "model": "gpt-4o-mini"},
+    )
+    monkeypatch.setattr(
+        llm_bridge,
+        "set_active",
+        lambda url, provider, model: (
+            remember("set_active", url, provider, model) or {"provider": provider, "model": model}
+        ),
+    )
+    monkeypatch.setattr(
+        llm_bridge,
+        "delete_provider",
+        lambda url, provider_id: remember("delete", url, provider_id) or {"ok": True},
+    )
+
+    config = WebConfig(
+        projects_dir=tmp_path / "projects",
+        data_dir=tmp_path / "web-state",
+        llm_bridge_url="http://bridge.test",
+    )
+    app = create_app(config)
+    with TestClient(app) as client:
+        assert client.get("/api/llm/providers").json()["providers"][0]["id"] == "openai"
+        assert client.get("/api/llm/providers/openai/models").json()["models"][0]["id"] == "gpt-4o-mini"
+        saved = client.put(
+            "/api/llm/providers/openai",
+            json={"apiKey": "sk-test", "baseURL": "https://example.test/v1", "defaultModel": "gpt-4o-mini"},
+        )
+        assert saved.status_code == 200
+        tested = client.post("/api/llm/providers/openai/test", json={"model": "gpt-4o-mini"})
+        assert tested.json()["ok"] is True
+        assert client.get("/api/llm/active").json()["provider"] == "openai"
+        active = client.put("/api/llm/active", json={"provider": "openai", "model": "gpt-4o-mini"})
+        assert active.json()["model"] == "gpt-4o-mini"
+        assert client.delete("/api/llm/providers/openai").json()["ok"] is True
+
+    assert ("list", ("http://bridge.test",), {}) in calls
+    assert ("models", ("http://bridge.test", "openai"), {}) in calls
+    assert any(call[0] == "upsert" and call[2]["api_key"] == "sk-test" for call in calls)
+    assert any(call[0] == "test" and call[2]["model"] == "gpt-4o-mini" for call in calls)
+    assert ("set_active", ("http://bridge.test", "openai", "gpt-4o-mini"), {}) in calls
+    assert ("delete", ("http://bridge.test", "openai"), {}) in calls

@@ -1,4 +1,12 @@
-import type { ApiErrorPayload, HealthPayload, JobPayload } from './types';
+import type {
+  ActiveSelection,
+  ApiErrorPayload,
+  HealthPayload,
+  JobPayload,
+  ProviderModelsPayload,
+  ProvidersPayload,
+  TestResult,
+} from './types';
 
 export class ApiError extends Error {
   readonly payload: ApiErrorPayload;
@@ -52,4 +60,47 @@ export function createJob(prompt: string): Promise<JobPayload> {
 
 export function getJob(jobId: string): Promise<JobPayload> {
   return request<JobPayload>(`/api/jobs/${encodeURIComponent(jobId)}`);
+}
+
+export function getProviders(): Promise<ProvidersPayload> {
+  return request<ProvidersPayload>('/api/llm/providers');
+}
+
+export function getProviderModels(providerId: string): Promise<ProviderModelsPayload> {
+  return request<ProviderModelsPayload>(`/api/llm/providers/${encodeURIComponent(providerId)}/models`);
+}
+
+export function saveProvider(
+  providerId: string,
+  body: { apiKey?: string; baseURL?: string; defaultModel?: string },
+): Promise<{ status: ProvidersPayload['providers'][number] }> {
+  return request(`/api/llm/providers/${encodeURIComponent(providerId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}
+
+export function deleteProvider(providerId: string): Promise<{ ok: boolean }> {
+  return request(`/api/llm/providers/${encodeURIComponent(providerId)}`, { method: 'DELETE' });
+}
+
+export function testProvider(
+  providerId: string,
+  body: { apiKey?: string; baseURL?: string; model?: string },
+): Promise<TestResult> {
+  return request(`/api/llm/providers/${encodeURIComponent(providerId)}/test`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export function getActiveProvider(): Promise<ActiveSelection> {
+  return request<ActiveSelection>('/api/llm/active');
+}
+
+export function setActiveProvider(provider: string | null, model: string | null): Promise<ActiveSelection> {
+  return request('/api/llm/active', {
+    method: 'PUT',
+    body: JSON.stringify({ provider, model }),
+  });
 }

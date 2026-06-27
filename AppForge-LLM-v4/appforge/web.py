@@ -12,8 +12,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
-from . import __version__
+from . import __version__, llm_bridge
 from .constants import RESOURCE_DIR
 from .web_jobs import JobManager, WebConfig, WebJobError
 
@@ -23,6 +24,23 @@ ASSET_DIR = WEB_DIR / "assets"
 
 class CreateJobRequest(BaseModel):
     prompt: str
+
+
+class UpsertProviderRequest(BaseModel):
+    apiKey: str | None = None
+    baseURL: str | None = None
+    defaultModel: str | None = None
+
+
+class TestProviderRequest(BaseModel):
+    apiKey: str | None = None
+    baseURL: str | None = None
+    model: str | None = None
+
+
+class ActiveProviderRequest(BaseModel):
+    provider: str | None = None
+    model: str | None = None
 
 
 def _web_file(filename: str, media_type: str) -> FileResponse:
@@ -143,6 +161,80 @@ def create_app(
             filename=filename,
             media_type="application/zip",
             headers={"Cache-Control": "no-store"},
+        )
+
+    def _bridge_url(request: Request) -> str:
+        return str(request.app.state.web_config.llm_bridge_url)
+
+    @app.exception_handler(llm_bridge.BridgeError)
+    async def bridge_error_handler(_request: Request, exc: llm_bridge.BridgeError) -> JSONResponse:
+        status = 502 if exc.status_code == 0 else exc.status_code
+        return JSONResponse(
+            status_code=status,
+            content={
+                "error": {
+                    "code": "LLM_BRIDGE_ERROR",
+                    "title": "LLM 브릿지 오류",
+                    "message": str(exc),
+                    "action": "llm_bridge 서비스가 실행 중인지 확인하세요.",
+                    "context": exc.payload,
+                }
+            },
+        )
+
+    @app.get("/api/llm/providers")
+    async def llm_providers(request: Request) -> dict[str, Any]:
+        return await run_in_threadpool(llm_bridge.list_providers, _bridge_url(request))
+
+    @app.get("/api/llm/providers/{provider_id}/models")
+    async def llm_provider_models(provider_id: str, request: Request) -> dict[str, Any]:
+        return await run_in_threadpool(llm_bridge.provider_models, _bridge_url(request), provider_id)
+
+    @app.put("/api/llm/providers/{provider_id}")
+    async def llm_upsert_provider(
+        provider_id: str,
+        payload: UpsertProviderRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        return await run_in_threadpool(
+            llm_bridge.upsert_provider,
+            _bridge_url(request),
+            provider_id,
+            api_key=payload.apiKey,
+            base_url_override=payload.baseURL,
+            default_model=payload.defaultModel,
+        )
+
+    @app.delete("/api/llm/providers/{provider_id}")
+    async def llm_delete_provider(provider_id: str, request: Request) -> dict[str, Any]:
+        return await run_in_threadpool(llm_bridge.delete_provider, _bridge_url(request), provider_id)
+
+    @app.post("/api/llm/providers/{provider_id}/test")
+    async def llm_test_provider(
+        provider_id: str,
+        payload: TestProviderRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        return await run_in_threadpool(
+            llm_bridge.test_provider,
+            _bridge_url(request),
+            provider_id,
+            api_key=payload.apiKey,
+            base_url_override=payload.baseURL,
+            model=payload.model,
+        )
+
+    @app.get("/api/llm/active")
+    async def llm_active(request: Request) -> dict[str, Any]:
+        return await run_in_threadpool(llm_bridge.get_active, _bridge_url(request))
+
+    @app.put("/api/llm/active")
+    async def llm_set_active(payload: ActiveProviderRequest, request: Request) -> dict[str, Any]:
+        return await run_in_threadpool(
+            llm_bridge.set_active,
+            _bridge_url(request),
+            payload.provider,
+            payload.model,
         )
 
     if ASSET_DIR.is_dir():

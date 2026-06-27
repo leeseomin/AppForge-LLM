@@ -1,0 +1,72 @@
+{
+  "schema_version": "1.0",
+  "summary": "AppForge-LLM v4 is a Python/FastAPI AppForge package with a nested Vite/Vue frontend and a new Bun/TypeScript llm_bridge package. The requested feature touches the web UI, FastAPI proxy, job readiness/driver selection, bridge client/server, tests, and built static web assets.",
+  "stack": [
+    "Python 3.14 virtualenv via uv for local verification",
+    "FastAPI/uvicorn backend declared in pyproject.toml",
+    "Vite + Vue 3 frontend under frontend/",
+    "Bun/TypeScript bridge under llm_bridge/",
+    "pytest backend tests under tests/",
+    "AppForge pipeline and artifact framework under appforge/"
+  ],
+  "entry_points": [
+    "appforge.web:create_app and appforge.web:serve for the local web server",
+    "appforge.web_jobs:JobManager for job creation, driver readiness, packaging, and status payloads",
+    "appforge.drivers:create_driver for selecting codex, claude, generic, or llm-bridge drivers",
+    "frontend/src/App.vue, TopBar.vue, and ProviderSettings.vue for the browser user flow",
+    "frontend/src/api.ts for same-origin web API calls",
+    "llm_bridge/src/server.ts and llm_bridge/src/index.ts for local provider API and generation endpoints",
+    "tests/test_web.py for web API and job-flow integration coverage"
+  ],
+  "architecture": [
+    "The browser SPA talks only to the FastAPI origin; FastAPI proxies /api/llm requests to the local bridge via appforge/llm_bridge.py.",
+    "The bridge owns provider registry, local provider config, active provider selection, connection tests, generation, and streaming.",
+    "JobManager.health reports driver readiness and blocks llm-bridge readiness unless the bridge is reachable and the selected provider is configured.",
+    "LLMBridgeDriver is a single-shot stage driver that calls bridge /generate and writes the final model output to the AppForge stage log.",
+    "Static frontend build artifacts are packaged under appforge/resources/web for the Python web app."
+  ],
+  "conventions": [
+    "Backend routes use Pydantic request models and return structured JSON errors through WebJobError or bridge error handlers.",
+    "Frontend code uses Vue <script setup lang=\"ts\">, central API helpers, and shared TypeScript payload types.",
+    "Tests prefer FastAPI TestClient with monkeypatched local boundaries instead of live network/provider calls.",
+    "Generated/runtime AppForge files, logs, reports, memory, .env files, node_modules, and .venv should stay ignored."
+  ],
+  "test_strategy": [
+    "Run the full Python suite with .venv/bin/python -m pytest -q.",
+    "Run frontend typecheck and build with npm run typecheck and npm run build.",
+    "Run bridge TypeScript validation with bun run typecheck.",
+    "Avoid live provider tests in CI; use monkeypatched bridge functions for FastAPI proxy and readiness behavior.",
+    "Manual live-provider verification requires user-supplied credentials and a running llm_bridge service."
+  ],
+  "risk_areas": [
+    "Secret handling: API keys must never be committed or echoed back to the browser after storage.",
+    "Readiness truthfulness: bridge reachability alone is insufficient; configured provider status must be checked.",
+    "Same-origin security: browser API should remain on /api/llm and not require direct browser-to-bridge calls.",
+    "NPM lock reproducibility: package-lock previously contained internal registry resolved URLs and mismatched public integrities.",
+    "Generated static assets: frontend build replaces hashed files under appforge/resources/web/assets."
+  ],
+  "files_likely_to_change": [
+    "appforge/drivers.py",
+    "appforge/llm_bridge.py",
+    "appforge/web.py",
+    "appforge/web_jobs.py",
+    "frontend/src/App.vue",
+    "frontend/src/api.ts",
+    "frontend/src/types.ts",
+    "frontend/src/components/TopBar.vue",
+    "frontend/src/components/ProviderSettings.vue",
+    "frontend/src/styles.css",
+    "frontend/package-lock.json",
+    "frontend/.npmrc",
+    "llm_bridge/src/*",
+    "tests/test_web.py",
+    "appforge/resources/web/*"
+  ],
+  "baseline_status": [
+    "detect_stack tool passed but only detected root Python/FastAPI and pyproject.toml; nested frontend/package.json and llm_bridge/package.json were verified by direct file inspection.",
+    "git_status tool passed and showed unrelated root-level deletions outside AppForge-LLM-v4 that must not be reverted.",
+    ".venv/bin/python -m pytest -q later passed 23 tests with one StarletteDeprecationWarning.",
+    "bun run typecheck later passed for llm_bridge.",
+    "npm run typecheck and npm run build later passed after package-lock registry/integrity repair and clean frontend dependency install."
+  ]
+}

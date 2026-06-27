@@ -99,3 +99,49 @@ export interface ToastMessage {
   id: number;
   message: string;
 }
+
+export type ProviderKind = 'api-key' | 'openai-compatible';
+
+export interface ProviderModel {
+  id: string;
+  name?: string;
+}
+
+export interface ProviderStatus {
+  id: string;
+  name: string;
+  kind: ProviderKind;
+  env_key?: string;
+  base_url?: string | null;
+  base_url_required?: boolean;
+  base_url_default?: string | null;
+  docs_url?: string | null;
+  has_key: boolean;
+  key_source: 'stored' | 'env' | 'none';
+  default_model?: string | null;
+  configured: boolean;
+  models: ProviderModel[];
+}
+
+export interface ProvidersPayload {
+  providers: ProviderStatus[];
+}
+
+export interface ActiveSelection {
+  provider: string | null;
+  model: string | null;
+}
+
+export interface ProviderModelsPayload {
+  id: string;
+  name: string;
+  models: ProviderModel[];
+}
+
+export interface TestResult {
+  ok: boolean;
+  text?: string;
+  error?: string;
+  provider?: string;
+  model?: string;
+}

@@ -4,6 +4,7 @@ import { ApiError, createJob, getHealth, getJob } from './api';
 import ComposerCard from './components/ComposerCard.vue';
 import HealthBanner from './components/HealthBanner.vue';
 import JobPanel from './components/JobPanel.vue';
+import ProviderSettings from './components/ProviderSettings.vue';
 import Toast from './components/Toast.vue';
 import TopBar from './components/TopBar.vue';
 import type { ApiErrorPayload, HealthPayload, JobPayload } from './types';
@@ -18,6 +19,7 @@ const job = ref<JobPayload | null>(null);
 const prompt = ref('');
 const submitting = ref(false);
 const toastMessage = ref('');
+const settingsOpen = ref(false);
 
 let pollTimer: number | undefined;
 let toastTimer: number | undefined;
@@ -150,6 +152,18 @@ function startNewRequest() {
   });
 }
 
+function openProviderSettings() {
+  settingsOpen.value = true;
+}
+
+function closeProviderSettings() {
+  settingsOpen.value = false;
+}
+
+async function handleProviderSettingsChanged() {
+  await refreshHealth({ restoreBusyJob: false });
+}
+
 function readableError(error: unknown, fallback: string) {
   if (error instanceof ApiError) {
     return error.payload.message || error.payload.title || fallback;
@@ -225,7 +239,12 @@ onBeforeUnmount(() => {
 <template>
   <div class="background-grid" aria-hidden="true"></div>
   <main class="app-shell">
-    <TopBar :health="health" :server-error="serverError" @refresh="refreshHealth" />
+    <TopBar
+      :health="health"
+      :server-error="serverError"
+      @refresh="refreshHealth"
+      @open-settings="openProviderSettings"
+    />
 
     <section class="hero" aria-labelledby="heroTitle">
       <div>
@@ -268,5 +287,11 @@ onBeforeUnmount(() => {
       </p>
     </footer>
   </main>
+  <ProviderSettings
+    v-if="settingsOpen"
+    @close="closeProviderSettings"
+    @toast="showToast"
+    @changed="handleProviderSettingsChanged"
+  />
   <Toast :message="toastMessage" />
 </template>

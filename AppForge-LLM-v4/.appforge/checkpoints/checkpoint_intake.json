@@ -1,0 +1,87 @@
+{
+  "version": "1.0",
+  "pipeline": "feature",
+  "pipeline_version": "1.1",
+  "stage": "intake",
+  "status": "completed",
+  "attempt": 1,
+  "timestamp": "2026-06-27T08:25:15+00:00",
+  "artifacts": {
+    "product_brief": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/product_brief.json"
+  },
+  "gates": [
+    {
+      "kind": "artifact",
+      "name": "product_brief",
+      "required": true,
+      "passed": true,
+      "path": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/product_brief.json"
+    }
+  ],
+  "review": {
+    "passed": true,
+    "critical_count": 0,
+    "finding_count": 0,
+    "review_focus": [
+      "Problem and users are explicit",
+      "Constraints and assumptions are separated",
+      "Non-goals prevent accidental scope growth"
+    ],
+    "findings": []
+  },
+  "driver": {},
+  "metadata": {
+    "stage_result": {
+      "stage": "intake",
+      "status": "completed",
+      "summary": "Captured the requested interrupted LLM bridge/provider-settings feature as a bounded AppForge-LLM v4 product brief.",
+      "files_changed": [
+        ".appforge/artifacts/product_brief.json",
+        ".appforge/stage-result.json"
+      ],
+      "commands_run": [
+        {
+          "command": ".venv/bin/python -m appforge prompt . --output .appforge/current-stage.md",
+          "result": "passed; generated the intake stage packet"
+        },
+        {
+          "command": "cat appforge/resources/schemas/artifacts/product_brief.schema.json",
+          "result": "passed; inspected required artifact schema"
+        }
+      ],
+      "checks": [
+        {
+          "name": "problem-and-users-explicit",
+          "passed": true,
+          "evidence": "product_brief.json defines the problem and target_users."
+        },
+        {
+          "name": "constraints-assumptions-separated",
+          "passed": true,
+          "evidence": "product_brief.json has separate constraints and assumptions arrays."
+        },
+        {
+          "name": "non-goals-bound-scope",
+          "passed": true,
+          "evidence": "product_brief.json excludes deployment, hosted secrets, billing/account systems, and runner replacement."
+        }
+      ],
+      "decisions": [
+        {
+          "decision": "Treat the interrupted 'it' as the visible LLM bridge/provider-settings integration.",
+          "reason": "The worktree already contained partially implemented llm_bridge, provider settings UI, driver, and web API changes.",
+          "alternatives": [
+            "Ask for clarification and stop",
+            "Infer a different feature from older repository docs"
+          ]
+        },
+        {
+          "decision": "Use the feature pipeline rather than bugfix.",
+          "reason": "The request asks to implement usable new capability in the current app, not to repair a single reported defect."
+        }
+      ],
+      "unresolved": []
+    },
+    "manual_completion": true
+  }
+}

@@ -1,0 +1,77 @@
+{
+  "schema_version": "1.0",
+  "summary": "Security review passed after fixing two bridge hardening issues: provider upsert no longer echoes raw saved API keys, and the bridge no longer advertises wildcard CORS. Secret scan passed with zero findings.",
+  "passed": true,
+  "threat_model": [
+    "Assets: provider API keys, bridge provider config, active provider/model selection, AppForge stage prompts/outputs, generated source archives, and local web session state.",
+    "Actors: local user/operator, local browser tab, FastAPI web process, llm_bridge process, external LLM provider APIs, and potentially malicious local web pages trying to reach localhost services.",
+    "Entry points: FastAPI /api/llm endpoints, bridge /providers /active /test /generate /stream endpoints, ProviderSettings form inputs, environment variables, and local provider config file.",
+    "Trust boundaries: browser to FastAPI same-origin boundary, FastAPI to localhost bridge boundary, bridge to external provider boundary, bridge local config file boundary, and generated AppForge artifacts/logs boundary.",
+    "Abuse cases reviewed: raw key echo to browser, committed keys, arbitrary provider id activation, malformed JSON, false-ready driver state, direct browser CORS access to bridge, and logging/storing provider secrets outside the bridge config."
+  ],
+  "checks": [
+    {
+      "check": "Secret scan",
+      "passed": "passed",
+      "evidence": ".venv/bin/python -m appforge tool run secret_scan --project . --input '{}' returned success with findings=[] after adding the bridge regression test and CORS hardening."
+    },
+    {
+      "check": "Provider secret echo",
+      "passed": "passed",
+      "evidence": "llm_bridge/src/server.ts no longer returns the raw saved provider config from PUT /providers/{id}; bun run test passed a regression asserting the fake key and apiKey field are absent from the response."
+    },
+    {
+      "check": "Bridge CORS boundary",
+      "passed": "passed",
+      "evidence": "llm_bridge/src/server.ts removed Access-Control-Allow-Origin: *; bun run test asserts provider response does not advertise wildcard CORS."
+    },
+    {
+      "check": "Unknown provider validation",
+      "passed": "passed",
+      "evidence": "Bridge provider-specific routes and active selection reject unknown provider ids with UNKNOWN_PROVIDER."
+    },
+    {
+      "check": "Readiness safety",
+      "passed": "passed",
+      "evidence": "tests/test_web.py readiness coverage passed in the full Python suite; llm-bridge is not ready unless active provider is configured."
+    },
+    {
+      "check": "SBOM generation",
+      "passed": "passed",
+      "evidence": "generate_sbom returned success and wrote .appforge/reports/sbom.cdx.json with components=0 for root manifests detected by AppForge."
+    },
+    {
+      "check": "Dependency audit",
+      "passed": "skipped",
+      "evidence": "dependency_audit tool refused to run without allow_network=true; runner network downloads are disabled for this project, so no online audit was performed."
+    }
+  ],
+  "findings": [
+    {
+      "severity": "critical",
+      "status": "fixed",
+      "finding": "Bridge provider upsert returned the raw saved provider config, which could echo an API key through FastAPI to the browser.",
+      "fix": "Removed saved config from the response and added llm_bridge/test/server.test.ts regression coverage."
+    },
+    {
+      "severity": "suggestion",
+      "status": "fixed",
+      "finding": "Bridge responses used Access-Control-Allow-Origin: *, unnecessary because the web UI uses the FastAPI same-origin proxy.",
+      "fix": "Removed wildcard allow-origin headers and added regression coverage."
+    },
+    {
+      "severity": "suggestion",
+      "status": "documented",
+      "finding": "Online dependency audit was not run because the security tool requires network-enabled invocation and this AppForge project disallows network downloads.",
+      "fix": "Documented the limitation and generated the available local SBOM."
+    }
+  ],
+  "secrets_scan": "passed; AppForge secret_scan found zero likely committed credentials. The bridge regression test constructs its fake key to avoid scanner-shaped literals.",
+  "dependency_audit": "skipped by policy; dependency_audit requires allow_network=true and network downloads are disabled for the project. Local deterministic checks still passed: .venv/bin/python -m pytest -q, bun run test, bun run typecheck, npm run typecheck, npm run build, and AppForge run_build.",
+  "residual_risks": [
+    "Live provider connectivity and provider-side authorization cannot be verified without user API credentials.",
+    "If a user sets APPFORGE_LLM_BRIDGE_HOST/HOST to a non-loopback interface, the unauthenticated bridge could be reachable beyond the local machine; default host remains 127.0.0.1.",
+    "Provider API keys stored in the local bridge config are protected by best-effort file permissions, but local machine compromise can still expose them.",
+    "Setuptools license metadata deprecation warnings remain from existing pyproject metadata; they do not block the current build but should be cleaned up before the 2027-Feb-18 setuptools deadline."
+  ]
+}

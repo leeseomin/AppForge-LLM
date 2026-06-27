@@ -1,0 +1,169 @@
+{
+  "version": "1.0",
+  "pipeline": "feature",
+  "pipeline_version": "1.1",
+  "stage": "security",
+  "status": "completed",
+  "attempt": 1,
+  "timestamp": "2026-06-27T08:44:28+00:00",
+  "artifacts": {
+    "security_report": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/security_report.json"
+  },
+  "gates": [
+    {
+      "kind": "artifact",
+      "name": "security_report",
+      "required": true,
+      "passed": true,
+      "path": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/security_report.json"
+    },
+    {
+      "kind": "tool",
+      "name": "secret_scan",
+      "required": true,
+      "passed": true,
+      "skipped": false,
+      "result": {
+        "success": true,
+        "data": {
+          "passed": true,
+          "findings": []
+        },
+        "artifacts": [],
+        "error": null,
+        "duration_seconds": 0.0533,
+        "command": null
+      }
+    },
+    {
+      "kind": "tool",
+      "name": "dependency_audit",
+      "required": false,
+      "passed": true,
+      "skipped": true,
+      "result": {
+        "success": true,
+        "data": {
+          "skipped": true,
+          "reason": "Network access is disabled; rerun with --allow-network"
+        },
+        "artifacts": [],
+        "error": null,
+        "duration_seconds": 0.0,
+        "command": null
+      }
+    },
+    {
+      "kind": "tool",
+      "name": "generate_sbom",
+      "required": false,
+      "passed": true,
+      "skipped": false,
+      "result": {
+        "success": true,
+        "data": {
+          "components": 0,
+          "output": ".appforge/reports/sbom.cdx.json"
+        },
+        "artifacts": [
+          "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/reports/sbom.cdx.json"
+        ],
+        "error": null,
+        "duration_seconds": 0.0016,
+        "command": null
+      }
+    }
+  ],
+  "review": {
+    "passed": true,
+    "critical_count": 0,
+    "finding_count": 2,
+    "review_focus": [
+      "Trust boundaries and abuse cases are reviewed",
+      "Secrets and dependencies are checked",
+      "Residual risk is explicit"
+    ],
+    "findings": [
+      {
+        "severity": "suggestion",
+        "criterion": "dependency_audit",
+        "finding": "Optional gate was skipped because no compatible command or dependency was available.",
+        "proposed_change": "Document the missing check in the verification or handoff report."
+      },
+      {
+        "severity": "suggestion",
+        "criterion": "unresolved",
+        "finding": "Online dependency audit was not run because network-enabled audit was outside this project's allowed runner policy.",
+        "proposed_change": "Resolve it now or document why it is safely deferred with an owner and verification step."
+      }
+    ]
+  },
+  "driver": {},
+  "metadata": {
+    "stage_result": {
+      "stage": "security",
+      "status": "completed",
+      "summary": "Ran security review, fixed bridge raw-key response echo and wildcard CORS, reran bridge regression/typecheck and secret scan, and documented dependency audit limitations.",
+      "files_changed": [
+        "llm_bridge/src/server.ts",
+        "llm_bridge/test/server.test.ts",
+        "llm_bridge/package.json",
+        ".gitignore",
+        ".appforge/artifacts/security_report.json",
+        ".appforge/artifacts/change_plan.json",
+        ".appforge/artifacts/implementation_report.json",
+        ".appforge/artifacts/verification_report.json",
+        ".appforge/stage-result.json"
+      ],
+      "commands_run": [
+        {
+          "command": ".venv/bin/python -m appforge tool run secret_scan --project . --input '{}'",
+          "result": "passed; zero findings"
+        },
+        {
+          "command": ".venv/bin/python -m appforge tool run dependency_audit --project . --input '{}'",
+          "result": "skipped/failed by policy; tool requires allow_network=true and project network downloads are disabled"
+        },
+        {
+          "command": ".venv/bin/python -m appforge tool run generate_sbom --project . --input '{}'",
+          "result": "passed; wrote .appforge/reports/sbom.cdx.json"
+        },
+        {
+          "command": "bun run test",
+          "result": "passed in llm_bridge/; 1 regression test passed"
+        },
+        {
+          "command": "bun run typecheck",
+          "result": "passed in llm_bridge/; tsc --noEmit"
+        }
+      ],
+      "checks": [
+        {
+          "name": "secret-scan",
+          "passed": true,
+          "evidence": "AppForge secret_scan returned passed=true and findings=[]."
+        },
+        {
+          "name": "raw-key-not-echoed",
+          "passed": true,
+          "evidence": "bun run test asserts provider upsert response excludes fake key and apiKey."
+        },
+        {
+          "name": "wildcard-cors-removed",
+          "passed": true,
+          "evidence": "bun run test asserts access-control-allow-origin is not '*'."
+        }
+      ],
+      "decisions": [
+        {
+          "decision": "Remove bridge wildcard CORS rather than adding an allowlist.",
+          "reason": "The product flow uses FastAPI as the same-origin browser boundary, so direct browser-to-bridge CORS access is unnecessary for the accepted scope."
+        }
+      ],
+      "unresolved": [
+        "Online dependency audit was not run because network-enabled audit was outside this project's allowed runner policy."
+      ]
+    },
+    "manual_completion": true
+  }
+}

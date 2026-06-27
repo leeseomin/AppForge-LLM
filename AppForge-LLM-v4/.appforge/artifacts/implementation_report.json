@@ -1,0 +1,107 @@
+{
+  "schema_version": "1.0",
+  "summary": "Implemented the LLM bridge vertical slice across the local bridge service, FastAPI proxy, AppForge driver/readiness path, Vue provider settings UI, backend tests, frontend build assets, and dependency lock repair.",
+  "features_completed": [
+    "Local Bun/TypeScript llm_bridge service with provider registry, config persistence, active selection, provider test, generate, and stream endpoints.",
+    "Bridge regression test proving provider upsert responses do not echo stored API keys.",
+    "Python appforge.llm_bridge HTTP client for bridge health, provider management, active selection, tests, and generation.",
+    "FastAPI /api/llm same-origin provider proxy with structured LLM_BRIDGE_ERROR handling.",
+    "LLMBridgeDriver and driver aliases llm-bridge, llm_bridge, and llm in create_driver.",
+    "JobManager health readiness that refuses false-ready llm-bridge state unless the active provider is known and configured.",
+    "Vue TopBar LLM connection control and ProviderSettings modal for provider save/delete/test/activate flows.",
+    "Frontend API/type extensions and responsive settings styles.",
+    "Backend tests for readiness and provider proxy delegation.",
+    "Regenerated packaged frontend assets under appforge/resources/web.",
+    "Frontend lockfile registry/integrity repair plus .npmrc replace-registry-host=always.",
+    "Python dev extra includes setuptools and wheel so the no-isolation package build gate has the declared build backend available."
+  ],
+  "files_changed": [
+    ".gitignore",
+    ".appforge/artifacts/*.json",
+    "pyproject.toml",
+    "uv.lock",
+    "appforge/drivers.py",
+    "appforge/llm_bridge.py",
+    "appforge/web.py",
+    "appforge/web_jobs.py",
+    "appforge/resources/web/index.html",
+    "appforge/resources/web/assets/index-Bto0ykgx.js",
+    "appforge/resources/web/assets/index-C_67LZJ9.css",
+    "appforge/resources/web/assets/index-3L9V13um.css",
+    "appforge/resources/web/assets/index-ef0cSNAN.js",
+    "frontend/.npmrc",
+    "frontend/package-lock.json",
+    "frontend/src/App.vue",
+    "frontend/src/api.ts",
+    "frontend/src/components/ProviderSettings.vue",
+    "frontend/src/components/TopBar.vue",
+    "frontend/src/styles.css",
+    "frontend/src/types.ts",
+    "llm_bridge/package.json",
+    "llm_bridge/tsconfig.json",
+    "llm_bridge/bun.lock",
+    "llm_bridge/src/config.ts",
+    "llm_bridge/src/index.ts",
+    "llm_bridge/src/llm.ts",
+    "llm_bridge/src/registry.ts",
+    "llm_bridge/src/server.ts",
+    "llm_bridge/src/types.ts",
+    "llm_bridge/src/version.ts",
+    "llm_bridge/test/server.test.ts",
+    "llm_bridge/vendor/llm/**",
+    "tests/test_web.py"
+  ],
+  "commands_run": [
+    ".venv/bin/python -m appforge prompt . --output .appforge/current-stage.md",
+    ".venv/bin/python -m appforge tool run detect_stack --project . --input '{}'",
+    "git diff --name-status -- AppForge-LLM-v4",
+    "git status --short -- AppForge-LLM-v4"
+  ],
+  "decisions": [
+    "Keep bridge provider secrets in the local bridge config/environment and expose only has_key/key_source/status metadata to the browser; provider upsert no longer returns the raw saved config.",
+    "Use the FastAPI server as the same-origin proxy boundary instead of letting the browser call the bridge directly.",
+    "Make configured active provider status part of readiness instead of treating bridge reachability as sufficient.",
+    "Keep bridge generation single-shot per AppForge stage attempt and rely on AppForge checkpoints for reruns.",
+    "Avoid adding a direct frontend dependency on @vue/shared; it remains only a Vue transitive dependency.",
+    "Keep llm_bridge as a separate local process rather than broadening this slice into launcher orchestration.",
+    "Add setuptools and wheel to the dev extra because AppForge's root build gate runs python -m build --no-isolation inside the synced local environment."
+  ],
+  "known_gaps": [
+    "Live third-party provider calls require user-supplied credentials and were not automated.",
+    "Bridge startup remains separate from the FastAPI web server in this slice.",
+    "AppForge detect_stack only detects the root Python/FastAPI app; frontend and bridge checks are recorded explicitly in verification."
+  ],
+  "requirements_covered": [
+    "FR-001",
+    "FR-002",
+    "FR-003",
+    "FR-004",
+    "FR-005",
+    "NFR-001",
+    "NFR-002",
+    "NFR-003",
+    "NFR-004"
+  ],
+  "traceability": [
+    {
+      "requirement": "FR-001",
+      "files": "frontend/src/App.vue, frontend/src/components/TopBar.vue, frontend/src/components/ProviderSettings.vue, frontend/src/styles.css"
+    },
+    {
+      "requirement": "FR-002",
+      "files": "frontend/src/components/ProviderSettings.vue, frontend/src/api.ts, frontend/src/types.ts, appforge/web.py"
+    },
+    {
+      "requirement": "FR-003",
+      "files": "appforge/web.py, appforge/llm_bridge.py, tests/test_web.py"
+    },
+    {
+      "requirement": "FR-004",
+      "files": "appforge/drivers.py, appforge/web_jobs.py, tests/test_web.py"
+    },
+    {
+      "requirement": "FR-005",
+      "files": "llm_bridge/src/config.ts, llm_bridge/src/registry.ts, llm_bridge/src/server.ts, llm_bridge/src/llm.ts"
+    }
+  ]
+}

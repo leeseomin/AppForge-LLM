@@ -148,6 +148,74 @@ class GenericCommandDriver(AgentDriver):
         return result
 
 
+class LLMBridgeDriver(AgentDriver):
+    """Drive a stage with an external LLM through the local Node/Bun bridge.
+
+    The bridge (``llm_bridge/``) reuses the coco ``@opencode-ai/llm`` engine to
+    call any configured provider/model. Unlike the Codex/Claude CLIs this driver
+    is single-shot per stage: it returns the model's completion as the stage's
+    final message. File-writing agentic stages should still use a CLI driver.
+    """
+
+    name = "llm-bridge"
+
+    def __init__(
+        self,
+        *,
+        bridge_url: str,
+        provider: str | None = None,
+        model: str | None = None,
+        max_tokens: int | None = None,
+    ) -> None:
+        if not bridge_url:
+            raise DriverError("LLM bridge driver requires APPFORGE_LLM_BRIDGE_URL")
+        self.bridge_url = bridge_url
+        self.provider = provider
+        self.model = model
+        self.max_tokens = max_tokens
+
+    def run(self, prompt: str, *, layout: ProjectLayout, stage: str, attempt: int, timeout: int) -> DriverResult:
+        from . import llm_bridge
+
+        final_path = layout.logs / f"{stage}-attempt-{attempt}-llm-bridge-final.txt"
+        started = time.monotonic()
+        duration = lambda: round(time.monotonic() - started, 4)
+        try:
+            result = llm_bridge.generate(
+                self.bridge_url,
+                prompt=prompt,
+                system=(
+                    "You are a precise software-production agent. Follow the stage "
+                    "instructions exactly and return the requested artifact."
+                ),
+                provider=self.provider,
+                model=self.model,
+                max_tokens=self.max_tokens,
+                timeout=max(timeout, 60),
+            )
+        except llm_bridge.BridgeError as exc:
+            return DriverResult(
+                success=False,
+                exit_code=1,
+                stdout="",
+                stderr=str(exc),
+                duration_seconds=duration(),
+                command=["llm-bridge", "/generate"],
+                final_message_path=str(final_path),
+            )
+        text = str(result.get("text") or "")
+        atomic_write_text(final_path, text)
+        return DriverResult(
+            success=True,
+            exit_code=0,
+            stdout=text,
+            stderr="",
+            duration_seconds=duration(),
+            command=["llm-bridge", "/generate"],
+            final_message_path=str(final_path),
+        )
+
+
 def create_driver(
     name: str,
     *,
@@ -155,6 +223,8 @@ def create_driver(
     model: str | None = None,
     agent_cmd: str | None = None,
     max_turns: int | None = None,
+    bridge_url: str | None = None,
+    llm_provider: str | None = None,
 ) -> AgentDriver:
     normalized = name.casefold()
     if normalized == "auto":
@@ -173,4 +243,6 @@ def create_driver(
         return ClaudeDriver(unsafe=unsafe, model=model, max_turns=max_turns)
     if normalized == "generic":
         return GenericCommandDriver(agent_cmd or "")
-    raise DriverError(f"Unknown driver {name!r}; use auto, codex, claude, or generic")
+    if normalized in {"llm-bridge", "llm_bridge", "llm"}:
+        return LLMBridgeDriver(bridge_url=bridge_url or "", provider=llm_provider, model=model)
+    raise DriverError(f"Unknown driver {name!r}; use auto, codex, claude, generic, or llm-bridge")

@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0",
+  "summary": "Add a local LLM bridge integration to AppForge-LLM v4 so the current Vue/FastAPI web app can configure external model providers and run pipeline stages through an llm-bridge driver.",
+  "problem": "AppForge-LLM v4 previously depended on local coding-agent CLIs or a generic command driver. The current app needed the interrupted LLM bridge work completed so users can configure API-key based providers in the web UI, select an active model, and have the backend expose a driver/readiness path that can use that provider through the local bridge.",
+  "target_users": [
+    "Local AppForge-LLM v4 users who want to run app-generation stages with an external LLM provider instead of only Codex or Claude CLI",
+    "Developers maintaining the AppForge-LLM v4 FastAPI/Vue app and its pipeline runner",
+    "Operators running the local web server and local llm_bridge service"
+  ],
+  "desired_outcomes": [
+    "The web UI exposes a provider settings flow for storing API keys, selecting default models, testing provider connectivity, and activating the model used by AppForge.",
+    "The FastAPI server proxies provider management to a same-origin /api/llm surface and reports truthful readiness for APPFORGE_DRIVER=llm-bridge.",
+    "The pipeline runner can create an llm-bridge driver that calls the local bridge for stage generation.",
+    "The bridge service supports provider listing, model listing, provider upsert/delete, active model selection, health, test, generate, and stream endpoints.",
+    "The implementation is covered by backend web tests, bridge typecheck, frontend typecheck, frontend production build, and the existing Python test suite."
+  ],
+  "constraints": [
+    "Keep the integration local-first; no deployment, publishing, or remote infrastructure provisioning is in scope.",
+    "Do not commit API keys or display stored secrets back in the browser.",
+    "Preserve existing Codex, Claude, generic, and auto driver behavior.",
+    "Reuse the repository's Vue/FastAPI/AppForge patterns rather than replacing the app shell.",
+    "Use the local llm_bridge service as the provider boundary; the browser must stay same-origin through FastAPI proxy endpoints."
+  ],
+  "assumptions": [
+    "Provider credentials are supplied by local environment variables or by the local bridge config file, not by source-controlled files.",
+    "A single-shot llm-bridge driver is acceptable for stage text generation; fully agentic file-editing stages still need a CLI driver.",
+    "The bridge can be started separately from the web server with Bun using the llm_bridge package.",
+    "Routine ambiguity in the user's phrase '그것' maps to the interrupted LLM bridge/provider-settings implementation visible in the worktree."
+  ],
+  "non_goals": [
+    "Do not deploy the web app or bridge service.",
+    "Do not add billing, account management, team sharing, OAuth, or hosted secret storage.",
+    "Do not replace the existing AppForge stage runner or checkpoint architecture.",
+    "Do not guarantee live provider calls without user-supplied credentials.",
+    "Do not broaden the feature into a general multi-agent orchestration system."
+  ],
+  "open_questions": [
+    "Which provider/model the user will ultimately activate is left to runtime configuration; the safe default is to expose supported providers and require a configured active provider before reporting readiness.",
+    "Whether llm-bridge should become part of a one-command launcher remains outside this slice; the safe default is documented separate startup."
+  ]
+}

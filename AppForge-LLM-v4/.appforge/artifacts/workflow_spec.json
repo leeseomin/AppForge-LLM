@@ -1,0 +1,221 @@
+{
+  "schema_version": "1.0",
+  "summary": "Restartable workflow for configuring a local LLM bridge, proxying provider operations through FastAPI, and using the active provider through APPFORGE_DRIVER=llm-bridge.",
+  "trigger": "A local user opens the AppForge-LLM v4 web app, opens LLM connection settings, configures an external provider, activates a model, then runs AppForge with APPFORGE_DRIVER=llm-bridge.",
+  "inputs": [
+    {
+      "name": "bridge_url",
+      "source": "APPFORGE_LLM_BRIDGE_URL or default http://127.0.0.1:32187",
+      "required": true
+    },
+    {
+      "name": "provider_id",
+      "source": "ProviderSettings selected provider",
+      "required": true
+    },
+    {
+      "name": "api_key",
+      "source": "User input or provider environment variable",
+      "required": false,
+      "sensitive": true
+    },
+    {
+      "name": "base_url",
+      "source": "User input or provider default",
+      "required": false
+    },
+    {
+      "name": "model",
+      "source": "User input, provider default model, or selected model chip",
+      "required": false
+    },
+    {
+      "name": "stage_prompt",
+      "source": "AppForge stage packet passed to LLMBridgeDriver",
+      "required": true
+    }
+  ],
+  "steps": [
+    {
+      "id": "WF-001",
+      "action": "Render the existing top bar with an LLM connection control and open ProviderSettings on user action.",
+      "success": "The settings dialog opens without mutating the current prompt, job, event, or toast state.",
+      "failure": "The UI keeps the existing app state visible and reports the component/API error through the existing toast path.",
+      "reads": [
+        "frontend runtime state"
+      ],
+      "writes": [
+        "settingsOpen session state"
+      ]
+    },
+    {
+      "id": "WF-002",
+      "action": "Load bridge health, provider list, active selection, and provider models through same-origin /api/llm endpoints.",
+      "success": "ProviderSettings displays configured/unconfigured provider status, current active provider/model, and model choices.",
+      "failure": "Bridge errors are shown as actionable UI messages and no provider config is changed.",
+      "reads": [
+        "bridge registry",
+        "bridge local config"
+      ],
+      "writes": [
+        "ProviderSettings local form state"
+      ],
+      "retryable": true,
+      "idempotency_key": "GET method plus provider_id"
+    },
+    {
+      "id": "WF-003",
+      "action": "Save provider settings through PUT /api/llm/providers/{provider_id}.",
+      "success": "The bridge stores the provider config locally, returns redacted status, and the UI refreshes providers and health.",
+      "failure": "Validation or bridge failure is returned as LLM_BRIDGE_ERROR; previous provider config remains the source of truth.",
+      "reads": [
+        "provider form state"
+      ],
+      "writes": [
+        "llm bridge config file"
+      ],
+      "retryable": true,
+      "idempotency_key": "provider_id plus submitted base_url/default_model/api_key replacement"
+    },
+    {
+      "id": "WF-004",
+      "action": "Test provider connectivity through POST /api/llm/providers/{provider_id}/test.",
+      "success": "The UI displays the bridge test result without exposing secrets.",
+      "failure": "The UI displays the provider error and keeps saved config unchanged.",
+      "reads": [
+        "bridge provider config",
+        "provider credentials"
+      ],
+      "writes": [
+        "test result session state"
+      ],
+      "retryable": true,
+      "idempotency_key": "provider_id plus test request body"
+    },
+    {
+      "id": "WF-005",
+      "action": "Activate a provider/model through PUT /api/llm/active.",
+      "success": "The bridge records the active provider/model; FastAPI health can report llm-bridge readiness when configured.",
+      "failure": "Unknown provider or invalid bridge response is rejected and active selection remains unchanged.",
+      "reads": [
+        "provider list",
+        "selected model"
+      ],
+      "writes": [
+        "llm bridge active selection"
+      ],
+      "retryable": true,
+      "idempotency_key": "provider_id plus model"
+    },
+    {
+      "id": "WF-006",
+      "action": "Evaluate JobManager health for APPFORGE_DRIVER=llm-bridge.",
+      "success": "Health is ready only when the bridge responds, an active provider exists, the active provider is known, and it is configured.",
+      "failure": "Health returns setup guidance for missing bridge, missing active provider, unknown provider, or unconfigured provider.",
+      "reads": [
+        "APPFORGE_DRIVER",
+        "APPFORGE_LLM_BRIDGE_URL",
+        "bridge health",
+        "bridge active selection",
+        "bridge provider list"
+      ],
+      "writes": [
+        "health response only"
+      ],
+      "retryable": true,
+      "idempotency_key": "health poll timestamp-free request"
+    },
+    {
+      "id": "WF-007",
+      "action": "Run an AppForge stage with LLMBridgeDriver calling bridge /generate.",
+      "success": "The bridge returns model text, the driver writes it to the stage output log, and the runner continues its existing checkpoint flow.",
+      "failure": "Bridge failure becomes a driver/stage failure with the provider error preserved in logs without credentials.",
+      "reads": [
+        "stage prompt",
+        "bridge active provider",
+        "provider credentials"
+      ],
+      "writes": [
+        "AppForge stage log/output"
+      ],
+      "retryable": false,
+      "idempotency_key": "AppForge checkpoint stage attempt"
+    }
+  ],
+  "idempotency": "Read operations are naturally idempotent. Provider save and active-selection operations are last-write-wins for a single provider_id/model tuple. Stage generation is guarded by the existing AppForge stage attempt/checkpoint boundary rather than retried blindly.",
+  "retries": "UI read/test/save actions may be retried manually by the user after errors. Health polling may repeat without side effects. Driver generation should rely on AppForge stage retry semantics so failed stage attempts remain inspectable and do not duplicate checkpoints.",
+  "credentials": [
+    "Provider API keys are entered by the local user or inherited from provider environment variables.",
+    "Secrets are stored only by the local llm_bridge config mechanism or environment, never in Vue state longer than form submission and never echoed back after save.",
+    "FastAPI proxies requests to a localhost bridge URL and does not require browser access to provider credentials."
+  ],
+  "observability": [
+    "ProviderSettings shows loading, test result, configured state, and active provider/model state.",
+    "JobManager.health exposes driver readiness and actionable setup messages.",
+    "LLMBridgeDriver writes bridge generation output/failure to the existing AppForge stage log path.",
+    "Backend tests assert readiness and proxy delegation behavior without live provider calls."
+  ],
+  "manual_override": "A user can close the settings dialog without changing app state, delete provider config, switch active provider/model, change APPFORGE_DRIVER away from llm-bridge, or run the existing Codex/Claude/generic drivers.",
+  "state_model": [
+    {
+      "state": "ui_closed",
+      "entry": "Main app loads or user closes ProviderSettings.",
+      "exit": "User clicks the top-bar LLM connection control.",
+      "on_error": "Existing app remains usable."
+    },
+    {
+      "state": "settings_loading",
+      "entry": "ProviderSettings mounts and calls bridge proxy read endpoints.",
+      "exit": "Provider, model, active, and health payloads are loaded.",
+      "on_error": "Show bridge/setup error while leaving provider form editable."
+    },
+    {
+      "state": "provider_configured",
+      "entry": "Save succeeds for a provider through the bridge.",
+      "exit": "User deletes config, overwrites config, or chooses another provider.",
+      "on_error": "Preserve previous bridge config."
+    },
+    {
+      "state": "active_ready",
+      "entry": "Active provider exists and is configured; health reports llm-bridge ready.",
+      "exit": "Bridge stops, active provider is deleted, or provider becomes unconfigured.",
+      "on_error": "Health degrades to an actionable not-ready response."
+    },
+    {
+      "state": "stage_generating",
+      "entry": "AppForge starts a stage with LLMBridgeDriver.",
+      "exit": "Bridge returns generated text and the stage runner records output.",
+      "on_error": "Stage attempt fails through existing AppForge failure handling."
+    }
+  ],
+  "compensation": "No remote deployment or destructive external effect is part of this feature. Compensation is local: delete provider config, change active provider/model, edit environment variables, or rerun the AppForge stage attempt from its checkpoint.",
+  "concurrency": "The settings UI treats the latest user action as authoritative. Bridge config writes are per-provider last-write-wins. AppForge job execution remains governed by the existing JobManager and stage checkpoint model.",
+  "timeout_policy": "Provider and bridge calls use the bridge/client request timeouts implemented at the API boundary; UI loading states remain bounded by returned promise failure. AppForge stage generation uses the driver process/request timeout behavior and surfaces failures as stage errors.",
+  "traceability": [
+    {
+      "requirement": "FR-001",
+      "workflow_step": "WF-001",
+      "evidence": "Top-bar control opens ProviderSettings without clearing current app state."
+    },
+    {
+      "requirement": "FR-002",
+      "workflow_step": "WF-002, WF-003, WF-004, WF-005",
+      "evidence": "Settings flow lists providers, saves/deletes config, tests provider connectivity, and activates provider/model."
+    },
+    {
+      "requirement": "FR-003",
+      "workflow_step": "WF-002, WF-003, WF-004, WF-005",
+      "evidence": "Browser uses same-origin /api/llm endpoints and receives structured bridge errors."
+    },
+    {
+      "requirement": "FR-004",
+      "workflow_step": "WF-006, WF-007",
+      "evidence": "llm-bridge readiness and driver execution are separate guarded states."
+    },
+    {
+      "requirement": "FR-005",
+      "workflow_step": "WF-002, WF-003, WF-004, WF-005, WF-007",
+      "evidence": "Bridge endpoints supply registry/config/active/test/generate behavior."
+    }
+  ]
+}
