@@ -1328,6 +1328,18 @@ pre {
 
 .ghost-button.danger {
   color: #fecdd3;
+  border-color: rgba(251, 113, 133, 0.34);
+  background: var(--danger-soft);
+}
+
+.ghost-button.danger:hover:not(:disabled) {
+  border-color: rgba(251, 113, 133, 0.6);
+  background: rgba(251, 113, 133, 0.18);
+}
+
+.ghost-button:disabled {
+  opacity: 0.58;
+  transform: none;
 }
 
 .settings-footer {

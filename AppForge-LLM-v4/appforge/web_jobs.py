@@ -3,7 +3,6 @@ from __future__ import annotations
 import copy
 import json
 import os
-import shlex
 import threading
 import traceback
 import uuid
@@ -21,7 +20,6 @@ from .runner import PipelineRunner
 from .tooling.tools.release import ArchiveWorkspaceTool
 from .util import (
     atomic_write_json,
-    command_exists,
     read_json,
     redact,
     slugify,
@@ -30,7 +28,7 @@ from .util import (
 )
 
 ACTIVE_JOB_STATUSES = {"queued", "initializing", "running", "packaging"}
-TERMINAL_JOB_STATUSES = {"completed", "failed"}
+TERMINAL_JOB_STATUSES = {"completed", "failed", "cancelled"}
 MAX_EVENTS = 160
 _UNSET = object()
 
@@ -66,9 +64,9 @@ STAGE_COPY: dict[str, tuple[str, str]] = {
 }
 
 ERROR_TITLES = {
-    "AGENT_NOT_AVAILABLE": "코딩 에이전트를 찾을 수 없습니다",
-    "DRIVER_ERROR": "코딩 에이전트를 시작하지 못했습니다",
-    "AGENT_PROCESS_FAILED": "코딩 에이전트 실행이 실패했습니다",
+    "AGENT_NOT_AVAILABLE": "LLM 실행 환경을 찾을 수 없습니다",
+    "DRIVER_ERROR": "LLM 실행 환경을 시작하지 못했습니다",
+    "AGENT_PROCESS_FAILED": "LLM 실행이 실패했습니다",
     "STAGE_RESULT_INVALID": "단계 완료 기록이 올바르지 않습니다",
     "STAGE_CHECK_FAILED": "필수 검증을 통과하지 못했습니다",
     "STAGE_REVIEW_FAILED": "단계 검토를 통과하지 못했습니다",
@@ -81,6 +79,7 @@ ERROR_TITLES = {
     "UNEXPECTED_ERROR": "예상하지 못한 오류가 발생했습니다",
     "SERVER_RESTARTED": "실행 중 서버가 다시 시작되었습니다",
     "ARCHIVE_MISSING": "완료된 ZIP 파일을 찾을 수 없습니다",
+    "JOB_CANCELLED": "작업이 취소되었습니다",
 }
 
 
@@ -119,8 +118,7 @@ LLM_BRIDGE_DRIVER_ALIASES = {"llm-bridge", "llm_bridge", "llm"}
 class WebConfig:
     projects_dir: Path = field(default_factory=lambda: Path("projects"))
     data_dir: Path = field(default_factory=lambda: Path(".appforge-web"))
-    driver: str = "auto"
-    agent_cmd: str | None = None
+    driver: str = "llm-bridge"
     model: str | None = None
     allow_network: bool = True
     allow_destructive: bool = False
@@ -137,8 +135,7 @@ class WebConfig:
         return cls(
             projects_dir=Path(os.environ.get("APPFORGE_PROJECTS_DIR", "projects")),
             data_dir=Path(os.environ.get("APPFORGE_DATA_DIR", ".appforge-web")),
-            driver=os.environ.get("APPFORGE_DRIVER", "auto"),
-            agent_cmd=os.environ.get("APPFORGE_AGENT_CMD") or None,
+            driver=os.environ.get("APPFORGE_DRIVER", "llm-bridge"),
             model=os.environ.get("APPFORGE_MODEL") or None,
             allow_network=_env_bool("APPFORGE_ALLOW_NETWORK", True),
             allow_destructive=_env_bool("APPFORGE_ALLOW_DESTRUCTIVE", False),
@@ -195,6 +192,7 @@ class JobManager:
         self._lock = threading.RLock()
         self._jobs: dict[str, dict[str, Any]] = {}
         self._threads: dict[str, threading.Thread] = {}
+        self._cancel_events: dict[str, threading.Event] = {}
         self._load_jobs()
 
     def health(self) -> dict[str, Any]:
@@ -221,90 +219,21 @@ class JobManager:
         if requested in LLM_BRIDGE_DRIVER_ALIASES:
             return self._llm_bridge_readiness()
         if requested == "auto":
-            if command_exists("codex"):
-                return {
-                    "ready": True,
-                    "requested": "auto",
-                    "selected": "codex",
-                    "label": "Codex CLI",
-                    "message": "Codex CLI를 사용합니다.",
-                    "action": "",
-                }
-            if command_exists("claude"):
-                return {
-                    "ready": True,
-                    "requested": "auto",
-                    "selected": "claude",
-                    "label": "Claude Code CLI",
-                    "message": "Claude Code CLI를 사용합니다.",
-                    "action": "",
-                }
+            bridge_readiness = self._llm_bridge_readiness()
+            return {
+                **bridge_readiness,
+                "requested": "auto",
+            }
+        if requested in {"codex", "claude"}:
             return {
                 "ready": False,
-                "requested": "auto",
+                "requested": requested,
                 "selected": None,
-                "label": "코딩 에이전트 없음",
-                "message": "Codex CLI 또는 Claude Code CLI가 PATH에서 발견되지 않았습니다.",
+                "label": "CLI 드라이버 제거됨",
+                "message": f"{requested} CLI 드라이버는 더 이상 지원하지 않습니다.",
                 "action": (
-                    "Codex CLI 또는 Claude Code CLI를 설치하고 로그인한 뒤 웹앱을 다시 "
-                    "시작하세요. 사용자 명령을 쓰려면 APPFORGE_DRIVER=generic과 "
-                    "APPFORGE_AGENT_CMD를 설정할 수 있습니다."
-                ),
-            }
-        if requested == "codex":
-            ready = command_exists("codex")
-            return {
-                "ready": ready,
-                "requested": requested,
-                "selected": "codex" if ready else None,
-                "label": "Codex CLI",
-                "message": "Codex CLI를 사용합니다." if ready else "Codex CLI를 찾지 못했습니다.",
-                "action": "Codex CLI를 설치하고 로그인한 뒤 서버를 다시 시작하세요." if not ready else "",
-            }
-        if requested == "claude":
-            ready = command_exists("claude")
-            return {
-                "ready": ready,
-                "requested": requested,
-                "selected": "claude" if ready else None,
-                "label": "Claude Code CLI",
-                "message": (
-                    "Claude Code CLI를 사용합니다."
-                    if ready
-                    else "Claude Code CLI를 찾지 못했습니다."
-                ),
-                "action": (
-                    "Claude Code CLI를 설치하고 로그인한 뒤 서버를 다시 시작하세요."
-                    if not ready
-                    else ""
-                ),
-            }
-        if requested == "generic":
-            if not self.config.agent_cmd:
-                return {
-                    "ready": False,
-                    "requested": requested,
-                    "selected": None,
-                    "label": "사용자 명령",
-                    "message": "APPFORGE_AGENT_CMD가 설정되지 않았습니다.",
-                    "action": "실행할 에이전트 명령 템플릿을 APPFORGE_AGENT_CMD에 설정하세요.",
-                }
-            executable = _command_executable(self.config.agent_cmd)
-            ready = executable is not None and _executable_exists(executable)
-            return {
-                "ready": ready,
-                "requested": requested,
-                "selected": "generic" if ready else None,
-                "label": "사용자 명령",
-                "message": (
-                    f"사용자 명령 실행기 `{executable}`를 사용합니다."
-                    if ready
-                    else f"사용자 명령의 실행 파일 `{executable or '?'}`을 찾지 못했습니다."
-                ),
-                "action": (
-                    "APPFORGE_AGENT_CMD의 첫 실행 파일과 PATH를 확인하세요."
-                    if not ready
-                    else ""
+                    "LLM 연결 설정에서 외부 프로바이더 API 키를 저장하고 "
+                    "APPFORGE_DRIVER=llm-bridge로 실행하세요."
                 ),
             }
         return {
@@ -313,7 +242,7 @@ class JobManager:
             "selected": None,
             "label": "알 수 없는 실행기",
             "message": f"지원하지 않는 드라이버입니다: {self.config.driver}",
-            "action": "APPFORGE_DRIVER를 auto, codex, claude, generic 또는 llm-bridge로 설정하세요.",
+            "action": "APPFORGE_DRIVER를 auto 또는 llm-bridge로 설정하세요.",
         }
 
     def _llm_bridge_readiness(self) -> dict[str, Any]:
@@ -440,6 +369,7 @@ class JobManager:
                     context={"current_job_id": active_job_id},
                 )
             self._jobs[job_id] = job
+            self._cancel_events[job_id] = threading.Event()
             self._record_event_locked(job, "job_queued", "작업이 실행 대기열에 등록되었습니다.")
             self._save_locked(job)
             thread = threading.Thread(
@@ -462,6 +392,30 @@ class JobManager:
                     action="새 요청을 시작하거나 올바른 작업 주소인지 확인하세요.",
                     status_code=404,
                 )
+            return self._public_job_locked(job)
+
+    def cancel_job(self, job_id: str) -> dict[str, Any]:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                raise WebJobError(
+                    "JOB_NOT_FOUND",
+                    "요청한 작업을 찾을 수 없습니다.",
+                    action="새 요청을 시작하거나 올바른 작업 주소인지 확인하세요.",
+                    status_code=404,
+                )
+            if job.get("status") not in ACTIVE_JOB_STATUSES:
+                return self._public_job_locked(job)
+            cancel_event = self._cancel_events.setdefault(job_id, threading.Event())
+            cancel_event.set()
+            stage = str(job.get("active_stage") or "") or None
+            error = self._make_error(
+                "JOB_CANCELLED",
+                "사용자가 실행 중인 작업을 취소했습니다.",
+                action="필요하면 새 요청을 시작하세요.",
+                stage=stage,
+            )
+            self._mark_cancelled_locked(job, error, stage=stage)
             return self._public_job_locked(job)
 
     def download_path(self, job_id: str) -> tuple[Path, str]:
@@ -502,13 +456,17 @@ class JobManager:
 
     def _run_job(self, job_id: str) -> None:
         layout: ProjectLayout | None = None
+        cancel_event = self._cancel_events.setdefault(job_id, threading.Event())
         try:
+            if cancel_event.is_set():
+                self._cancel_job_state(job_id, stage="preflight")
+                return
             self._set_job_running(job_id)
             self._set_stage(
                 job_id,
                 "preflight",
                 "running",
-                detail="설치된 코딩 에이전트와 실행 환경을 확인하고 있습니다.",
+                detail="외부 LLM 브릿지와 실행 환경을 확인하고 있습니다.",
             )
             readiness = self.driver_readiness()
             if not readiness["ready"]:
@@ -521,12 +479,14 @@ class JobManager:
                 )
                 self._fail_job(job_id, error, stage="preflight")
                 return
+            if cancel_event.is_set():
+                self._cancel_job_state(job_id, stage="preflight")
+                return
             try:
                 selected_driver = create_driver(
-                    self.config.driver,
+                    str(readiness.get("selected") or self.config.driver),
                     unsafe=self.config.unsafe_agent,
                     model=self.config.model,
-                    agent_cmd=self.config.agent_cmd,
                     max_turns=self.config.max_turns,
                     bridge_url=self.config.llm_bridge_url,
                     llm_provider=self.config.llm_provider,
@@ -541,6 +501,9 @@ class JobManager:
                 )
                 self._fail_job(job_id, error, stage="preflight")
                 return
+            if cancel_event.is_set():
+                self._cancel_job_state(job_id, stage="preflight")
+                return
             self._update_job(
                 job_id,
                 driver=selected_driver.name,
@@ -552,6 +515,9 @@ class JobManager:
                 "completed",
                 detail=f"{readiness['label']} 사용 준비 완료",
             )
+            if cancel_event.is_set():
+                self._cancel_job_state(job_id, stage="preflight")
+                return
 
             self._set_stage(
                 job_id,
@@ -582,6 +548,9 @@ class JobManager:
                 )
                 self._fail_job(job_id, error, stage="project_setup")
                 return
+            if cancel_event.is_set():
+                self._cancel_job_state(job_id, stage="project_setup")
+                return
             self._update_job(
                 job_id,
                 project_name=layout.root.name,
@@ -595,6 +564,9 @@ class JobManager:
                 "completed",
                 detail=f"프로젝트 `{layout.root.name}` 준비 완료",
             )
+            if cancel_event.is_set():
+                self._cancel_job_state(job_id, stage="project_setup")
+                return
 
             runner = PipelineRunner(
                 layout,
@@ -605,9 +577,13 @@ class JobManager:
                 max_stage_attempts=self.config.max_stage_attempts,
                 stage_timeout=self.config.stage_timeout,
                 event_handler=lambda event: self._handle_runner_event(job_id, event),
+                cancel_event=cancel_event,
             )
             summary = runner.run()
             if not summary.success:
+                if cancel_event.is_set() or (summary.failure or {}).get("code") == "JOB_CANCELLED":
+                    self._cancel_job_state(job_id, stage=summary.failed_stage or summary.awaiting_stage)
+                    return
                 failure = summary.failure or {
                     "code": "STAGE_FAILED",
                     "message": summary.message,
@@ -622,6 +598,9 @@ class JobManager:
                 )
                 return
 
+            if cancel_event.is_set():
+                self._cancel_job_state(job_id, stage=summary.failed_stage or summary.awaiting_stage)
+                return
             self._update_job(
                 job_id,
                 status="packaging",
@@ -634,6 +613,9 @@ class JobManager:
                 "running",
                 detail="비밀정보와 실행 캐시를 제외한 소스 ZIP을 준비하고 있습니다.",
             )
+            if cancel_event.is_set():
+                self._cancel_job_state(job_id, stage="download_package")
+                return
             try:
                 archive_path = self._ensure_archive(layout)
                 self._validate_archive(archive_path)
@@ -646,6 +628,9 @@ class JobManager:
                     technical=exc.context,
                 )
                 self._fail_job(job_id, error, stage="download_package")
+                return
+            if cancel_event.is_set():
+                self._cancel_job_state(job_id, stage="download_package")
                 return
             self._set_stage(
                 job_id,
@@ -676,6 +661,9 @@ class JobManager:
                 self._save_locked(job)
         except Exception as exc:
             stage = self._current_stage(job_id)
+            if cancel_event.is_set():
+                self._cancel_job_state(job_id, stage=stage)
+                return
             error = self._make_error(
                 "UNEXPECTED_ERROR",
                 f"{type(exc).__name__}: {exc}",
@@ -690,6 +678,8 @@ class JobManager:
         finally:
             with self._lock:
                 self._threads.pop(job_id, None)
+                if job_id in self._cancel_events and job_id not in self._threads:
+                    self._cancel_events.pop(job_id, None)
 
     def _ensure_archive(self, layout: ProjectLayout) -> Path:
         archives = sorted(
@@ -789,7 +779,7 @@ class JobManager:
                 job_id,
                 str(stage),
                 "running",
-                detail="코딩 에이전트가 소스와 단계 산출물을 만들고 있습니다.",
+                detail="외부 LLM이 소스와 단계 산출물을 만들고 있습니다.",
                 attempt=attempt,
             )
         elif event_name == "agent_completed" and stage:
@@ -888,7 +878,7 @@ class JobManager:
             {
                 "id": "preflight",
                 "name": "실행 환경 확인",
-                "description": "코딩 에이전트 설치, 인증과 기본 안전 설정을 확인합니다.",
+                "description": "외부 LLM 브릿지, 인증과 기본 안전 설정을 확인합니다.",
                 "kind": "system",
                 "status": "pending",
                 "detail": "대기 중",
@@ -1036,6 +1026,56 @@ class JobManager:
             )
             self._save_locked(job)
 
+    def _cancel_job_state(self, job_id: str, *, stage: str | None) -> None:
+        error = self._make_error(
+            "JOB_CANCELLED",
+            "사용자가 실행 중인 작업을 취소했습니다.",
+            action="필요하면 새 요청을 시작하세요.",
+            stage=stage,
+        )
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return
+            self._mark_cancelled_locked(job, error, stage=stage)
+
+    def _mark_cancelled_locked(
+        self,
+        job: dict[str, Any],
+        error: dict[str, Any],
+        *,
+        stage: str | None,
+    ) -> None:
+        now = utc_now()
+        if stage:
+            stage_record = self._find_stage_locked(job, stage)
+            if stage_record is not None and stage_record.get("status") not in {"completed", "failed"}:
+                stage_record["status"] = "failed"
+                stage_record["detail"] = error["message"]
+                stage_record["error"] = self._compact_error(error)
+                stage_record["started_at"] = stage_record.get("started_at") or now
+                stage_record["completed_at"] = now
+        job["status"] = "cancelled"
+        job["message"] = error["message"]
+        job["active_stage"] = stage
+        job["error"] = error
+        job["completed_at"] = now
+        job["updated_at"] = now
+        job["download"] = {
+            "available": False,
+            "url": None,
+            "filename": None,
+            "size_bytes": None,
+        }
+        if not any(event.get("event") == "job_cancelled" for event in job.get("events") or []):
+            self._record_event_locked(
+                job,
+                "job_cancelled",
+                error["message"],
+                data={"code": error.get("code"), "stage": stage},
+            )
+        self._save_locked(job)
+
     def _public_job_locked(self, job: dict[str, Any]) -> dict[str, Any]:
         public = copy.deepcopy(job)
         public.pop("archive_path", None)
@@ -1048,6 +1088,7 @@ class JobManager:
             "packaging": "ZIP 준비 중",
             "completed": "완료",
             "failed": "오류 발생",
+            "cancelled": "취소됨",
         }.get(str(job.get("status")), str(job.get("status")))
         return public
 
@@ -1263,21 +1304,6 @@ class JobManager:
                     data["updated_at"] = utc_now()
                     atomic_write_json(path, data)
             self._jobs[job_id] = data
-
-
-def _command_executable(command_template: str) -> str | None:
-    try:
-        tokens = shlex.split(command_template, posix=os.name != "nt")
-    except ValueError:
-        return None
-    return tokens[0] if tokens else None
-
-
-def _executable_exists(executable: str) -> bool:
-    path = Path(executable).expanduser()
-    if path.is_absolute() or path.parent != Path("."):
-        return path.is_file()
-    return command_exists(executable)
 
 
 def _safe_int(value: Any) -> int | None:

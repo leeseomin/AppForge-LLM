@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
-import { ApiError, createJob, getHealth, getJob } from './api';
+import { ApiError, cancelJob, createJob, getHealth, getJob } from './api';
 import ComposerCard from './components/ComposerCard.vue';
 import HealthBanner from './components/HealthBanner.vue';
 import JobPanel from './components/JobPanel.vue';
@@ -18,6 +18,7 @@ const currentJobId = ref<string | null>(window.localStorage.getItem(STORAGE_KEY)
 const job = ref<JobPayload | null>(null);
 const prompt = ref('');
 const submitting = ref(false);
+const cancelling = ref(false);
 const toastMessage = ref('');
 const settingsOpen = ref(false);
 
@@ -69,7 +70,7 @@ async function submitJob() {
     return;
   }
   if (!health.value?.ready) {
-    showToast('먼저 코딩 에이전트 실행 환경을 설정해 주세요.');
+    showToast('먼저 외부 LLM 연결을 설정해 주세요.');
     return;
   }
 
@@ -138,6 +139,23 @@ async function loadCurrentJob({ immediate = false } = {}) {
     }
     serverError.value = readableError(error, '상태를 불러오지 못했습니다. 잠시 뒤 다시 시도합니다.');
     schedulePoll(3000);
+  }
+}
+
+async function cancelActiveJob() {
+  if (!currentJobId.value || !isActiveJob.value || cancelling.value) return;
+  cancelling.value = true;
+  try {
+    const payload = await cancelJob(currentJobId.value);
+    job.value = payload;
+    window.clearTimeout(pollTimer);
+    await refreshHealth({ restoreBusyJob: false });
+    showToast('현재 작업을 취소했습니다.');
+  } catch (error) {
+    showToast(readableError(error, '작업 취소에 실패했습니다.'));
+    schedulePoll(1200);
+  } finally {
+    cancelling.value = false;
   }
 }
 
@@ -242,8 +260,11 @@ onBeforeUnmount(() => {
     <TopBar
       :health="health"
       :server-error="serverError"
+      :can-cancel="isActiveJob"
+      :cancelling="cancelling"
       @refresh="refreshHealth"
       @open-settings="openProviderSettings"
+      @cancel="cancelActiveJob"
     />
 
     <section class="hero" aria-labelledby="heroTitle">

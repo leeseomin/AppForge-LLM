@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import re
+import subprocess
 import sys
 import time
 import zipfile
@@ -10,6 +11,8 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from appforge import llm_bridge
+from appforge.drivers import AgentDriver
+from appforge.models import DriverResult
 from appforge.web import create_app
 from appforge.web_jobs import WebConfig
 
@@ -34,18 +37,116 @@ class _FakeBridgeManager:
 
 
 def _fixture_config(tmp_path: Path) -> WebConfig:
-    framework_root = Path(__file__).resolve().parents[1]
-    fixture = framework_root / "tests" / "fixtures" / "fake_stage_agent.py"
-    command = f'{sys.executable} -S "{fixture}" {{workspace}} {{stage}} "{framework_root}"'
     return WebConfig(
         projects_dir=tmp_path / "projects",
         data_dir=tmp_path / "web-state",
-        driver="generic",
-        agent_cmd=command,
+        driver="llm-bridge",
+        llm_bridge_url="http://bridge.test",
         allow_network=False,
         max_stage_attempts=1,
         stage_timeout=120,
     )
+
+
+def _mock_ready_bridge(
+    monkeypatch,
+    *,
+    provider: str = "deepseek",
+    model: str = "deepseek-v4-pro",
+) -> None:
+    monkeypatch.setattr(llm_bridge, "ping", lambda url, **kwargs: {"ok": True})
+    monkeypatch.setattr(llm_bridge, "get_active", lambda url: {"provider": provider, "model": model})
+    monkeypatch.setattr(
+        llm_bridge,
+        "list_providers",
+        lambda url: {
+            "providers": [
+                {
+                    "id": provider,
+                    "name": provider.title(),
+                    "configured": True,
+                    "has_key": True,
+                    "key_source": "stored",
+                    "models": [{"id": model}],
+                }
+            ]
+        },
+    )
+
+
+class FixtureScriptDriver(AgentDriver):
+    name = "fixture"
+
+    def __init__(self) -> None:
+        self.framework_root = Path(__file__).resolve().parents[1]
+        self.fixture = self.framework_root / "tests" / "fixtures" / "fake_stage_agent.py"
+
+    def run(self, prompt, *, layout, stage, attempt, timeout, cancel_event=None):  # type: ignore[no-untyped-def]
+        final_path = layout.logs / f"{stage}-attempt-{attempt}-fixture-final.txt"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-S",
+                str(self.fixture),
+                str(layout.root),
+                stage,
+                str(self.framework_root),
+            ],
+            cwd=layout.root,
+            input=prompt,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+        final_path.write_text(completed.stdout, encoding="utf-8")
+        return DriverResult(
+            completed.returncode == 0,
+            completed.returncode,
+            completed.stdout,
+            completed.stderr,
+            0.01,
+            ["fixture"],
+            str(final_path),
+        )
+
+
+class BlockingDriver(AgentDriver):
+    name = "blocking"
+
+    def __init__(self) -> None:
+        self.started = False
+        self.cancel_seen = False
+
+    def run(self, prompt, *, layout, stage, attempt, timeout, cancel_event=None):  # type: ignore[no-untyped-def]
+        self.started = True
+        final_path = layout.logs / f"{stage}-attempt-{attempt}-blocking-final.txt"
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if cancel_event is not None and cancel_event.is_set():
+                self.cancel_seen = True
+                final_path.write_text("", encoding="utf-8")
+                return DriverResult(
+                    False,
+                    130,
+                    "",
+                    "Cancelled by user.",
+                    0.01,
+                    ["blocking"],
+                    str(final_path),
+                )
+            time.sleep(0.02)
+        final_path.write_text("", encoding="utf-8")
+        return DriverResult(False, 124, "", "Timed out.", float(timeout), ["blocking"], str(final_path))
+
+
+class ExitCodeDriver(AgentDriver):
+    name = "exit-code-fixture"
+
+    def run(self, prompt, *, layout, stage, attempt, timeout, cancel_event=None):  # type: ignore[no-untyped-def]
+        final_path = layout.logs / f"{stage}-attempt-{attempt}-exit-final.txt"
+        final_path.write_text("", encoding="utf-8")
+        return DriverResult(False, 7, "", "fixture exit", 0.01, ["exit-code-fixture"], str(final_path))
 
 
 def _wait_for_terminal(client: TestClient, job_id: str, timeout: float = 45.0) -> dict:
@@ -61,8 +162,22 @@ def _wait_for_terminal(client: TestClient, job_id: str, timeout: float = 45.0) -
     raise AssertionError(f"job did not reach a terminal state: {last}")
 
 
-def test_minimal_web_ui_and_health(tmp_path: Path) -> None:
-    app = create_app(_fixture_config(tmp_path))
+def _wait_until_job(client: TestClient, job_id: str, predicate, timeout: float = 10.0) -> dict:
+    deadline = time.monotonic() + timeout
+    last: dict = {}
+    while time.monotonic() < deadline:
+        response = client.get(f"/api/jobs/{job_id}")
+        assert response.status_code == 200, response.text
+        last = response.json()
+        if predicate(last):
+            return last
+        time.sleep(0.05)
+    raise AssertionError(f"job did not reach expected state: {last}")
+
+
+def test_minimal_web_ui_and_health(tmp_path: Path, monkeypatch) -> None:
+    _mock_ready_bridge(monkeypatch)
+    app = create_app(_fixture_config(tmp_path), llm_bridge_manager=_FakeBridgeManager())
     with TestClient(app) as client:
         page = client.get("/")
         assert page.status_code == 200
@@ -92,13 +207,15 @@ def test_minimal_web_ui_and_health(tmp_path: Path) -> None:
         assert health.status_code == 200
         payload = health.json()
         assert payload["ready"] is True
-        assert payload["driver"]["selected"] == "generic"
+        assert payload["driver"]["selected"] == "llm-bridge"
         assert payload["prompt_max_chars"] == 20_000
         assert payload["safety"]["deployment_enabled"] is False
 
 
-def test_web_job_runs_all_stages_and_enables_zip_download(tmp_path: Path) -> None:
-    app = create_app(_fixture_config(tmp_path))
+def test_web_job_runs_all_stages_and_enables_zip_download(tmp_path: Path, monkeypatch) -> None:
+    _mock_ready_bridge(monkeypatch)
+    monkeypatch.setattr("appforge.web_jobs.create_driver", lambda *args, **kwargs: FixtureScriptDriver())
+    app = create_app(_fixture_config(tmp_path), llm_bridge_manager=_FakeBridgeManager())
     with TestClient(app) as client:
         created = client.post(
             "/api/jobs",
@@ -130,17 +247,66 @@ def test_web_job_runs_all_stages_and_enables_zip_download(tmp_path: Path) -> Non
         assert not any(name.startswith(".appforge/") for name in names)
 
 
-def test_web_job_returns_detailed_agent_setup_error(tmp_path: Path) -> None:
+def test_web_job_cancel_stops_active_driver(tmp_path: Path, monkeypatch) -> None:
+    _mock_ready_bridge(monkeypatch)
+    driver = BlockingDriver()
+    monkeypatch.setattr("appforge.web_jobs.create_driver", lambda *args, **kwargs: driver)
+    config = _fixture_config(tmp_path)
+    app = create_app(config, llm_bridge_manager=_FakeBridgeManager())
+    with TestClient(app) as client:
+        created = client.post("/api/jobs", json={"prompt": "취소 가능한 간단한 웹앱을 만들어라"})
+        assert created.status_code == 202, created.text
+        job_id = created.json()["id"]
+
+        _wait_until_job(client, job_id, lambda _job: driver.started)
+
+        cancelled = client.post(f"/api/jobs/{job_id}/cancel")
+        assert cancelled.status_code == 200, cancelled.text
+        payload = cancelled.json()
+        assert payload["status"] == "cancelled"
+        assert payload["terminal"] is True
+        assert payload["error"]["code"] == "JOB_CANCELLED"
+        assert payload["download"]["available"] is False
+        assert any(event["event"] == "job_cancelled" for event in payload["events"])
+
+        health = client.get("/api/health").json()
+        assert health["busy"] is False
+        assert health["active_job_id"] is None
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and not driver.cancel_seen:
+            time.sleep(0.02)
+        assert driver.cancel_seen
+
+
+def test_web_job_returns_detailed_llm_setup_error(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(llm_bridge, "ping", lambda url, **kwargs: {"ok": True})
+    monkeypatch.setattr(llm_bridge, "get_active", lambda url: {"provider": "openai", "model": "gpt-4o-mini"})
+    monkeypatch.setattr(
+        llm_bridge,
+        "list_providers",
+        lambda url: {
+            "providers": [
+                {
+                    "id": "openai",
+                    "name": "OpenAI",
+                    "configured": False,
+                    "has_key": False,
+                    "key_source": "none",
+                    "models": [{"id": "gpt-4o-mini"}],
+                }
+            ]
+        },
+    )
     config = WebConfig(
         projects_dir=tmp_path / "projects",
         data_dir=tmp_path / "web-state",
-        driver="generic",
-        agent_cmd=None,
+        driver="llm-bridge",
+        llm_bridge_url="http://bridge.test",
         allow_network=False,
         max_stage_attempts=1,
         stage_timeout=60,
     )
-    app = create_app(config)
+    app = create_app(config, llm_bridge_manager=_FakeBridgeManager())
     with TestClient(app) as client:
         health = client.get("/api/health").json()
         assert health["ready"] is False
@@ -158,17 +324,11 @@ def test_web_job_returns_detailed_agent_setup_error(tmp_path: Path) -> None:
         assert job["download"]["available"] is False
 
 
-def test_web_job_preserves_agent_exit_code_and_stage_details(tmp_path: Path) -> None:
-    config = WebConfig(
-        projects_dir=tmp_path / "projects",
-        data_dir=tmp_path / "web-state",
-        driver="generic",
-        agent_cmd='/bin/sh -c "exit 7"',
-        allow_network=False,
-        max_stage_attempts=1,
-        stage_timeout=60,
-    )
-    app = create_app(config)
+def test_web_job_preserves_driver_exit_code_and_stage_details(tmp_path: Path, monkeypatch) -> None:
+    _mock_ready_bridge(monkeypatch)
+    monkeypatch.setattr("appforge.web_jobs.create_driver", lambda *args, **kwargs: ExitCodeDriver())
+    config = _fixture_config(tmp_path)
+    app = create_app(config, llm_bridge_manager=_FakeBridgeManager())
     with TestClient(app) as client:
         created = client.post("/api/jobs", json={"prompt": "간단한 웹앱을 만들어라"})
         assert created.status_code == 202
@@ -206,7 +366,7 @@ def test_llm_bridge_health_requires_configured_active_provider(tmp_path: Path, m
         driver="llm-bridge",
         llm_bridge_url="http://bridge.test",
     )
-    app = create_app(config)
+    app = create_app(config, llm_bridge_manager=_FakeBridgeManager())
     with TestClient(app) as client:
         health = client.get("/api/health").json()
         assert health["ready"] is False
@@ -221,6 +381,79 @@ def test_llm_bridge_health_requires_configured_active_provider(tmp_path: Path, m
         assert health["ready"] is True
         assert health["driver"]["selected"] == "llm-bridge"
         assert "openai/gpt-4o-mini" in health["driver"]["message"]
+
+
+def test_auto_driver_prefers_configured_llm_bridge(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(llm_bridge, "ping", lambda url, **kwargs: {"ok": True})
+    monkeypatch.setattr(
+        llm_bridge,
+        "get_active",
+        lambda url: {"provider": "deepseek", "model": "deepseek-v4-pro"},
+    )
+    monkeypatch.setattr(
+        llm_bridge,
+        "list_providers",
+        lambda url: {
+            "providers": [
+                {
+                    "id": "deepseek",
+                    "name": "DeepSeek",
+                    "configured": True,
+                    "has_key": True,
+                    "key_source": "stored",
+                    "models": [{"id": "deepseek-v4-pro"}],
+                }
+            ]
+        },
+    )
+
+    config = WebConfig(
+        projects_dir=tmp_path / "projects",
+        data_dir=tmp_path / "web-state",
+        driver="auto",
+        llm_bridge_url="http://bridge.test",
+    )
+    app = create_app(config, llm_bridge_manager=_FakeBridgeManager())
+    with TestClient(app) as client:
+        health = client.get("/api/health").json()
+
+    assert health["ready"] is True
+    assert health["driver"]["requested"] == "auto"
+    assert health["driver"]["selected"] == "llm-bridge"
+    assert health["driver"]["label"] == "LLM 브릿지 · deepseek"
+    assert "deepseek/deepseek-v4-pro" in health["driver"]["message"]
+
+
+def test_cli_or_command_driver_is_not_available_in_web_app(tmp_path: Path) -> None:
+    for driver in ("codex", "generic"):
+        config = WebConfig(
+            projects_dir=tmp_path / f"projects-{driver}",
+            data_dir=tmp_path / f"web-state-{driver}",
+            driver=driver,
+        )
+        app = create_app(config)
+        with TestClient(app) as client:
+            health = client.get("/api/health").json()
+
+        assert health["ready"] is False
+        assert health["driver"]["selected"] is None
+        assert "지원하지" in health["driver"]["message"] or "더 이상 지원하지" in health["driver"]["message"]
+
+
+def test_codex_driver_uses_removed_label(tmp_path: Path) -> None:
+    config = WebConfig(
+        projects_dir=tmp_path / "projects",
+        data_dir=tmp_path / "web-state",
+        driver="codex",
+    )
+    app = create_app(config)
+    with TestClient(app) as client:
+        health = client.get("/api/health").json()
+
+    assert health["ready"] is False
+    assert health["driver"]["selected"] is None
+    assert health["driver"]["label"] == "CLI 드라이버 제거됨"
+    assert "codex" in health["driver"]["message"]
 
 
 def test_llm_provider_api_proxies_to_bridge(tmp_path: Path, monkeypatch) -> None:

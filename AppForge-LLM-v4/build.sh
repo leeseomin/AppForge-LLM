@@ -67,7 +67,7 @@ Environment:
   APPFORGE_NO_OPEN=1                Suppress browser opening.
   APPFORGE_SKIP_INSTALL=1           Reuse the current .venv instead of syncing Python deps.
   APPFORGE_SKIP_FRONTEND_BUILD=1    Reuse current packaged frontend assets.
-  APPFORGE_DRIVER=llm-bridge        Request the local llm_bridge driver path.
+  APPFORGE_DRIVER                  Driver path; default llm-bridge. auto is an alias.
   APPFORGE_START_LLM_BRIDGE=1       Start or reuse llm_bridge before the web server.
   APPFORGE_SKIP_LLM_BRIDGE=1        Do not start llm_bridge from this launcher.
   APPFORGE_LLM_BRIDGE_URL           Bridge health URL base, default http://127.0.0.1:8788.
@@ -267,9 +267,9 @@ wait_for_bridge() {
 
 maybe_start_bridge() {
   local driver
-  driver="$(normalize_driver "${APPFORGE_DRIVER:-auto}")"
+  driver="$(normalize_driver "${APPFORGE_DRIVER:-llm-bridge}")"
   local requested=0
-  if [[ "$driver" == "llm-bridge" ]] || is_true "${APPFORGE_START_LLM_BRIDGE:-}"; then
+  if [[ "$driver" == "llm-bridge" || "$driver" == "auto" ]] || is_true "${APPFORGE_START_LLM_BRIDGE:-}"; then
     requested=1
   fi
 

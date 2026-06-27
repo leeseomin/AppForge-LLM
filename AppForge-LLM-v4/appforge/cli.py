@@ -11,7 +11,7 @@ from rich.table import Table
 
 from . import __version__
 from .checkpoints import next_stage, read_checkpoint, write_checkpoint
-from .drivers import DriverError, create_driver
+from .drivers import DEFAULT_LLM_BRIDGE_URL, DriverError, create_driver
 from .gates import review_stage, run_declared_gates, validate_stage_artifacts, validate_stage_result
 from .models import ProjectLayout
 from .pipelines import all_pipelines, auto_select_pipeline, load_pipeline
@@ -20,7 +20,7 @@ from .prompting import build_stage_prompt
 from .runner import PipelineRunner
 from .tooling.detection import detect_stack, quality_commands
 from .tooling.registry import ToolRegistry
-from .util import atomic_write_text, command_exists, read_json, utc_now
+from .util import atomic_write_text, utc_now
 
 app = typer.Typer(
     name="appforge",
@@ -119,7 +119,7 @@ def new_project(
         Panel.fit(
             f"[bold green]Project initialized[/bold green]\n"
             f"Path: {layout.root}\nPipeline: {project['pipeline']}\nMode: {project['mode']}\n"
-            f"Next: appforge run {layout.root} --driver auto",
+            f"Next: appforge run {layout.root} --driver llm-bridge",
             title="OpenAppForge",
         )
     )
@@ -133,9 +133,10 @@ def forge(
     mode: str | None = typer.Option(None, "--mode", help="autonomous or guided"),
     projects_dir: Path = typer.Option(Path("projects"), "--projects-dir"),
     target: Path | None = typer.Option(None, "--target", help="Adopt an existing repository instead of creating a project"),
-    driver: str = typer.Option("auto", "--driver", help="auto, codex, claude, or generic"),
-    agent_cmd: str | None = typer.Option(None, "--agent-cmd", help="Generic command template; supports {workspace}, {prompt_file}, {result_file}, {stage}"),
+    driver: str = typer.Option("llm-bridge", "--driver", help="auto or llm-bridge"),
     model: str | None = typer.Option(None, "--model"),
+    llm_bridge_url: str = typer.Option(DEFAULT_LLM_BRIDGE_URL, "--llm-bridge-url"),
+    llm_provider: str | None = typer.Option(None, "--llm-provider"),
     auto_approve: bool = typer.Option(True, "--auto-approve/--pause-for-approval"),
     allow_network: bool = typer.Option(False, "--allow-network", help="Allow dependency downloads and remote audits"),
     allow_destructive: bool = typer.Option(False, "--allow-destructive", help="Allow destructive AppForge tool operations"),
@@ -150,8 +151,9 @@ def forge(
             driver,
             unsafe=unsafe_agent,
             model=model,
-            agent_cmd=agent_cmd,
             max_turns=max_turns,
+            bridge_url=llm_bridge_url,
+            llm_provider=llm_provider,
         )
         layout = initialize_project(
             prompt,
@@ -289,9 +291,10 @@ def complete_stage(
 @app.command()
 def run(
     project: Path = typer.Argument(Path("."), help="Project path"),
-    driver: str = typer.Option("auto", "--driver", help="auto, codex, claude, or generic"),
-    agent_cmd: str | None = typer.Option(None, "--agent-cmd", help="Generic command template; supports {workspace}, {prompt_file}, {result_file}, {stage}"),
+    driver: str = typer.Option("llm-bridge", "--driver", help="auto or llm-bridge"),
     model: str | None = typer.Option(None, "--model"),
+    llm_bridge_url: str = typer.Option(DEFAULT_LLM_BRIDGE_URL, "--llm-bridge-url"),
+    llm_provider: str | None = typer.Option(None, "--llm-provider"),
     only_stage: str | None = typer.Option(None, "--stage"),
     auto_approve: bool = typer.Option(True, "--auto-approve/--pause-for-approval"),
     allow_network: bool = typer.Option(False, "--allow-network", help="Allow dependency downloads and remote audits"),
@@ -301,15 +304,16 @@ def run(
     stage_timeout: int = typer.Option(3600, "--stage-timeout", min=60),
     max_turns: int | None = typer.Option(None, "--max-turns", min=1),
 ) -> None:
-    """Run the pipeline using an installed coding-agent CLI."""
+    """Run the pipeline using the external LLM bridge."""
     layout = _layout(project)
     try:
         selected_driver = create_driver(
             driver,
             unsafe=unsafe_agent,
             model=model,
-            agent_cmd=agent_cmd,
             max_turns=max_turns,
+            bridge_url=llm_bridge_url,
+            llm_provider=llm_provider,
         )
         runner = PipelineRunner(
             layout,
@@ -399,14 +403,12 @@ def web(
 
 @app.command()
 def doctor() -> None:
-    """Inspect local agent drivers and tool dependencies."""
-    table = Table(title="Agent drivers")
+    """Inspect local LLM bridge and tool dependencies."""
+    table = Table(title="LLM driver")
     table.add_column("Driver")
-    table.add_column("Available")
-    table.add_column("Executable")
-    for name in ("codex", "claude"):
-        table.add_row(name, "yes" if command_exists(name) else "no", name)
-    table.add_row("generic", "yes", "user-supplied command")
+    table.add_column("Status")
+    table.add_column("Endpoint")
+    table.add_row("llm-bridge", "configured externally", DEFAULT_LLM_BRIDGE_URL)
     console.print(table)
 
     tools = ToolRegistry().all()
