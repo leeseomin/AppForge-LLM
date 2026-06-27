@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
-from .artifacts import load_artifact_schema, validate_artifact
+from .artifacts import ArtifactValidationError, load_artifact_schema, validate_artifact
 from .constants import MAX_CAPTURE_CHARS, STAGE_RESULT_FILE_NAME
 from .models import DriverResult, ProjectLayout
 from .pipelines import load_pipeline
@@ -110,11 +110,25 @@ def _iter_file_payloads(files: Any) -> list[tuple[str, str]]:
 def _write_bridge_files(layout: ProjectLayout, files: Any) -> list[str]:
     changed: list[str] = []
     for relative_path, content in _iter_file_payloads(files):
+        if _is_bridge_managed_output_path(relative_path):
+            continue
         path = _safe_workspace_path(layout, relative_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_text(path, content)
         changed.append(str(path.relative_to(layout.root)))
     return changed
+
+
+def _is_bridge_managed_output_path(relative_path: str) -> bool:
+    candidate = Path(relative_path)
+    if candidate.parts == (".appforge", STAGE_RESULT_FILE_NAME):
+        return True
+    return (
+        len(candidate.parts) == 3
+        and candidate.parts[0] == ".appforge"
+        and candidate.parts[1] == "artifacts"
+        and candidate.suffix == ".json"
+    )
 
 
 def _default_stage_result(stage: str, changed: list[str]) -> dict[str, Any]:
@@ -177,29 +191,32 @@ def _build_bridge_prompt(
         for artifact in stage.produces
     }
     contract = {
-        "required_response_shape": {
-            "artifacts": {artifact: "<JSON object matching its schema>" for artifact in stage.produces},
-            "stage_result": "<JSON object matching stage-result.schema.json>",
-            "files": {
-                "relative/path.ext": "UTF-8 text content to write, optional"
-            },
-        },
         "stage": stage.name,
         "required_artifacts": list(stage.produces),
         "artifact_schemas": schemas,
         "rules": [
-            "Return only one valid JSON object. Do not wrap it in prose.",
-            "You cannot execute commands or edit files directly; put any source files to create or replace under files.",
+            "Return ONLY one valid JSON object. No prose, no markdown code fences.",
+            "The JSON object MUST have exactly these top-level keys: artifacts, stage_result, files.",
+            "Do NOT nest those keys under any wrapper such as 'response', 'result', 'data', 'output', or 'required_response_shape'.",
+            "artifacts must map each required artifact name to a JSON object that validates against its schema.",
+            "You cannot execute commands or edit files directly; put any source files to create or replace under files (optional, may be {}).",
+            "Do not put .appforge artifacts or .appforge/stage-result.json under files; they are written from artifacts and stage_result.",
             "Do not include secrets, API keys, tokens, or credentials.",
             "Use only relative file paths. Do not write .appforge, .git, parent-directory, or absolute paths.",
-            "stage_result.status should be completed unless there is a true blocker.",
+            "stage_result.status should be 'completed' unless there is a true blocker.",
         ],
+        "response_shape": {
+            "artifacts": {artifact: "<JSON object matching its schema>" for artifact in stage.produces},
+            "stage_result": "<JSON object matching stage-result.schema.json>",
+            "files": {"relative/path.ext": "UTF-8 text content to write, optional"},
+        },
     }
     bridge_instruction = (
         "# External LLM bridge execution contract\n\n"
         "You are running through an API-only LLM bridge, not a local CLI agent. "
         "Produce a machine-readable JSON envelope that the AppForge runner will apply "
-        "to the workspace.\n\n"
+        "to the workspace. Respond with the envelope JSON object only.\n\n"
+        "## Required response shape (return exactly this top-level structure)\n"
         "```json\n"
         f"{json.dumps(contract, ensure_ascii=False, indent=2)}\n"
         "```\n\n"
@@ -209,6 +226,52 @@ def _build_bridge_prompt(
     return bridge_instruction, stage.produces
 
 
+_ENVELOPE_WRAPPER_KEYS = (
+    "required_response_shape",
+    "response_shape",
+    "response",
+    "result",
+    "data",
+    "output",
+    "payload",
+    "envelope",
+    "body",
+)
+
+
+def _unwrap_envelope(envelope: dict[str, Any]) -> dict[str, Any]:
+    """Descend through a single LLM-added wrapper key to the real envelope.
+
+    External models sometimes echo the contract shape (wrapping the answer under
+    ``required_response_shape`` or ``response``) instead of returning the flat
+    envelope. If the top-level object does not itself look like an envelope,
+    unwrap one wrapper level so artifact extraction stays robust.
+    """
+    if not envelope:
+        return envelope
+    if any(key in envelope for key in ("artifacts", "stage_result", "files")):
+        return envelope
+    wrappers = [key for key in _ENVELOPE_WRAPPER_KEYS if key in envelope]
+    if len(wrappers) == 1:
+        inner = envelope[wrappers[0]]
+        if isinstance(inner, dict) and inner:
+            return inner
+    return envelope
+
+
+def _locate_artifact_payload(envelope: dict[str, Any], artifact: str) -> dict[str, Any] | None:
+    """Find an artifact object in the common envelope layouts."""
+    artifacts = envelope.get("artifacts")
+    if isinstance(artifacts, dict):
+        candidate = artifacts.get(artifact)
+        if isinstance(candidate, dict):
+            return candidate
+    direct = envelope.get(artifact)
+    if isinstance(direct, dict):
+        return direct
+    return None
+
+
 def _apply_bridge_envelope(
     layout: ProjectLayout,
     *,
@@ -216,19 +279,25 @@ def _apply_bridge_envelope(
     produces: tuple[str, ...],
     response_text: str,
 ) -> list[str]:
-    envelope = _extract_json_object(response_text)
+    envelope = _unwrap_envelope(_extract_json_object(response_text))
     changed = _write_bridge_files(layout, envelope.get("files"))
-    artifact_payloads = envelope.get("artifacts")
-    if not isinstance(artifact_payloads, dict):
-        if len(produces) == 1 and all(key not in envelope for key in {"artifacts", "stage_result", "files"}):
-            artifact_payloads = {produces[0]: envelope}
-        else:
-            raise DriverError("LLM bridge response must include an artifacts object")
     for artifact in produces:
-        payload = artifact_payloads.get(artifact)
+        payload = _locate_artifact_payload(envelope, artifact)
+        if payload is None and len(produces) == 1:
+            # A model may return the artifact object directly without wrapping.
+            payload = envelope
         if not isinstance(payload, dict):
-            raise DriverError(f"LLM bridge response missing artifact object: {artifact}")
-        validate_artifact(artifact, payload)
+            raise DriverError(
+                f"LLM bridge response missing artifact object '{artifact}'. Return a flat "
+                f"JSON object whose top-level keys are exactly: artifacts, stage_result, files."
+            )
+        try:
+            validate_artifact(artifact, payload)
+        except ArtifactValidationError as exc:
+            raise DriverError(
+                f"LLM bridge artifact '{artifact}' failed schema validation: {exc}. "
+                f"Re-read the artifact schema and return a corrected JSON object."
+            ) from exc
         artifact_path = layout.artifacts / f"{artifact}.json"
         atomic_write_json(artifact_path, payload)
         changed.append(str(artifact_path.relative_to(layout.root)))
