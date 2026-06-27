@@ -29,7 +29,7 @@ async function resolveRequest(req: GenerateRequest): Promise<ResolvedRequest> {
     throw new BridgeLLMError("No provider selected. Configure and activate a provider first.")
   }
   const stored = await config.getProvider(providerId)
-  const resolved = registry.resolveForGeneration(providerId, req.model, stored)
+  const resolved = await registry.resolveForGeneration(providerId, req.model, stored)
   const generation: GenerationOptions | undefined = req.generation
   const built = LLM.request({
     model: resolved.model,

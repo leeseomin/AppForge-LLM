@@ -1,5 +1,6 @@
 import * as registry from "./registry"
 import * as store from "./config"
+import * as catalog from "./catalog"
 import { BridgeLLMError, generate, runOnce, stream, type StreamEvent } from "./llm"
 import { VERSION } from "./version"
 import type {
@@ -25,6 +26,7 @@ const ROUTES: Route[] = [
   { method: "GET", pattern: /^\/health\/?$/, handler: health },
   { method: "GET", pattern: /^\/providers\/?$/, handler: listProviders },
   { method: "GET", pattern: /^\/providers\/models\/?$/, handler: allModels },
+  { method: "POST", pattern: /^\/catalog\/refresh\/?$/, handler: refreshCatalog },
   { method: "PUT", pattern: /^\/providers\/([^/]+)\/?$/, handler: upsertProvider },
   { method: "DELETE", pattern: /^\/providers\/([^/]+)\/?$/, handler: removeProvider },
   { method: "GET", pattern: /^\/providers\/([^/]+)\/models\/?$/, handler: providerModels },
@@ -84,6 +86,8 @@ async function health(): Promise<Response> {
       service: "appforge-llm-bridge",
       version: VERSION,
       config_path: store.configPath(),
+      catalog_path: catalog.catalogPath(),
+      catalog_loaded: registry.isCatalogLoaded(),
       active,
     }),
   )
@@ -91,13 +95,20 @@ async function health(): Promise<Response> {
 
 async function listProviders(): Promise<Response> {
   const config = await store.load()
-  const statuses: ProviderStatus[] = registry.list().map((entry) => registry.statusOf(entry, config.providers[entry.id]))
+  const entries = await registry.list()
+  const statuses: ProviderStatus[] = entries.map((entry) => registry.statusOf(entry, config.providers[entry.id]))
   return cors(json({ providers: statuses }))
 }
 
 async function allModels(): Promise<Response> {
-  const grouped = registry.list().map((entry) => ({ id: entry.id, name: entry.name, models: entry.models }))
+  const entries = await registry.list()
+  const grouped = entries.map((entry) => ({ id: entry.id, name: entry.name, models: entry.models }))
   return cors(json({ providers: grouped }))
+}
+
+async function refreshCatalog(): Promise<Response> {
+  const loaded = await registry.refreshCatalog()
+  return cors(json({ ok: loaded, catalog_loaded: loaded, catalog_path: catalog.catalogPath() }))
 }
 
 function decodeParam(value: string): string {
@@ -110,14 +121,14 @@ function decodeParam(value: string): string {
 
 async function providerModels(_request: Request, match: RegExpMatchArray): Promise<Response> {
   const id = decodeParam(match[1] ?? "")
-  const entry = registry.get(id)
+  const entry = await registry.get(id)
   if (!entry) return cors(errorResponse(`Unknown provider '${id}'`, 404, "UNKNOWN_PROVIDER"))
   return cors(json({ id, name: entry.name, models: entry.models }))
 }
 
 async function upsertProvider(request: Request, match: RegExpMatchArray): Promise<Response> {
   const id = decodeParam(match[1] ?? "")
-  const entry = registry.get(id)
+  const entry = await registry.get(id)
   if (!entry) return cors(errorResponse(`Unknown provider '${id}'`, 404, "UNKNOWN_PROVIDER"))
   const body = await readJsonBody(request)
   await store.setProvider(id, {
@@ -145,7 +156,7 @@ async function setActive(request: Request): Promise<Response> {
     provider: typeof body.provider === "string" ? body.provider : null,
     model: typeof body.model === "string" ? body.model : null,
   }
-  if (selection.provider && !registry.get(selection.provider)) {
+  if (selection.provider && !(await registry.get(selection.provider))) {
     return cors(errorResponse(`Unknown provider '${selection.provider}'`, 404, "UNKNOWN_PROVIDER"))
   }
   const result = await store.setActive(selection)
@@ -154,7 +165,7 @@ async function setActive(request: Request): Promise<Response> {
 
 async function testProvider(request: Request, match: RegExpMatchArray): Promise<Response> {
   const id = decodeParam(match[1] ?? "")
-  const entry = registry.get(id)
+  const entry = await registry.get(id)
   if (!entry) return cors(errorResponse(`Unknown provider '${id}'`, 404, "UNKNOWN_PROVIDER"))
   const body = await readJsonBody(request)
   const payload = body as unknown as TestRequest
@@ -166,7 +177,7 @@ async function testProvider(request: Request, match: RegExpMatchArray): Promise<
   }
   let resolved
   try {
-    resolved = registry.resolveForGeneration(id, payload.model, tempConfig)
+    resolved = await registry.resolveForGeneration(id, payload.model, tempConfig)
   } catch (error) {
     const out: TestResponse = { ok: false, error: error instanceof Error ? error.message : String(error) }
     return cors(json(out))

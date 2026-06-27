@@ -12,6 +12,7 @@ import type {
   ProviderStatus,
   StoredProviderConfig,
 } from "./types"
+import * as catalog from "./catalog"
 
 export interface BuildOptions {
   apiKey: string
@@ -25,7 +26,120 @@ export interface RegistryEntry extends ProviderDescriptor {
 
 const m = (id: string, name?: string): ProviderModel => ({ id, name })
 
-const ENTRIES: RegistryEntry[] = [
+const DOCS_URLS: Record<string, string> = {
+  openai: "https://platform.openai.com/api-keys",
+  anthropic: "https://console.anthropic.com/settings/keys",
+  google: "https://aistudio.google.com/app/apikey",
+  openrouter: "https://openrouter.ai/settings/keys",
+  xai: "https://console.x.ai",
+  deepseek: "https://platform.deepseek.com/api_keys",
+  groq: "https://console.groq.com/keys",
+  cerebras: "https://cloud.cerebras.ai",
+  togetherai: "https://api.together.ai/settings/api-keys",
+  fireworks: "https://fireworks.ai/account/api-keys",
+  deepinfra: "https://deepinfra.com/dash/api_keys",
+  baseten: "https://www.baseten.co/library/api-key/",
+}
+
+const SUPPORTED_NPM = new Set([
+  "@ai-sdk/openai",
+  "@ai-sdk/anthropic",
+  "@ai-sdk/google",
+  "@openrouter/ai-sdk-provider",
+  "@ai-sdk/xai",
+  "@ai-sdk/openai-compatible",
+])
+
+const COMPAT_PROFILE_IDS = new Set([
+  "baseten",
+  "cerebras",
+  "deepinfra",
+  "deepseek",
+  "fireworks",
+  "groq",
+  "togetherai",
+])
+
+interface CompatFacade {
+  configure: (input: { apiKey: string; baseURL?: string }) => { model: (id: string) => Model }
+}
+
+const COMPAT_BUILDERS: Record<string, CompatFacade> = {
+  baseten: OpenAICompatible.baseten,
+  cerebras: OpenAICompatible.cerebras,
+  deepinfra: OpenAICompatible.deepinfra,
+  deepseek: OpenAICompatible.deepseek,
+  fireworks: OpenAICompatible.fireworks,
+  groq: OpenAICompatible.groq,
+  togetherai: OpenAICompatible.togetherai,
+}
+
+function isSupportedProvider(p: catalog.CatalogProvider): boolean {
+  if (p.npm && SUPPORTED_NPM.has(p.npm)) return true
+  return COMPAT_PROFILE_IDS.has(p.id)
+}
+
+type BuildFn = RegistryEntry["build"]
+
+function buildForCatalog(p: catalog.CatalogProvider): BuildFn {
+  const npm = p.npm
+  const resolveBase = (override?: string): string | undefined => override ?? p.api
+  switch (npm) {
+    case "@ai-sdk/openai":
+      return (id, o) => OpenAI.configure({ apiKey: o.apiKey, baseURL: resolveBase(o.baseURL) }).model(id)
+    case "@ai-sdk/anthropic":
+      return (id, o) => Anthropic.configure({ apiKey: o.apiKey, baseURL: resolveBase(o.baseURL) }).model(id)
+    case "@ai-sdk/google":
+      return (id, o) => Google.configure({ apiKey: o.apiKey, baseURL: resolveBase(o.baseURL) }).model(id)
+    case "@openrouter/ai-sdk-provider":
+      return (id, o) => OpenRouter.configure({ apiKey: o.apiKey, baseURL: resolveBase(o.baseURL) }).model(id)
+    case "@ai-sdk/xai":
+      return (id, o) => XAI.configure({ apiKey: o.apiKey, baseURL: resolveBase(o.baseURL) }).model(id)
+    case "@ai-sdk/openai-compatible":
+    default: {
+      const profileBuilder = COMPAT_BUILDERS[p.id]
+      if (profileBuilder) {
+        return (id, o) => profileBuilder.configure({ apiKey: o.apiKey, baseURL: resolveBase(o.baseURL) }).model(id)
+      }
+      return (id, o) =>
+        OpenAICompatible.configure({
+          apiKey: o.apiKey,
+          baseURL: resolveBase(o.baseURL) ?? "",
+          provider: p.id,
+        }).model(id)
+    }
+  }
+}
+
+function buildEntriesFromCatalog(cat: catalog.Catalog): RegistryEntry[] {
+  const entries: RegistryEntry[] = []
+  for (const [id, p] of Object.entries(cat)) {
+    if (!p || typeof p !== "object") continue
+    if (!isSupportedProvider(p)) continue
+    const models: ProviderModel[] = Object.entries(p.models ?? {}).map(([mid, cm]) =>
+      m(mid, cm?.name),
+    )
+    const kind: ProviderKind = p.npm === "@ai-sdk/openai-compatible" && !COMPAT_PROFILE_IDS.has(id)
+      ? "openai-compatible"
+      : "api-key"
+    const baseRequired = !p.api && !COMPAT_PROFILE_IDS.has(id)
+    entries.push({
+      id,
+      name: p.name || id,
+      kind,
+      env_key: p.env?.[0],
+      base_url_default: p.api,
+      base_url_required: baseRequired || undefined,
+      docs_url: DOCS_URLS[id],
+      models,
+      build: buildForCatalog(p),
+    })
+  }
+  entries.sort((a, b) => a.name.localeCompare(b.name))
+  return entries
+}
+
+const STATIC_ENTRIES: RegistryEntry[] = [
   {
     id: "openai",
     name: "OpenAI",
@@ -172,14 +286,59 @@ const ENTRIES: RegistryEntry[] = [
   },
 ]
 
-const BY_ID: Map<string, RegistryEntry> = new Map(ENTRIES.map((entry) => [entry.id, entry]))
+let loadedEntries: RegistryEntry[] | null = null
+let loadedFromCatalog = false
 
-export function list(): RegistryEntry[] {
-  return ENTRIES
+async function loadEntries(): Promise<RegistryEntry[]> {
+  if (loadedEntries) return loadedEntries
+  const cat = await catalog.getCatalog()
+  if (cat) {
+    loadedEntries = buildEntriesFromCatalog(cat)
+    loadedFromCatalog = true
+  } else {
+    loadedEntries = STATIC_ENTRIES
+    loadedFromCatalog = false
+  }
+  return loadedEntries
 }
 
-export function get(id: string): RegistryEntry | undefined {
-  return BY_ID.get(id)
+function indexEntries(entries: RegistryEntry[]): Map<string, RegistryEntry> {
+  return new Map(entries.map((entry) => [entry.id, entry]))
+}
+
+let byIdCache: Map<string, RegistryEntry> | null = null
+
+async function loadById(): Promise<Map<string, RegistryEntry>> {
+  if (byIdCache) return byIdCache
+  byIdCache = indexEntries(await loadEntries())
+  return byIdCache
+}
+
+export function isCatalogLoaded(): boolean {
+  return loadedFromCatalog
+}
+
+export function _resetForTest(): void {
+  loadedEntries = null
+  byIdCache = null
+  loadedFromCatalog = false
+}
+
+export async function refreshCatalog(): Promise<boolean> {
+  const cat = await catalog.fetchCatalog(true)
+  loadedEntries = cat ? buildEntriesFromCatalog(cat) : STATIC_ENTRIES
+  loadedFromCatalog = Boolean(cat)
+  byIdCache = loadedEntries ? indexEntries(loadedEntries) : null
+  return loadedFromCatalog
+}
+
+export async function list(): Promise<RegistryEntry[]> {
+  return loadEntries()
+}
+
+export async function get(id: string): Promise<RegistryEntry | undefined> {
+  const byId = await loadById()
+  return byId.get(id)
 }
 
 export function kindOf(entry: RegistryEntry): ProviderKind {
@@ -249,12 +408,12 @@ export interface ResolvedModel {
   baseURL?: string
 }
 
-export function resolveForGeneration(
+export async function resolveForGeneration(
   providerId: string,
   modelId: string | undefined,
   stored: StoredProviderConfig | undefined,
-): ResolvedModel {
-  const entry = BY_ID.get(providerId)
+): Promise<ResolvedModel> {
+  const entry = await get(providerId)
   if (!entry) throw new BridgeRegistryError(`Unknown provider '${providerId}'`)
   const key = resolveKey(entry, stored)
   if (!key.value) {

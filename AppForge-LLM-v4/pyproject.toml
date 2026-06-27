@@ -17,6 +17,7 @@ dependencies = [
   "rich>=13.7",
   "fastapi>=0.115",
   "uvicorn>=0.30",
+  "questionary>=1.5",
 ]
 classifiers = [
   "Development Status :: 3 - Alpha",

@@ -2,10 +2,17 @@ import { mkdtemp } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { expect, test } from "bun:test"
+import { _resetForTest as resetRegistry } from "../src/registry"
+import { _resetForTest as resetCatalog } from "../src/catalog"
 
 test("provider upsert response does not echo stored api key", async () => {
   const dir = await mkdtemp(join(tmpdir(), "appforge-llm-bridge-"))
   process.env.APPFORGE_LLM_CONFIG = join(dir, "providers.json")
+  process.env.APPFORGE_LLM_CONFIG_DIR = dir
+  process.env.APPFORGE_MODELS_DEV_URL = "http://127.0.0.1:1/api.json"
+  process.env.APPFORGE_MODELS_DEV_CACHE = join(dir, "models-dev.json")
+  resetCatalog()
+  resetRegistry()
   const { createApp } = await import("../src/server")
   const app = createApp()
   const fakeKey = `sk-${"test-secret-value"}`
