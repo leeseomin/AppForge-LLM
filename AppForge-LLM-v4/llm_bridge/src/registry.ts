@@ -102,7 +102,13 @@ const ENTRIES: RegistryEntry[] = [
     kind: "openai-compatible",
     base_url_default: "https://api.deepseek.com/v1",
     docs_url: "https://platform.deepseek.com/api_keys",
-    models: [m("deepseek-chat", "DeepSeek Chat"), m("deepseek-reasoner", "DeepSeek Reasoner")],
+    default_model: "deepseek-v4-pro",
+    models: [
+      m("deepseek-v4-pro", "DeepSeek V4 Pro"),
+      m("deepseek-v4-flash", "DeepSeek V4 Flash"),
+      m("deepseek-chat", "DeepSeek Chat (legacy)"),
+      m("deepseek-reasoner", "DeepSeek Reasoner (legacy)"),
+    ],
     build: (id, options) => OpenAICompatible.deepseek.configure({ apiKey: options.apiKey, baseURL: options.baseURL }).model(id),
   },
   {
@@ -202,6 +208,17 @@ function resolveBaseURL(entry: RegistryEntry, stored: StoredProviderConfig | und
   return entry.base_url_default
 }
 
+function defaultModelOf(entry: RegistryEntry, stored: StoredProviderConfig | undefined): string | null {
+  const storedDefault = stored?.defaultModel
+  if (
+    entry.id === "deepseek" &&
+    (!storedDefault || storedDefault === "deepseek-chat" || storedDefault === "deepseek-reasoner")
+  ) {
+    return entry.default_model ?? storedDefault ?? null
+  }
+  return storedDefault ?? entry.default_model ?? null
+}
+
 export function statusOf(entry: RegistryEntry, stored: StoredProviderConfig | undefined): ProviderStatus {
   const key = resolveKey(entry, stored)
   const baseURL = resolveBaseURL(entry, stored)
@@ -218,7 +235,7 @@ export function statusOf(entry: RegistryEntry, stored: StoredProviderConfig | un
     docs_url: entry.docs_url,
     has_key: key.value.length > 0,
     key_source: key.source,
-    default_model: stored?.defaultModel ?? null,
+    default_model: defaultModelOf(entry, stored),
     configured,
     models: entry.models,
   }
@@ -250,7 +267,7 @@ export function resolveForGeneration(
   if (entry.base_url_required && !resolveBaseURL(entry, stored)) {
     throw new BridgeRegistryError(`Provider '${providerId}' requires a base URL.`)
   }
-  const chosenModel = modelId || stored?.defaultModel || entry.models[0]?.id
+  const chosenModel = modelId || defaultModelOf(entry, stored) || entry.models[0]?.id
   if (!chosenModel) throw new BridgeRegistryError(`No model specified for '${providerId}'.`)
   const model = entry.build(chosenModel, {
     apiKey: key.value,

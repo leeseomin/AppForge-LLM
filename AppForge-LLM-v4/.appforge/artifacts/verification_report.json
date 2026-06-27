@@ -1,108 +1,73 @@
 {
   "schema_version": "1.0",
-  "summary": "Verified the LLM settings bridge autostart fix with focused API regressions, the full Python suite, real local bridge provider listing outside the sandbox, web smoke startup, AppForge quality tools, and llm_bridge typecheck/tests.",
+  "summary": "Verified that DeepSeek V4 Pro is now the default and selectable DeepSeek model in the LLM settings provider payload, with bridge registry tests, TypeScript checks, frontend build, and Python regression tests.",
   "passed": true,
   "test_commands": [
-    ".venv/bin/python -m pytest tests/test_web.py -q",
-    ".venv/bin/python -m pytest -q",
-    ".venv/bin/python TestClient runtime probe for /api/llm/providers in sandbox",
-    ".venv/bin/python TestClient runtime probe for /api/llm/providers outside sandbox",
-    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke --no-open in sandbox",
-    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke --no-open outside sandbox",
-    ".venv/bin/python -m appforge tool run run_tests --project . --input '{}'",
-    ".venv/bin/python -m appforge tool run run_build --project . --input '{}'",
-    ".venv/bin/python -m appforge tool run detect_quality_commands --project . --input '{}'",
+    "bun test in llm_bridge",
     "bun run typecheck in llm_bridge",
-    "bun test in llm_bridge"
+    "npm --prefix frontend run typecheck",
+    "bun /providers payload probe",
+    "npm --prefix frontend run build",
+    ".venv/bin/python -m pytest -q"
   ],
   "results": [
     {
-      "check": "focused web LLM settings tests",
+      "check": "llm_bridge registry tests",
       "passed": "true",
-      "evidence": "tests/test_web.py passed 9 tests, including autostart retry, autostart guidance, and HTTP-error preservation cases."
+      "evidence": "bun test passed 3 tests, including DeepSeek V4 Pro default/selectable and legacy default normalization coverage."
     },
     {
-      "check": "full Python suite",
+      "check": "llm_bridge typecheck",
       "passed": "true",
-      "evidence": ".venv/bin/python -m pytest -q passed 27 tests with one pre-existing Starlette TestClient deprecation warning."
+      "evidence": "bun run typecheck completed tsc --noEmit successfully."
     },
     {
-      "check": "real local bridge autostart",
+      "check": "frontend typecheck",
       "passed": "true",
-      "evidence": "Outside the command sandbox, a TestClient request to /api/llm/providers returned HTTP 200 and provider IDs openai, anthropic, google, openrouter, xai, deepseek, groq, cerebras."
+      "evidence": "npm --prefix frontend run typecheck completed vue-tsc --noEmit successfully."
     },
     {
-      "check": "sandbox limitation captured",
+      "check": "provider payload",
       "passed": "true",
-      "evidence": "The same runtime probe inside the sandbox failed with Operation not permitted / Bun listen failure, proving why the successful runtime check needed escalation rather than hiding the failure."
+      "evidence": "Bun /providers probe returned status 200, default_model deepseek-v4-pro, and models [deepseek-v4-pro, deepseek-v4-flash, deepseek-chat, deepseek-reasoner]."
     },
     {
-      "check": "web smoke",
+      "check": "frontend production build",
       "passed": "true",
-      "evidence": "Outside the command sandbox, APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke --no-open reached /api/health and / then stopped the web process."
+      "evidence": "npm --prefix frontend run build completed Vite production build successfully."
     },
     {
-      "check": "AppForge run_tests gate",
+      "check": "backend regression suite",
       "passed": "true",
-      "evidence": "appforge tool run run_tests executed .venv/bin/python -m pytest -q successfully."
-    },
-    {
-      "check": "AppForge run_build gate",
-      "passed": "true",
-      "evidence": "appforge tool run run_build built sdist and wheel successfully; setuptools license deprecation warnings are pre-existing metadata warnings."
-    },
-    {
-      "check": "llm_bridge typecheck and tests",
-      "passed": "true",
-      "evidence": "bun run typecheck completed tsc --noEmit and bun test passed the llm_bridge server test."
+      "evidence": ".venv/bin/python -m pytest -q passed 27 tests with one existing Starlette TestClient deprecation warning."
     }
   ],
   "acceptance_results": [
     {
-      "requirement": "FR-004 / WF-004 bridge startup",
+      "requirement": "DeepSeek V4 Pro selectable",
       "passed": "true",
-      "evidence": "The LLM settings API now starts the local bundled bridge on network-level connection failure and retries once, while preserving explicit launcher bridge behavior."
+      "evidence": "Registry test and /providers probe show deepseek-v4-pro in DeepSeek models, first in the list."
     },
     {
-      "requirement": "NFR-001 local-first safe default",
+      "requirement": "DeepSeek V4 Pro default",
       "passed": "true",
-      "evidence": "Autostart is restricted to http loopback hosts and does not manage remote bridge URLs."
+      "evidence": "Registry test and /providers probe show DeepSeek default_model as deepseek-v4-pro."
     },
     {
-      "requirement": "NFR-002 deterministic checks",
+      "requirement": "Existing DeepSeek legacy defaults no longer dominate the settings panel",
       "passed": "true",
-      "evidence": "Focused tests, full pytest, AppForge run_tests/run_build, llm_bridge typecheck/test, and outside-sandbox smoke completed with success."
+      "evidence": "Registry test normalizes stored deepseek-chat and deepseek-reasoner defaultModel values to deepseek-v4-pro for provider status."
     },
     {
-      "requirement": "NFR-003 preserve backend/frontend behavior",
+      "requirement": "No unrelated runtime regression",
       "passed": "true",
-      "evidence": "Full Python test suite and package build passed after adding the new Python module and route retry wrapper."
-    },
-    {
-      "requirement": "MEM-004 bridge runtime evidence",
-      "passed": "true",
-      "evidence": "Autostart writes llm-bridge.log under the configured runtime directory and shuts down only the process it started."
-    },
-    {
-      "requirement": "LOOP-003 bounded bridge loop",
-      "passed": "true",
-      "evidence": "The process manager checks health, starts once under a lock, polls only until APPFORGE_BRIDGE_TIMEOUT, and returns actionable timeout/process-exit guidance."
-    },
-    {
-      "requirement": "LOOP-006 verification loop",
-      "passed": "true",
-      "evidence": "Failed sandbox runtime checks were preserved as failures, then rerun outside sandbox to collect valid localhost evidence."
+      "evidence": "Full Python suite, llm_bridge typecheck/test, frontend typecheck, and frontend build all passed."
     }
   ],
-  "coverage": "Verification covers the reported connection-refused class, the provider listing path used when the LLM settings dialog opens, failure guidance when autostart cannot run, preservation of bridge HTTP errors, full backend regression behavior, package build, local web smoke, and llm_bridge TypeScript/test health. A live external model call is intentionally not covered because it requires user credentials.",
-  "failures": [
-    "Sandbox runtime probe failed with localhost Operation not permitted and Bun listen failure; this was rerun outside sandbox and passed.",
-    "Sandbox build.sh --smoke failed because uvicorn could not bind 127.0.0.1; the same command was rerun outside sandbox and passed.",
-    "AppForge run_build emitted pre-existing setuptools license metadata deprecation warnings while returning success."
-  ],
+  "coverage": "Verification covers the provider status payload consumed by the LLM settings dialog, DeepSeek model chips/default_model behavior, legacy stored default normalization, TypeScript contracts on bridge/frontend, packaged frontend build, and Python web/control-plane regressions. It does not include a live DeepSeek API generation call because no user API key was provided.",
+  "failures": [],
   "manual_checks": [
-    "Reviewed appforge/llm_bridge_process.py for loopback-only URL handling, no shell interpolation, bounded timeout, and launcher-owned process cleanup.",
-    "Reviewed appforge/web.py to confirm only status_code 0 BridgeError triggers autostart and retry.",
-    "Reviewed tests/test_web.py to confirm the regression assertions exercise behavior visible to /api/llm/* clients."
+    "Reviewed llm_bridge/src/registry.ts to confirm custom stored model IDs other than legacy DeepSeek defaults are preserved.",
+    "Reviewed frontend/src/types.ts to confirm ProviderStatus still exposes default_model to ProviderSettings.vue."
   ]
 }

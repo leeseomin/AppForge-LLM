@@ -116,9 +116,9 @@ export interface ProviderStatus {
   base_url_required?: boolean;
   base_url_default?: string | null;
   docs_url?: string | null;
+  default_model?: string | null;
   has_key: boolean;
   key_source: 'stored' | 'env' | 'none';
-  default_model?: string | null;
   configured: boolean;
   models: ProviderModel[];
 }
