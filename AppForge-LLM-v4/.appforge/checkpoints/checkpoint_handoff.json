@@ -5,7 +5,7 @@
   "stage": "handoff",
   "status": "completed",
   "attempt": 1,
-  "timestamp": "2026-06-27T15:54:04+00:00",
+  "timestamp": "2026-06-27T16:03:51+00:00",
   "artifacts": {
     "handoff_report": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/handoff_report.json"
   },
@@ -68,7 +68,7 @@
         },
         "artifacts": [],
         "error": null,
-        "duration_seconds": 0.0058,
+        "duration_seconds": 0.0057,
         "command": null
       }
     },
@@ -83,14 +83,14 @@
         "data": {
           "archive": ".appforge/reports/AppForge-LLM-v4-source.zip",
           "files": 280,
-          "bytes": 507138
+          "bytes": 507237
         },
         "artifacts": [
           "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/reports/AppForge-LLM-v4-source.zip",
           "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/reports/AppForge-LLM-v4-source.zip.manifest.json"
         ],
         "error": null,
-        "duration_seconds": 0.0689,
+        "duration_seconds": 0.0683,
         "command": null
       }
     },
@@ -138,7 +138,7 @@
         },
         "artifacts": [],
         "error": null,
-        "duration_seconds": 0.0008,
+        "duration_seconds": 0.0007,
         "command": null
       }
     }
@@ -159,41 +159,31 @@
     "stage_result": {
       "stage": "handoff",
       "status": "completed",
-      "summary": "Prepared Phase4 handoff with delivered changes, quickstart, architecture pointers, verification references, operations notes, and open items.",
+      "summary": "Updated handoff evidence and source archive for the CLI model_count regression fix.",
       "files_changed": [
-        ".appforge/artifacts/handoff_report.json"
+        ".appforge/artifacts/handoff_report.json",
+        "appforge/llm_auth.py",
+        "tests/test_llm_auth.py"
       ],
       "commands_run": [
         {
-          "command": "bun run typecheck in llm_bridge",
+          "command": ".venv/bin/python -m pytest tests/test_llm_auth.py -q",
+          "result": "passed; 14 tests"
+        },
+        {
+          "command": ".venv/bin/ruff check appforge/llm_auth.py tests/test_llm_auth.py",
           "result": "passed"
         },
         {
-          "command": "bun test in llm_bridge",
-          "result": "passed; 8 tests"
-        },
-        {
-          "command": "npm run typecheck in frontend",
+          "command": ".venv/bin/appforge complete . --stage implementation --auto-approve",
           "result": "passed"
         },
         {
-          "command": "npm run build in frontend",
-          "result": "passed; rebuilt packaged assets"
-        },
-        {
-          "command": ".venv/bin/python -m pytest -q",
-          "result": "passed; 78 tests"
-        },
-        {
-          "command": ".venv/bin/ruff check appforge tests",
+          "command": ".venv/bin/appforge complete . --stage verification --auto-approve",
           "result": "passed"
         },
         {
-          "command": "APPFORGE_MODELS_DEV_URL=http://127.0.0.1:1 bun -e payload probe",
-          "result": "passed; compact /providers 40552 bytes vs include_models 287573 bytes"
-        },
-        {
-          "command": "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_SKIP_LLM_BRIDGE=1 ./build.sh --smoke",
+          "command": ".venv/bin/appforge complete . --stage release --auto-approve",
           "result": "passed"
         }
       ],
@@ -201,13 +191,13 @@
         {
           "name": "Handoff report schema",
           "passed": true,
-          "evidence": "handoff_report.json records delivered scope, quickstart, architecture, verification, operations, open items, and next steps"
+          "evidence": "handoff_report.json references the CLI model_count fix and targeted regression test"
         }
       ],
       "decisions": [
         {
-          "decision": "Keep live provider generation as an explicit user-verifiable open item.",
-          "reason": "A real generation request requires the user's provider credentials."
+          "decision": "Regenerate handoff archive after the CLI fix.",
+          "reason": "Source handoff must include appforge/llm_auth.py and tests/test_llm_auth.py changes."
         }
       ],
       "unresolved": []

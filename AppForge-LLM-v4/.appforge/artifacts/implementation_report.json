@@ -10,6 +10,7 @@
     "Provider models lazy-load through getProviderModels(providerId) and cache in memory for the modal lifetime",
     "Lazy-load failure warnings allow manual model ID input",
     "Advanced model chips are limited to 10 by default with more/collapse controls and bounded scrolling",
+    "CLI provider model summary reads compact provider model_count before falling back to models length",
     "Production frontend assets rebuilt into appforge/resources/web"
   ],
   "files_changed": [
@@ -27,7 +28,9 @@
     "llm_bridge/src/server.ts",
     "llm_bridge/src/types.ts",
     "llm_bridge/test/registry.test.ts",
-    "llm_bridge/test/server.test.ts"
+    "llm_bridge/test/server.test.ts",
+    "appforge/llm_auth.py",
+    "tests/test_llm_auth.py"
   ],
   "commands_run": [
     "bun run typecheck in llm_bridge",
@@ -36,6 +39,8 @@
     "npm run build in frontend",
     ".venv/bin/python -m pytest -q",
     ".venv/bin/ruff check appforge tests",
+    ".venv/bin/python -m pytest tests/test_llm_auth.py -q",
+    ".venv/bin/ruff check appforge/llm_auth.py tests/test_llm_auth.py",
     "APPFORGE_MODELS_DEV_URL=http://127.0.0.1:1 bun -e payload probe in llm_bridge",
     "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_SKIP_LLM_BRIDGE=1 ./build.sh --smoke"
   ],
@@ -43,7 +48,8 @@
     "Applied Phase4 F-1 A: remove /providers/models and keep /providers/{id}/models as SSOT.",
     "Applied Phase4 F-2 A: use component-local memory cache, not localStorage.",
     "Kept ModelSelect input enabled during loading/failure so manual model IDs remain possible.",
-    "Used provider expansion to trigger advanced-row lazy loading so model chips can populate before explicit typing."
+    "Used provider expansion to trigger advanced-row lazy loading so model chips can populate before explicit typing.",
+    "Kept CLI model-count compatibility by falling back to len(models) when model_count is absent."
   ],
   "known_gaps": [
     "No live third-party model request was run because it requires user credentials.",
