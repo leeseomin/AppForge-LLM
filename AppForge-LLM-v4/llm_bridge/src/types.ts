@@ -13,6 +13,7 @@ export interface ProviderDescriptor {
   base_url_required?: boolean
   base_url_default?: string
   docs_url?: string
+  default_model?: string
   models: ProviderModel[]
 }
 

@@ -5,7 +5,7 @@
   "stage": "implementation",
   "status": "completed",
   "attempt": 1,
-  "timestamp": "2026-06-27T10:06:01+00:00",
+  "timestamp": "2026-06-27T11:08:19+00:00",
   "artifacts": {
     "implementation_report": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/implementation_report.json"
   },
@@ -49,7 +49,7 @@
   "review": {
     "passed": true,
     "critical_count": 0,
-    "finding_count": 2,
+    "finding_count": 1,
     "review_focus": [
       "Code matches repository conventions",
       "Requirements are covered by implementation and tests",
@@ -59,13 +59,7 @@
       {
         "severity": "suggestion",
         "criterion": "unresolved",
-        "finding": "Live external provider calls still require user API credentials and were not exercised.",
-        "proposed_change": "Resolve it now or document why it is safely deferred with an owner and verification step."
-      },
-      {
-        "severity": "suggestion",
-        "criterion": "unresolved",
-        "finding": "Missing llm_bridge/node_modules requires the user to run bun install rather than doing implicit network installation from settings.",
+        "finding": "Live DeepSeek API call requires a real user API key and was not executed.",
         "proposed_change": "Resolve it now or document why it is safely deferred with an owner and verification step."
       }
     ]
@@ -75,80 +69,70 @@
     "stage_result": {
       "stage": "implementation",
       "status": "completed",
-      "summary": "Implemented lazy local llm_bridge autostart and one-shot retry for LLM settings APIs, with regression coverage and concrete runtime evidence for the previous connection-refused class.",
+      "summary": "DeepSeek LLM settings now default to deepseek-v4-pro and expose it as the first selectable model, with legacy DeepSeek defaults normalized to the new V4 Pro default.",
       "files_changed": [
-        "appforge/llm_bridge_process.py",
-        "appforge/web.py",
-        "tests/test_web.py",
+        "llm_bridge/src/registry.ts",
+        "llm_bridge/src/types.ts",
+        "frontend/src/types.ts",
+        "llm_bridge/test/registry.test.ts",
         ".appforge/artifacts/implementation_report.json",
         ".appforge/stage-result.json"
       ],
       "commands_run": [
         {
-          "command": ".venv/bin/python -m pytest tests/test_web.py -q",
-          "result": "passed; 9 tests with one existing Starlette TestClient deprecation warning"
+          "command": "bun test in llm_bridge",
+          "result": "passed; 3 tests"
+        },
+        {
+          "command": "bun run typecheck in llm_bridge",
+          "result": "passed; tsc --noEmit"
+        },
+        {
+          "command": "npm --prefix frontend run typecheck",
+          "result": "passed; vue-tsc --noEmit"
+        },
+        {
+          "command": "bun /providers payload probe",
+          "result": "passed; DeepSeek default_model is deepseek-v4-pro and model list starts with deepseek-v4-pro"
+        },
+        {
+          "command": "npm --prefix frontend run build",
+          "result": "passed"
         },
         {
           "command": ".venv/bin/python -m pytest -q",
           "result": "passed; 27 tests with one existing Starlette TestClient deprecation warning"
-        },
-        {
-          "command": ".venv/bin/python TestClient runtime probe for /api/llm/providers outside sandbox",
-          "result": "passed; HTTP 200 with provider list openai, anthropic, google, openrouter, xai, deepseek, groq, cerebras"
-        },
-        {
-          "command": "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke --no-open outside sandbox",
-          "result": "passed; /api/health and / returned ready and the web process was stopped"
         }
       ],
       "checks": [
         {
-          "name": "connection-refused regression",
+          "name": "DeepSeek default model",
           "passed": true,
-          "evidence": "test_llm_provider_api_autostarts_local_bridge_and_retries covers first-call BridgeError status_code 0, ensure_running, and successful retry."
+          "evidence": "llm_bridge/test/registry.test.ts asserts status.default_model is deepseek-v4-pro."
         },
         {
-          "name": "autostart guidance",
+          "name": "DeepSeek selectable model",
           "passed": true,
-          "evidence": "test_llm_provider_api_reports_bridge_autostart_guidance proves manager-supplied action/context reaches the API error payload."
+          "evidence": "Registry test and /providers probe show deepseek-v4-pro appears in the DeepSeek models list as the first option."
         },
         {
-          "name": "bridge HTTP error preservation",
+          "name": "legacy default normalization",
           "passed": true,
-          "evidence": "test_llm_provider_api_does_not_autostart_bridge_http_errors returns 404 without calling ensure_running."
-        },
-        {
-          "name": "real local provider listing",
-          "passed": true,
-          "evidence": "Outside-sandbox TestClient run started/reused local llm_bridge and /api/llm/providers returned HTTP 200."
-        },
-        {
-          "name": "web smoke",
-          "passed": true,
-          "evidence": "Outside-sandbox build.sh --smoke reached /api/health and /, then stopped its web pid."
+          "evidence": "Registry test asserts stored deepseek-chat and deepseek-reasoner defaults display as deepseek-v4-pro."
         }
       ],
       "decisions": [
         {
-          "decision": "Autostart only local loopback bridge URLs.",
-          "reason": "The app can safely manage its bundled local bridge, but remote bridge processes are outside the local source checkout boundary.",
+          "decision": "Keep old DeepSeek IDs as legacy choices.",
+          "reason": "This satisfies the new default request without breaking users who intentionally enter or select legacy IDs.",
           "alternatives": [
-            "Try to start bridge for every URL",
-            "Show only manual instructions"
-          ]
-        },
-        {
-          "decision": "Retry only network-level BridgeError responses.",
-          "reason": "Connection refused should be recoverable through autostart, while bridge HTTP errors such as unknown provider or validation failures should remain truthful.",
-          "alternatives": [
-            "Retry every BridgeError",
-            "Never retry"
+            "Remove legacy IDs",
+            "Leave DeepSeek Reasoner as default"
           ]
         }
       ],
       "unresolved": [
-        "Live external provider calls still require user API credentials and were not exercised.",
-        "Missing llm_bridge/node_modules requires the user to run bun install rather than doing implicit network installation from settings."
+        "Live DeepSeek API call requires a real user API key and was not executed."
       ]
     },
     "manual_completion": true

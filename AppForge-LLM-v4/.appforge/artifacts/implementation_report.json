@@ -1,54 +1,54 @@
 {
   "schema_version": "1.0",
-  "summary": "Made the LLM connection settings resilient when the bundled local llm_bridge is down by adding a FastAPI-side lazy autostart path, one-shot retry behavior, and clearer setup guidance for users connecting external models.",
+  "summary": "Updated the DeepSeek provider configuration so DeepSeek V4 Pro is the default model shown by LLM connection settings and is available as a selectable model chip.",
   "features_completed": [
-    "Added appforge/llm_bridge_process.py to start the bundled Bun llm_bridge on demand for local loopback bridge URLs.",
-    "Updated /api/llm/* routes to retry once after a network-level BridgeError by invoking the local bridge manager.",
-    "Kept HTTP bridge errors such as unknown provider responses out of the autostart path so real bridge validation errors remain visible.",
-    "Updated the LLM bridge error handler to surface action guidance supplied by the autostart manager, including Bun missing, node_modules missing, non-loopback URL, and startup timeout cases.",
-    "Added focused web tests for connection-refused retry, autostart failure guidance, and non-autostart HTTP errors.",
-    "Verified that a real local autostart returns provider IDs including openai, anthropic, google, openrouter, xai, deepseek, groq, and cerebras when run outside the network sandbox."
+    "Added provider-level default_model support to the llm_bridge provider descriptor contract.",
+    "Set DeepSeek default_model to deepseek-v4-pro and put deepseek-v4-pro first in the DeepSeek model list.",
+    "Added DeepSeek V4 Flash plus legacy DeepSeek Chat/Reasoner entries after the new V4 Pro default.",
+    "Normalized old stored DeepSeek defaults deepseek-chat and deepseek-reasoner to deepseek-v4-pro for default display and default generation fallback.",
+    "Updated frontend provider status typing so the UI contract includes default_model.",
+    "Added llm_bridge registry tests proving DeepSeek V4 Pro is default/selectable and legacy defaults normalize to V4 Pro."
   ],
   "files_changed": [
-    "appforge/llm_bridge_process.py",
-    "appforge/web.py",
-    "tests/test_web.py",
+    "llm_bridge/src/registry.ts",
+    "llm_bridge/src/types.ts",
+    "frontend/src/types.ts",
+    "llm_bridge/test/registry.test.ts",
     ".appforge/artifacts/implementation_report.json",
     ".appforge/stage-result.json"
   ],
   "commands_run": [
-    ".venv/bin/python -m pytest tests/test_web.py -q -> passed, 9 tests",
-    ".venv/bin/python -m pytest -q -> passed, 27 tests",
-    ".venv/bin/python TestClient runtime probe for /api/llm/providers in sandbox -> failed with sandbox localhost Operation not permitted / Bun listen EADDRINUSE evidence",
-    ".venv/bin/python TestClient runtime probe for /api/llm/providers outside sandbox -> passed with HTTP 200 and provider list",
-    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke --no-open in sandbox -> failed because localhost bind was denied",
-    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke --no-open outside sandbox -> passed for /api/health and /"
+    "bun test in llm_bridge -> passed, 3 tests",
+    "bun run typecheck in llm_bridge -> passed",
+    "npm --prefix frontend run typecheck -> passed",
+    "bun /providers payload probe -> passed, DeepSeek default_model deepseek-v4-pro and first models include deepseek-v4-pro",
+    "npm --prefix frontend run build -> passed",
+    ".venv/bin/python -m pytest -q -> passed, 27 tests"
   ],
   "decisions": [
-    "Autostart is limited to http loopback bridge URLs to avoid trying to manage remote bridge services.",
-    "The manager uses subprocess argv with no shell interpolation and passes host/port through APPFORGE_LLM_BRIDGE_HOST and APPFORGE_LLM_BRIDGE_PORT.",
-    "Network-level BridgeError status_code 0 triggers autostart and one retry; bridge HTTP errors are returned as-is.",
-    "Bun dependency installation is not run implicitly from a settings-panel request; missing node_modules returns an actionable message instead of surprising network work.",
-    "The FastAPI lifespan shuts down only the bridge process it started, preserving already-running external bridge processes."
+    "Used model ID deepseek-v4-pro and display label DeepSeek V4 Pro so the API payload remains machine-safe while the UI shows a readable model name.",
+    "Kept deepseek-chat and deepseek-reasoner as legacy selectable entries after the new V4 models instead of removing them.",
+    "Normalized only legacy DeepSeek stored defaults to V4 Pro; arbitrary custom stored model IDs remain untouched."
   ],
   "known_gaps": [
-    "A live third-party provider test still requires the user's real API key and was not attempted.",
-    "If llm_bridge/node_modules is missing, the settings panel now gives guidance but does not auto-run bun install.",
-    "Local bind/runtime checks require running outside the restricted command sandbox; sandboxed checks still cannot prove localhost server behavior."
+    "A credentialed live DeepSeek API call was not run because it requires the user's API key.",
+    "If DeepSeek changes the public model ID again, the registry list will need another update."
   ],
   "requirements_covered": [
-    "FR-004",
-    "NFR-001",
-    "NFR-002",
-    "NFR-003",
-    "WF-004",
-    "MEM-004",
-    "LOOP-003",
-    "LOOP-006"
+    "DeepSeek V4 Pro selectable in LLM connection settings",
+    "DeepSeek V4 Pro shown as the DeepSeek default model",
+    "Legacy DeepSeek defaults no longer keep the settings panel on deepseek-chat or deepseek-reasoner"
   ],
-  "reproduction": {
-    "reported_failure": "LLM 연결 설정 showed LLM 브릿지에 연결할 수 없습니다: [Errno 61] Connection refused.",
-    "local_failure": "A TestClient call to /api/llm/providers with an unreachable bridge URL returned LLM_BRIDGE_ERROR before the patch.",
-    "post_fix": "The same bridge-down class now calls the bridge manager, retries the provider request, and succeeds when the local bundled bridge can start."
+  "api_evidence": {
+    "providers_probe": {
+      "status": 200,
+      "default_model": "deepseek-v4-pro",
+      "models": [
+        "deepseek-v4-pro",
+        "deepseek-v4-flash",
+        "deepseek-chat",
+        "deepseek-reasoner"
+      ]
+    }
   }
 }
