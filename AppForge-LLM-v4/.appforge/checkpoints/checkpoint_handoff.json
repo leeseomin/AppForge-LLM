@@ -5,7 +5,7 @@
   "stage": "handoff",
   "status": "completed",
   "attempt": 1,
-  "timestamp": "2026-06-27T08:53:38+00:00",
+  "timestamp": "2026-06-27T09:40:09+00:00",
   "artifacts": {
     "handoff_report": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/handoff_report.json"
   },
@@ -31,7 +31,7 @@
             {
               "name": "source_present",
               "passed": true,
-              "detail": "266 source/project files",
+              "detail": "267 source/project files",
               "required": true
             },
             {
@@ -68,7 +68,7 @@
         },
         "artifacts": [],
         "error": null,
-        "duration_seconds": 0.0058,
+        "duration_seconds": 0.0056,
         "command": null
       }
     },
@@ -82,15 +82,15 @@
         "success": true,
         "data": {
           "archive": ".appforge/reports/AppForge-LLM-v4-source.zip",
-          "files": 266,
-          "bytes": 454337
+          "files": 267,
+          "bytes": 459108
         },
         "artifacts": [
           "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/reports/AppForge-LLM-v4-source.zip",
           "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/reports/AppForge-LLM-v4-source.zip.manifest.json"
         ],
         "error": null,
-        "duration_seconds": 0.0603,
+        "duration_seconds": 0.0615,
         "command": null
       }
     },
@@ -138,7 +138,7 @@
         },
         "artifacts": [],
         "error": null,
-        "duration_seconds": 0.0006,
+        "duration_seconds": 0.0007,
         "command": null
       }
     }
@@ -146,7 +146,7 @@
   "review": {
     "passed": true,
     "critical_count": 0,
-    "finding_count": 3,
+    "finding_count": 2,
     "review_focus": [
       "Quickstart is executable",
       "Deliverables and open items are unambiguous",
@@ -156,19 +156,13 @@
       {
         "severity": "suggestion",
         "criterion": "unresolved",
-        "finding": "Live provider API test requires user credentials.",
+        "finding": "First-run dependency downloads and online dependency audit remain unexercised because network is disabled.",
         "proposed_change": "Resolve it now or document why it is safely deferred with an owner and verification step."
       },
       {
         "severity": "suggestion",
         "criterion": "unresolved",
-        "finding": "Online dependency audit remains deferred until network access is approved.",
-        "proposed_change": "Resolve it now or document why it is safely deferred with an owner and verification step."
-      },
-      {
-        "severity": "suggestion",
-        "criterion": "unresolved",
-        "finding": "Setuptools license metadata warnings remain scheduled cleanup work.",
+        "finding": "SBOM generation is root-manifest-only.",
         "proposed_change": "Resolve it now or document why it is safely deferred with an owner and verification step."
       }
     ]
@@ -178,85 +172,76 @@
     "stage_result": {
       "stage": "handoff",
       "status": "completed",
-      "summary": "Delivered final handoff report, refreshed final tests/build/archive evidence, hardened source archive exclusions, and produced the source archive for AppForge-LLM-v4.",
+      "summary": "Produced final handoff report and verified source archive for the build.sh launcher feature.",
       "files_changed": [
-        "appforge/constants.py",
-        "appforge/util.py",
-        "tests/test_tools.py",
-        ".appforge/artifacts/release_report.json",
         ".appforge/artifacts/handoff_report.json",
         ".appforge/stage-result.json"
       ],
       "commands_run": [
         {
-          "command": ".venv/bin/python -m pytest -q",
-          "result": "passed; 23 tests passed with one existing Starlette TestClient deprecation warning"
-        },
-        {
-          "command": "env PATH=.venv/bin:... .venv/bin/python -m appforge tool run run_build --project . --input '{}'",
-          "result": "passed; rebuilt dist/openappforge-0.4.0.tar.gz and dist/openappforge-0.4.0-py3-none-any.whl from final source with non-blocking setuptools license metadata warnings"
-        },
-        {
-          "command": "shasum -a 256 dist/openappforge-0.4.0-py3-none-any.whl dist/openappforge-0.4.0.tar.gz",
-          "result": "passed; wheel sha256 1d55a440cc55e9c6f257ae6e37ed4014f1812d32701243478ff7b9afb187e168, sdist sha256 7dc64e169907e17a08d9b75d9c03fa99572bb617936658da131c5ba0846be8d1"
-        },
-        {
-          "command": "uv pip install --no-deps --target /private/tmp/appforge-v4-release-install-20260627-1754 dist/openappforge-0.4.0-py3-none-any.whl",
-          "result": "passed; installed openappforge==0.4.0 into a temp target"
-        },
-        {
-          "command": "env PYTHONPATH=/private/tmp/appforge-v4-release-install-20260627-1754 .venv/bin/python -c \"import importlib.metadata as m; import importlib.resources as r; import appforge; print(appforge.__version__); print(m.version('openappforge')); print((r.files('appforge') / 'resources' / 'web' / 'index.html').is_file())\"",
-          "result": "passed; printed 0.4.0, 0.4.0, True"
+          "command": ".venv/bin/python -m appforge prompt . --stage handoff --output .appforge/current-stage.md",
+          "result": "passed; rendered and read the handoff stage packet"
         },
         {
           "command": ".venv/bin/python -m appforge tool run release_readiness --project . --input '{}'",
-          "result": "passed; source_present, README, gitignore, verification artifact, and security artifact checks passed"
+          "result": "passed; release readiness checks passed"
+        },
+        {
+          "command": ".venv/bin/python -m appforge tool run artifact_inventory --project . --input '{}'",
+          "result": "passed; found dist/, README.md, LICENSE, and CHANGELOG.md"
         },
         {
           "command": ".venv/bin/python -m appforge tool run archive_workspace --project . --input '{}'",
-          "result": "passed; wrote .appforge/reports/AppForge-LLM-v4-source.zip with 266 files and 454337 bytes"
+          "result": "passed; produced .appforge/reports/AppForge-LLM-v4-source.zip with 267 files and 459108 bytes"
         },
         {
-          "command": ".venv/bin/python -c \"import zipfile; ...\"",
-          "result": "passed; source archive contains required bridge/UI files and excludes .DS_Store, .appforge, .appforge-web, projects, node_modules, and egg-info paths"
+          "command": "zipinfo -1 .appforge/reports/AppForge-LLM-v4-source.zip",
+          "result": "passed; listing includes build.sh and source files"
+        },
+        {
+          "command": "shasum -a 256 .appforge/reports/AppForge-LLM-v4-source.zip",
+          "result": "passed; f8e25671482873e99571802db9a0689d00bb3b4700745baec9430c0ef7f85fe5"
+        },
+        {
+          "command": ".venv/bin/python -c '...zip assertions...'",
+          "result": "passed; archive includes build.sh/detector fix/regression test and excludes .git, .appforge, .appforge-web, .venv, node_modules, and dist"
         }
       ],
       "checks": [
         {
-          "name": "quickstart-executable",
+          "name": "source archive",
           "passed": true,
-          "evidence": "README.md and handoff_report quickstart use live entry points and verified commands."
+          "evidence": "archive_workspace produced .appforge/reports/AppForge-LLM-v4-source.zip."
         },
         {
-          "name": "source-archive-produced",
+          "name": "archive exclusions",
           "passed": true,
-          "evidence": ".appforge/reports/AppForge-LLM-v4-source.zip manifest reports 266 files and 454337 bytes; ZIP assertion passed."
+          "evidence": "Zip assertions confirmed excluded runtime/VCS/dependency/build directories are absent."
         },
         {
-          "name": "verification-evidence-findable",
+          "name": "quickstart",
           "passed": true,
-          "evidence": "handoff_report references verification_report, security_report, release_report, command evidence, and core code paths."
+          "evidence": "handoff_report.quickstart lists ./build.sh, smoke/check, no-open, alternate port, bridge, manual source, and verification commands."
         },
         {
-          "name": "archive-hygiene",
+          "name": "evidence references",
           "passed": true,
-          "evidence": "Archive exclusions for .appforge-web, projects, .egg-info, and .DS_Store are implemented and covered by tests/test_tools.py."
+          "evidence": "handoff_report links implementation, verification, security, release, specification, workflow, memory, and loop artifacts."
         }
       ],
       "decisions": [
         {
-          "decision": "Exclude local web-job state, generated projects, egg-info metadata, and .DS_Store files from source handoff archives.",
-          "reason": "They are local runtime/build metadata, not source needed by a new engineer."
-        },
-        {
-          "decision": "Keep live provider verification as an open item.",
-          "reason": "No user-owned API credentials were available, and fabricating a live provider pass would be false evidence."
+          "decision": "Use AppForge archive_workspace as the handoff artifact.",
+          "reason": "It applies the repository's established exclusions for secrets, VCS state, runtime files, dependency folders, caches, and build output.",
+          "alternatives": [
+            "Manually zip the workspace",
+            "Use dist artifacts as source handoff"
+          ]
         }
       ],
       "unresolved": [
-        "Live provider API test requires user credentials.",
-        "Online dependency audit remains deferred until network access is approved.",
-        "Setuptools license metadata warnings remain scheduled cleanup work."
+        "First-run dependency downloads and online dependency audit remain unexercised because network is disabled.",
+        "SBOM generation is root-manifest-only."
       ]
     },
     "manual_completion": true

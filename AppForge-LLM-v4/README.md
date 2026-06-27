@@ -38,7 +38,21 @@ python -m pip install dist/openappforge-0.4.0-py3-none-any.whl
 appforge web
 ```
 
-From source:
+From source, the easiest path is the launcher. It prepares the local Python
+environment, refreshes the packaged Vue UI, starts the loopback web server, and
+opens the browser:
+
+```bash
+./build.sh
+```
+
+For prepared workspaces or CI-style local checks, run the no-browser smoke path:
+
+```bash
+APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke
+```
+
+Manual source setup remains available:
 
 ```bash
 python -m venv .venv
@@ -51,6 +65,20 @@ appforge web
 ```
 
 The default browser opens `http://127.0.0.1:8787`. The browser stores only the current job ID; authoritative state remains under `.appforge-web/jobs/`.
+
+Useful launcher options:
+
+```bash
+./build.sh --no-open
+APPFORGE_WEB_PORT=8799 ./build.sh
+APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check
+APPFORGE_DRIVER=llm-bridge ./build.sh
+```
+
+The launcher keeps the existing `appforge web` command as the runtime authority.
+Set `APPFORGE_START_LLM_BRIDGE=1` or `APPFORGE_DRIVER=llm-bridge` to have it
+reuse or start the local Bun bridge when available; set
+`APPFORGE_SKIP_LLM_BRIDGE=1` to skip launcher-owned bridge startup.
 
 ## Frontend development
 
@@ -91,6 +119,18 @@ bun run start
 APPFORGE_DRIVER=llm-bridge appforge web
 ```
 
+The source launcher can perform the same bridge startup check:
+
+```bash
+APPFORGE_DRIVER=llm-bridge ./build.sh
+```
+
+When no bridge is already healthy at `APPFORGE_LLM_BRIDGE_URL`, the launcher
+starts `llm_bridge` with Bun and writes its output to
+`.appforge-web/llm-bridge.log`. If you customize the bridge URL, also set the
+matching `APPFORGE_LLM_BRIDGE_HOST` and `APPFORGE_LLM_BRIDGE_PORT` values used
+by the Bun service.
+
 Open Provider Settings in the web UI to save an API key, choose a default model, test the provider, and activate it for AppForge. The browser talks only to the FastAPI `/api/llm` proxy; the bridge listens on `http://127.0.0.1:8788` by default. Provider keys are stored in the local bridge config path, or read from provider environment variables such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `OPENROUTER_API_KEY`, and `XAI_API_KEY`.
 
 The `llm-bridge` driver is a single-shot stage driver. It is useful for provider-backed stage generation, while fully agentic file-editing workflows should continue to use Codex, Claude Code, or a custom command driver.
@@ -113,6 +153,14 @@ Available placeholders are `{workspace}`, `{prompt_file}`, `{result_file}`, `{st
 APPFORGE_PROJECTS_DIR          generated project directory; default projects/
 APPFORGE_DATA_DIR              persisted web-job state; default .appforge-web/
 APPFORGE_DRIVER                auto | codex | claude | generic | llm-bridge
+APPFORGE_WEB_HOST              build.sh/appforge web bind host; default 127.0.0.1
+APPFORGE_WEB_PORT              build.sh/appforge web port; default 8787
+APPFORGE_NO_OPEN               build.sh no-browser foreground mode
+APPFORGE_SKIP_INSTALL          build.sh reuses the existing .venv when true
+APPFORGE_SKIP_FRONTEND_BUILD   build.sh reuses packaged web assets when true
+APPFORGE_START_LLM_BRIDGE      build.sh starts or reuses the local bridge when true
+APPFORGE_SKIP_LLM_BRIDGE       build.sh avoids launcher-owned bridge startup
+APPFORGE_SMOKE_TIMEOUT         build.sh smoke timeout in seconds; default 30
 APPFORGE_AGENT_CMD             generic command template
 APPFORGE_MODEL                 model passed to the selected driver
 APPFORGE_LLM_BRIDGE_URL        llm-bridge URL; default http://127.0.0.1:8788

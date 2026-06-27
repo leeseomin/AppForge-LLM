@@ -1,125 +1,138 @@
 {
   "schema_version": "1.0",
-  "summary": "Verification passed for the LLM bridge feature after fixing the root no-isolation Python build environment by adding setuptools and wheel to the dev extra and resyncing uv.",
+  "summary": "Verification passed for the build.sh web launcher and the AppForge quality-gate detector fix: shell syntax, executable bit, prepared-workspace smoke startup, backend tests, frontend typecheck/build, AppForge-native run_tests/run_build gates, and documentation trace checks all passed.",
   "passed": true,
   "test_commands": [
+    "bash -n build.sh",
+    "test -x build.sh",
+    ".venv/bin/python -m appforge tool run detect_quality_commands --project . --input '{}'",
     ".venv/bin/python -m pytest -q",
-    "bun test (llm_bridge/)",
-    "bun run typecheck (llm_bridge/)",
-    "npm run typecheck (frontend/)",
-    "npm run build (frontend/)",
-    "env PATH=.venv/bin:... .venv/bin/python -m appforge tool run run_tests --project . --input '{}'",
-    "env PATH=.venv/bin:... .venv/bin/python -m appforge tool run run_build --project . --input '{}'"
+    ".venv/bin/python -m pytest tests/test_tools.py -q",
+    "npm --prefix frontend run typecheck",
+    "npm --prefix frontend run build",
+    ".venv/bin/python -m appforge tool run run_tests --project . --input '{}'",
+    ".venv/bin/python -m appforge tool run run_build --project . --input '{}'",
+    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke",
+    "rg -n \"./build.sh|--smoke|--no-open|APPFORGE_START_LLM_BRIDGE|APPFORGE_SKIP_LLM_BRIDGE|appforge web --no-open-browser\" README.md docs/WEB_APP.md CHANGELOG.md"
   ],
   "results": [
     {
-      "check": "Python test suite",
+      "check": "Shell syntax",
       "passed": "passed",
-      "evidence": ".venv/bin/python -m pytest -q returned 0: 23 passed with one StarletteDeprecationWarning from FastAPI/TestClient."
+      "evidence": "bash -n build.sh returned 0."
     },
     {
-      "check": "Bridge secret echo regression",
+      "check": "Executable launcher",
       "passed": "passed",
-      "evidence": "bun test in llm_bridge/ returned 0: 1 test passed, 0 failed, including provider upsert response does not echo stored api key."
+      "evidence": "test -x build.sh returned 0 after chmod +x."
     },
     {
-      "check": "Bridge TypeScript typecheck",
+      "check": "Prepared-workspace smoke",
       "passed": "passed",
-      "evidence": "bun run typecheck in llm_bridge/ returned 0 and ran tsc --noEmit."
+      "evidence": "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke returned 0 with /api/health and / ready, then stopped web server pid 17492."
+    },
+    {
+      "check": "Backend regression suite",
+      "passed": "passed",
+      "evidence": ".venv/bin/python -m pytest -q returned 0: 24 passed with one StarletteDeprecationWarning from FastAPI/TestClient."
+    },
+    {
+      "check": "Detector regression test",
+      "passed": "passed",
+      "evidence": ".venv/bin/python -m pytest tests/test_tools.py -q returned 0: 7 tests passed, including PATH-empty Python quality command detection."
     },
     {
       "check": "Frontend TypeScript/Vue typecheck",
       "passed": "passed",
-      "evidence": "npm run typecheck in frontend/ returned 0 and ran vue-tsc --noEmit."
+      "evidence": "npm --prefix frontend run typecheck returned 0 and ran vue-tsc --noEmit."
     },
     {
       "check": "Frontend production build",
       "passed": "passed",
-      "evidence": "npm run build in frontend/ returned 0; Vite transformed 32 modules and wrote index-Bto0ykgx.js plus index-C_67LZJ9.css under appforge/resources/web/assets."
+      "evidence": "npm --prefix frontend run build returned 0; Vite transformed 32 modules and emitted index-Bto0ykgx.js plus index-C_67LZJ9.css with no tracked asset diff."
+    },
+    {
+      "check": "AppForge quality command detection",
+      "passed": "passed",
+      "evidence": "detect_quality_commands now returns tests [.venv/bin/python -m pytest -q] and build [.venv/bin/python -m build --no-isolation] by using sys.executable for Python commands."
     },
     {
       "check": "AppForge native run_tests gate",
       "passed": "passed",
-      "evidence": "run_tests tool returned success with command python -m pytest -q, skipped=false, 23 passed."
+      "evidence": ".venv/bin/python -m appforge tool run run_tests --project . --input '{}' returned success with skipped=false and command .venv/bin/python -m pytest -q."
     },
     {
       "check": "AppForge native run_build gate",
       "passed": "passed",
-      "evidence": "Initial run_build failed because setuptools.build_meta was unavailable. After adding setuptools>=69 and wheel>=0.43 to the dev extra and running uv sync --extra dev, run_build returned success and built openappforge-0.4.0.tar.gz plus openappforge-0.4.0-py3-none-any.whl. Setuptools license deprecation warnings remain non-blocking."
+      "evidence": ".venv/bin/python -m appforge tool run run_build --project . --input '{}' returned success with skipped=false and command .venv/bin/python -m build --no-isolation. Setuptools license deprecation warnings remain non-blocking."
     },
     {
-      "check": "Quality command detection",
+      "check": "Documentation trace",
       "passed": "passed",
-      "evidence": "detect_quality_commands with .venv/bin on PATH detected tests [python -m pytest -q] and build [python -m build --no-isolation]."
+      "evidence": "rg found ./build.sh, --smoke, --no-open, APPFORGE_START_LLM_BRIDGE, APPFORGE_SKIP_LLM_BRIDGE, and appforge web --no-open-browser references in README.md, docs/WEB_APP.md, and CHANGELOG.md."
     }
   ],
   "acceptance_results": [
     {
       "requirement": "FR-001",
       "passed": "passed",
-      "evidence": "TopBar emits open-settings, App.vue renders ProviderSettings, and npm run typecheck/build passed."
+      "evidence": "build.sh exists, is executable, defaults to APPFORGE_WEB_HOST=127.0.0.1 and APPFORGE_WEB_PORT=8787, and build_web_command delegates normal mode to .venv/bin/appforge web with browser opening unless no-open is selected."
     },
     {
       "requirement": "FR-002",
       "passed": "passed",
-      "evidence": "ProviderSettings uses typed API helpers for providers, models, save/delete, test, active selection, and health refresh; frontend typecheck/build passed."
+      "evidence": "ensure_python_env implements uv sync --extra dev and python3 venv/pip fallback; ensure_frontend conditionally runs npm --prefix frontend install and npm --prefix frontend run build. Skip-mode smoke/check verified prepared workspace behavior."
     },
     {
       "requirement": "FR-003",
       "passed": "passed",
-      "evidence": "tests/test_web.py test_llm_provider_api_proxies_to_bridge passed as part of the full 23-test suite."
+      "evidence": "--smoke passed on port 8799 with APPFORGE_SKIP_INSTALL=1 and APPFORGE_SKIP_FRONTEND_BUILD=1, probed /api/health and /, and cleaned up the launcher-owned web server PID."
     },
     {
       "requirement": "FR-004",
       "passed": "passed",
-      "evidence": "tests/test_web.py test_llm_bridge_health_requires_configured_active_provider passed; create_driver and readiness paths are covered by full pytest and source inspection."
+      "evidence": "Source inspection verifies APPFORGE_DRIVER pass-through and no forced llm-bridge default. APPFORGE_DRIVER=llm-bridge APPFORGE_SKIP_LLM_BRIDGE=1 --check passed during implementation, proving the bridge skip branch."
     },
     {
       "requirement": "FR-005",
       "passed": "passed",
-      "evidence": "llm_bridge server/config/registry/type surfaces passed bun run typecheck."
+      "evidence": "README.md promotes ./build.sh before manual source setup, docs/WEB_APP.md documents launcher smoke/no-open/check and bridge behavior, and CHANGELOG.md records the launcher."
     },
     {
       "requirement": "NFR-001",
       "passed": "passed",
-      "evidence": "bun test confirms provider upsert responses do not echo saved API keys; source inspection confirms provider status uses has_key/key_source metadata; full secret scan is handled by the dedicated security stage."
+      "evidence": "Default bind remains 127.0.0.1; the launcher adds no deployment, public bind, destructive cleanup of unrelated processes, or credential collection."
     },
     {
       "requirement": "NFR-002",
       "passed": "passed",
-      "evidence": "Full Python suite passed and AppForge run_tests gate passed; existing non-bridge driver branches remain present."
+      "evidence": "bash -n build.sh and prepared-workspace ./build.sh --smoke both returned 0."
     },
     {
       "requirement": "NFR-003",
       "passed": "passed",
-      "evidence": "npm run typecheck, npm run build, and bun run typecheck all returned 0."
+      "evidence": ".venv/bin/python -m pytest -q, npm --prefix frontend run typecheck, npm --prefix frontend run build, AppForge run_tests, and AppForge run_build all returned 0."
     },
     {
       "requirement": "NFR-004",
       "passed": "passed",
-      "evidence": "Frontend lockfile build path passed after package-lock registry normalization and .npmrc replace-registry-host=always."
+      "evidence": "APPFORGE_SKIP_INSTALL=1 and APPFORGE_SKIP_FRONTEND_BUILD=1 were used successfully for check/smoke, and the script only runs npm install when frontend/node_modules is absent."
+    },
+    {
+      "requirement": "quality-gate-regression",
+      "passed": "passed",
+      "evidence": "appforge/tooling/detection.py now uses sys.executable for Python quality commands, and tests/test_tools.py covers PATH-empty detection so AppForge complete can run required run_tests/run_build gates."
     }
   ],
-  "coverage": "Automated coverage includes full Python suite, targeted FastAPI readiness/proxy tests, bridge TypeScript type contracts, frontend Vue/TypeScript contracts, frontend production packaging, and root Python package build. Live provider calls are intentionally manual because they require user credentials and third-party availability.",
-  "failures": [],
+  "coverage": "Verification covers requirements FR-001 through FR-005 and NFR-001 through NFR-004 plus the AppForge quality-gate regression discovered during verification. It maps to workflow steps WF-001 through WF-007, memory surfaces MEM-001 through MEM-007, and loop IDs LOOP-001 through LOOP-006 through syntax, prepared-workspace check/smoke, source inspection, docs grep, pytest, typecheck, production build, and AppForge-native gate evidence.",
+  "failures": [
+    "A first sandboxed smoke attempt failed with operation not permitted while binding 127.0.0.1:8799; the approved local-bind rerun passed. This is recorded as an environment permission issue, not a product failure.",
+    "The first AppForge verification completion failed because quality_commands emitted python-based commands that were dropped when python was not on PATH. Fixed by using sys.executable for Python quality commands and adding a regression test; AppForge run_tests and run_build now pass with skipped=false.",
+    "First-run dependency downloads were not exercised because the AppForge runner has network downloads disabled; verification used the prepared workspace and skip flags as specified."
+  ],
   "manual_checks": [
-    "Inspected appforge/llm_bridge.py, llm_bridge/src/config.ts, llm_bridge/src/server.ts, and llm_bridge/src/registry.ts to verify bridge config path, redacted provider status, no raw saved config echo, and local same-origin proxy boundary.",
-    "Verified appforge/tooling quality detection needs .venv/bin on PATH because this shell has no bare python executable.",
-    "Verified generated Python build artifacts live under ignored dist/ and are not source changes.",
-    "Live provider connectivity was not run because no user API key was supplied; ProviderSettings exposes manual test action for that path."
-  ],
-  "v4_contract_checks": [
-    {
-      "contract": "workflow",
-      "evidence": "WF-002 through WF-007 map to provider UI/proxy/readiness/generation checks."
-    },
-    {
-      "contract": "memory",
-      "evidence": "MEM-001/MEM-004 are covered by readiness/proxy tests and source inspection; MEM-006 by frontend lock/build verification."
-    },
-    {
-      "contract": "loop",
-      "evidence": "LOOP-003 terminal readiness states are tested; LOOP-005 verification loop recorded initial build failure and successful rerun after fix."
-    }
+    "Reviewed build.sh for side-effect-free argument parsing before setup commands, finite smoke and bridge loops, and cleanup limited to captured WEB_PID/BRIDGE_PID.",
+    "Reviewed README.md and docs/WEB_APP.md to confirm the new launcher is documented as the easiest source UI path while existing appforge web and frontend development commands remain present.",
+    "Reviewed appforge/tooling/detection.py to confirm Python quality commands use the active interpreter and continue through the existing command policy."
   ]
 }

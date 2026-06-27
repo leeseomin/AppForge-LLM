@@ -9,7 +9,26 @@ python -m pip install dist/openappforge-0.4.0-py3-none-any.whl
 appforge web
 ```
 
-For source development:
+For a source checkout, use the launcher first:
+
+```bash
+./build.sh
+```
+
+It syncs the Python environment, installs frontend packages when needed, builds
+the packaged Vue assets, and delegates to `appforge web`. Normal mode opens the
+default browser at `http://127.0.0.1:8787`.
+
+Useful source-launcher checks and variants:
+
+```bash
+APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke
+./build.sh --no-open
+APPFORGE_WEB_PORT=8799 ./build.sh
+APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check
+```
+
+Manual source development remains available:
 
 ```bash
 python -m pip install -e '.[dev]'
@@ -31,6 +50,18 @@ Then run the web app with:
 ```bash
 APPFORGE_DRIVER=llm-bridge appforge web
 ```
+
+The source launcher can also reuse or start the bridge when bridge mode is
+selected:
+
+```bash
+APPFORGE_DRIVER=llm-bridge ./build.sh
+```
+
+Set `APPFORGE_START_LLM_BRIDGE=1` to request bridge startup without switching
+drivers, or `APPFORGE_SKIP_LLM_BRIDGE=1` to leave bridge management to another
+terminal. Bridge logs from launcher-owned starts are written to
+`.appforge-web/llm-bridge.log`.
 
 Equivalent standalone entry point:
 
@@ -163,6 +194,15 @@ Returns HTTP 409 until the job completes. The path is resolved from server-owned
 | `APPFORGE_PROJECTS_DIR` | `projects` | Generated workspaces |
 | `APPFORGE_DATA_DIR` | `.appforge-web` | Persisted web-job state |
 | `APPFORGE_DRIVER` | `auto` | `auto`, `codex`, `claude`, `generic`, or `llm-bridge` |
+| `APPFORGE_WEB_HOST` | `127.0.0.1` | `build.sh`/`appforge web` bind host |
+| `APPFORGE_WEB_PORT` | `8787` | `build.sh`/`appforge web` bind port |
+| `APPFORGE_NO_OPEN` | `false` | Suppress browser opening in `build.sh` normal mode |
+| `APPFORGE_SKIP_INSTALL` | `false` | Reuse the existing `.venv` in `build.sh` |
+| `APPFORGE_SKIP_FRONTEND_BUILD` | `false` | Reuse current packaged web assets in `build.sh` |
+| `APPFORGE_START_LLM_BRIDGE` | `false` | Request launcher-owned bridge startup or reuse |
+| `APPFORGE_SKIP_LLM_BRIDGE` | `false` | Disable launcher-owned bridge startup |
+| `APPFORGE_SMOKE_TIMEOUT` | `30` | Seconds for `./build.sh --smoke` health/UI probes |
+| `APPFORGE_BRIDGE_TIMEOUT` | `15` | Seconds for launcher-owned bridge health checks |
 | `APPFORGE_AGENT_CMD` | unset | Generic command template |
 | `APPFORGE_MODEL` | unset | Model passed to Codex/Claude/llm-bridge driver |
 | `APPFORGE_LLM_BRIDGE_URL` | `http://127.0.0.1:8788` | FastAPI-to-bridge URL |

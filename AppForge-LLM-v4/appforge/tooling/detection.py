@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -115,18 +116,23 @@ def quality_commands(workspace: Path) -> dict[str, list[str] | None]:
 
     languages = set(detected["languages"])
     if "python" in languages:
+        python_cmd = sys.executable or "python"
         has_tests = (workspace / "tests").exists() or any(workspace.glob("test_*.py"))
         if has_tests:
-            commands["tests"] = ["python", "-m", "pytest", "-q"] if python_module_exists("pytest") else ["python", "-m", "unittest", "discover"]
+            commands["tests"] = (
+                [python_cmd, "-m", "pytest", "-q"]
+                if python_module_exists("pytest")
+                else [python_cmd, "-m", "unittest", "discover"]
+            )
         if python_module_exists("ruff"):
-            commands["lint"] = ["python", "-m", "ruff", "check", "."]
-            commands["format"] = ["python", "-m", "ruff", "format", "--check", "."]
+            commands["lint"] = [python_cmd, "-m", "ruff", "check", "."]
+            commands["format"] = [python_cmd, "-m", "ruff", "format", "--check", "."]
         if python_module_exists("mypy"):
-            commands["typecheck"] = ["python", "-m", "mypy", "."]
+            commands["typecheck"] = [python_cmd, "-m", "mypy", "."]
         commands["build"] = (
-            ["python", "-m", "build", "--no-isolation"]
+            [python_cmd, "-m", "build", "--no-isolation"]
             if (workspace / "pyproject.toml").exists() and python_module_exists("build")
-            else ["python", "-m", "compileall", "-q", "."]
+            else [python_cmd, "-m", "compileall", "-q", "."]
         )
 
     if "go" in languages:

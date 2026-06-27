@@ -1,6 +1,6 @@
 # Product request
 
-Implement local LLM bridge provider settings and llm-bridge driver in AppForge-LLM v4 so the current web app can configure and use external LLM providers.
+Create a build.sh launcher for AppForge-LLM v4 so running it immediately prepares and opens the local web app UI, making the pipeline easier to use than the CLI-only workflow.
 
 - Pipeline: `feature`
 - Mode: `autonomous`

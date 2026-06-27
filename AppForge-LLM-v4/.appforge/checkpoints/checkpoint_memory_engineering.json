@@ -5,7 +5,7 @@
   "stage": "memory_engineering",
   "status": "completed",
   "attempt": 1,
-  "timestamp": "2026-06-27T08:32:28+00:00",
+  "timestamp": "2026-06-27T09:07:09+00:00",
   "artifacts": {
     "memory_spec": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/memory_spec.json"
   },
@@ -34,42 +34,42 @@
     "stage_result": {
       "stage": "memory_engineering",
       "status": "completed",
-      "summary": "Defined provider config, registry metadata, transient settings UI state, readiness state, AppForge stage evidence, and frontend dependency lock memory surfaces.",
+      "summary": "Defined the launcher memory surfaces, ownership, retention, serialization, privacy exclusions, reconciliation, and test evidence.",
       "files_changed": [
         ".appforge/artifacts/memory_spec.json",
         ".appforge/stage-result.json"
       ],
       "commands_run": [
         {
-          "command": ".venv/bin/python -m appforge prompt . --output .appforge/current-stage.md",
-          "result": "passed; generated the memory_engineering stage packet"
-        },
-        {
-          "command": "sed -n ... llm_bridge/src/config.ts llm_bridge/src/registry.ts appforge/llm_bridge.py",
-          "result": "passed; inspected bridge config path, registry metadata, and FastAPI bridge client behavior"
+          "command": ".venv/bin/python -m appforge prompt . --stage memory_engineering --output .appforge/current-stage.md",
+          "result": "passed; rendered and read the memory-engineering stage packet"
         }
       ],
       "checks": [
         {
-          "name": "memory-surfaces-named",
+          "name": "important state named",
           "passed": true,
-          "evidence": "memory_spec.json defines MEM-001 through MEM-006."
+          "evidence": "memory_spec.memory_surfaces names invocation config, Python env, packaged assets, bridge runtime, web runtime, smoke status, and docs."
         },
         {
-          "name": "secrets-policy-explicit",
+          "name": "secrets excluded",
           "passed": true,
-          "evidence": "MEM-001 and privacy rules state raw keys stay local and are not returned to the browser or logs."
+          "evidence": "memory_spec.privacy states build.sh must not read, print, persist, or transform provider API keys."
         },
         {
-          "name": "lifecycle-boundaries-covered",
+          "name": "lifecycle and reconciliation defined",
           "passed": true,
-          "evidence": "memory_spec covers durable bridge config, transient browser state, recomputed health, stage evidence, and dependency lock retention."
+          "evidence": "memory_spec.retention, serialization, and reconciliation define restart/rerun behavior."
         }
       ],
       "decisions": [
         {
-          "decision": "Treat /api/health readiness as recomputed memory rather than persisted state.",
-          "reason": "Bridge reachability and configured-provider status can change outside the web process, so persistent readiness would become stale."
+          "decision": "Do not add a durable launcher config file.",
+          "reason": "Environment variables and arguments are enough for the requested local UX, and avoiding a config file reduces stale-state and secret-handling risk.",
+          "alternatives": [
+            "Persist launcher preferences under .appforge-web",
+            "Add a .appforge-launcher.json file"
+          ]
         }
       ],
       "unresolved": []

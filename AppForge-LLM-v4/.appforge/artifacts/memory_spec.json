@@ -1,212 +1,186 @@
 {
   "schema_version": "1.0",
-  "summary": "Memory contract for the LLM bridge feature: provider secrets and active selection live in the local bridge config, browser state stays transient, health/readiness is recomputed, and AppForge stage evidence remains in existing checkpoints/logs.",
+  "summary": "Memory contract for the build.sh launcher: durable state remains existing repository/dependency artifacts and AppForge runtime files; launcher mode and child-process ownership stay process-local; no new secret or user preference store is introduced.",
   "memory_surfaces": [
     {
       "id": "MEM-001",
-      "purpose": "Store provider credentials, base URL overrides, default models, and active provider/model selection for the local bridge.",
-      "scope": "Local machine and local user running llm_bridge.",
-      "lifetime": "Durable until the user deletes provider config or changes APPFORGE_LLM_CONFIG/APPFORGE_LLM_CONFIG_DIR/APPFORGE_DATA_DIR.",
-      "source_of_truth": "llm_bridge/src/config.ts JSON file at APPFORGE_LLM_CONFIG or providers.json under APPFORGE_LLM_CONFIG_DIR, APPFORGE_DATA_DIR, or ~/.appforge/llm.",
-      "invalidated_by": "DELETE /providers/{id}, PUT /providers/{id}, PUT /active, manual file deletion, unreadable/corrupt JSON, or environment path change.",
-      "privacy": "May contain API keys; file permissions are set to 0600 best-effort and the browser never receives raw keys.",
-      "format": "JSON object with providers keyed by provider id and active provider/model selection."
+      "purpose": "Launcher configuration for one invocation.",
+      "scope": "Process-local arguments and APPFORGE_* environment variables.",
+      "lifetime": "One build.sh process.",
+      "source_of_truth": "Command-line arguments and environment at invocation time.",
+      "invalidated_by": "Process exit or rerun with different arguments/environment."
     },
     {
       "id": "MEM-002",
-      "purpose": "Expose provider registry metadata, model suggestions, default base URLs, docs URLs, and environment key names.",
-      "scope": "Bridge process runtime.",
-      "lifetime": "Versioned with the llm_bridge source code.",
-      "source_of_truth": "llm_bridge/src/registry.ts ENTRIES array.",
-      "invalidated_by": "Source update or bridge process restart after code change.",
-      "privacy": "Does not contain secrets; env_key names are metadata only.",
-      "format": "TypeScript registry descriptors serialized by /providers and /providers/{id}/models."
+      "purpose": "Python source environment readiness.",
+      "scope": ".venv directory and editable package metadata.",
+      "lifetime": "Persists across local runs until dependencies are changed or the user removes .venv.",
+      "source_of_truth": "pyproject.toml, uv.lock, and the installed .venv/bin/appforge executable.",
+      "invalidated_by": "pyproject.toml or uv.lock changes, missing .venv/bin/appforge, failed uv/pip sync, or explicit APPFORGE_SKIP_INSTALL not being set."
     },
     {
       "id": "MEM-003",
-      "purpose": "Track open/closed settings dialog, editable form values, loading state, and provider test result while the user configures the bridge.",
-      "scope": "Single browser tab session.",
-      "lifetime": "Transient until modal close, page refresh, or component unmount.",
-      "source_of_truth": "Vue component state in frontend/src/App.vue and frontend/src/components/ProviderSettings.vue.",
-      "invalidated_by": "Close dialog, refresh page, provider switch, successful save/delete/activate refresh, or failed API request.",
-      "privacy": "API key input exists only in local component state before submission and is cleared/replaced by placeholder state after bridge refresh.",
-      "format": "Vue refs/reactive objects."
+      "purpose": "Packaged web UI assets.",
+      "scope": "appforge/resources/web built from frontend source.",
+      "lifetime": "Tracked source artifact refreshed by npm --prefix frontend run build.",
+      "source_of_truth": "frontend/package-lock.json, frontend/package.json, frontend/src, frontend/public, and Vite build output under appforge/resources/web.",
+      "invalidated_by": "Frontend source/package changes or a failed/missing production build."
     },
     {
       "id": "MEM-004",
-      "purpose": "Represent llm-bridge driver readiness for the current web session.",
-      "scope": "FastAPI health response and frontend health banner.",
-      "lifetime": "Ephemeral per health request; frontend refreshes after provider changes and routine health polling.",
-      "source_of_truth": "appforge/web_jobs.py _llm_bridge_readiness recomputes bridge health, active selection, and provider configured status.",
-      "invalidated_by": "Bridge stop/start, provider config change, active provider change, APPFORGE_DRIVER change, or APPFORGE_LLM_BRIDGE_URL change.",
-      "privacy": "Readiness messages contain provider ids and setup guidance only, not API keys.",
-      "format": "JSON health payload returned by /api/health."
+      "purpose": "Optional bridge runtime evidence.",
+      "scope": "APPFORGE_LLM_BRIDGE_URL health response and .appforge-web/llm-bridge.log for launcher-owned bridge starts.",
+      "lifetime": "Health is live process state; logs persist as ignored runtime files until user cleanup.",
+      "source_of_truth": "Bridge /health endpoint and launcher-captured bridge PID.",
+      "invalidated_by": "Bridge process exit, changed bridge URL, failed health probe, or launcher cleanup."
     },
     {
       "id": "MEM-005",
-      "purpose": "Preserve stage-generation prompts, outputs, failures, and checkpoints for llm-bridge driver runs.",
-      "scope": "AppForge project .appforge control plane.",
-      "lifetime": "Durable for the project until AppForge reports/log cleanup or source archive exclusion.",
-      "source_of_truth": "Existing AppForge checkpoints, stage logs, and runner artifacts under .appforge.",
-      "invalidated_by": "New stage attempt, manual cleanup, or checkpoint lifecycle controlled by AppForge.",
-      "privacy": "May contain user prompt text and model output; provider credentials must not be written there.",
-      "format": "Existing AppForge JSON checkpoint and text log formats."
+      "purpose": "Web server runtime state.",
+      "scope": "appforge web process, .appforge-web runtime directory, and existing AppForge web job snapshots after UI use.",
+      "lifetime": "Foreground server lifetime for process state; existing .appforge-web state persists per web app behavior.",
+      "source_of_truth": "appforge.web/web_jobs runtime behavior and launcher-captured web PID in smoke mode.",
+      "invalidated_by": "Server process exit, app restart conversion of in-flight jobs, or user cleanup of .appforge-web."
     },
     {
       "id": "MEM-006",
-      "purpose": "Maintain frontend dependency reproducibility after registry-host repair.",
-      "scope": "Repository source and package manager state.",
-      "lifetime": "Durable until dependency versions change.",
-      "source_of_truth": "frontend/package-lock.json and frontend/.npmrc.",
-      "invalidated_by": "npm install/update that changes resolved URLs, integrity values, or dependency graph.",
-      "privacy": "No secrets; registry URLs and package hashes only.",
-      "format": "npm lockfile v3 JSON and .npmrc text."
+      "purpose": "Smoke verification status.",
+      "scope": "Process-local probe results for /api/health and /.",
+      "lifetime": "One smoke invocation.",
+      "source_of_truth": "HTTP status results collected by the launcher within APPFORGE_SMOKE_TIMEOUT.",
+      "invalidated_by": "Smoke process exit or rerun."
+    },
+    {
+      "id": "MEM-007",
+      "purpose": "User-facing startup knowledge.",
+      "scope": "README.md, docs/WEB_APP.md, CHANGELOG.md.",
+      "lifetime": "Tracked source documentation until changed.",
+      "source_of_truth": "Version-controlled documentation updates.",
+      "invalidated_by": "Behavioral changes to build.sh or appforge web startup."
     }
   ],
   "state_ownership": [
     {
-      "state": "provider_config",
-      "owner": "llm_bridge/src/config.ts",
+      "state": "Invocation mode, host, port, and skip flags",
+      "owner": "build.sh process",
       "writers": [
-        "PUT /providers/{id}",
-        "DELETE /providers/{id}",
-        "environment variables for provider keys"
+        "Command-line argument parser",
+        "Environment variable reader"
       ],
       "readers": [
-        "GET /providers",
-        "POST /providers/{id}/test",
-        "POST /generate",
-        "appforge/web_jobs.py readiness via /providers"
+        "build.sh setup, launch, smoke, and help branches"
       ]
     },
     {
-      "state": "active_selection",
-      "owner": "llm_bridge/src/config.ts",
+      "state": ".venv dependency environment",
+      "owner": "Local repository checkout",
       "writers": [
-        "PUT /active",
-        "DELETE /providers/{id} when deleting active provider"
+        "uv sync --extra dev",
+        "python3 -m venv and pip install fallback"
       ],
       "readers": [
-        "GET /active",
-        "POST /generate",
-        "appforge/web_jobs.py readiness"
+        "build.sh",
+        "appforge web",
+        "pytest and verification commands"
       ]
     },
     {
-      "state": "provider_registry",
-      "owner": "llm_bridge/src/registry.ts",
+      "state": "Packaged web assets",
+      "owner": "Frontend build",
       "writers": [
-        "source changes only"
+        "npm --prefix frontend run build"
       ],
       "readers": [
-        "GET /providers",
-        "GET /providers/{id}/models",
-        "POST /generate",
-        "POST /providers/{id}/test"
+        "appforge.web FastAPI static serving",
+        "build.sh smoke probes",
+        "release archive verification"
       ]
     },
     {
-      "state": "settings_session_state",
-      "owner": "ProviderSettings.vue",
+      "state": "Launcher-owned web and bridge PIDs",
+      "owner": "build.sh process",
       "writers": [
-        "User input",
-        "same-origin /api/llm responses"
+        "build.sh background start branches"
       ],
       "readers": [
-        "ProviderSettings.vue template",
-        "ProviderSettings action handlers"
+        "build.sh cleanup trap"
       ]
     },
     {
-      "state": "driver_readiness",
-      "owner": "appforge/web_jobs.py",
+      "state": "Provider secrets and active provider settings",
+      "owner": "Existing llm_bridge/provider-settings implementation",
       "writers": [
-        "Health request computation"
+        "Existing provider settings UI or environment variables"
       ],
       "readers": [
-        "/api/health",
-        "frontend health banner",
-        "job creation guardrails"
-      ]
-    },
-    {
-      "state": "stage_attempt_evidence",
-      "owner": "AppForge runner/checkpoint system",
-      "writers": [
-        "LLMBridgeDriver",
-        "AppForge runner"
-      ],
-      "readers": [
-        "AppForge status",
-        "handoff artifacts",
-        "developer/operator inspection"
+        "llm_bridge service",
+        "appforge web health"
       ]
     }
   ],
-  "retention": "Bridge provider config is retained locally until explicit deletion or path change. Browser settings state is not retained across refresh. Health is recomputed and not persisted. AppForge stage evidence follows existing .appforge retention and is excluded from source archives by archive_workspace.",
-  "serialization": "Bridge config uses JSON with providers and active keys. API payloads use JSON through FastAPI Pydantic/request models and TypeScript interfaces. Vue state is in-memory refs. Static assets are Vite-built files under appforge/resources/web. AppForge artifacts remain JSON.",
+  "retention": "build.sh introduces no new durable preference or secret store. .venv, frontend/node_modules, llm_bridge/node_modules, and .appforge-web runtime files retain existing local-workspace lifetimes. Packaged web assets and documentation are tracked source files. Process-local mode, smoke, and PID memory vanish on exit.",
+  "serialization": "Launcher configuration is serialized only as shell variables. Durable artifacts use existing file formats: pyproject.toml/uv.lock/package-lock.json for dependency state, Vite output files under appforge/resources/web, .appforge-web JSON/log files owned by existing web/bridge systems, and Markdown docs.",
   "privacy": [
-    "Raw API keys must never be returned by /api/llm provider list, committed to source, written to frontend static assets, or logged by tests.",
-    "Provider key presence is represented by has_key/key_source only.",
-    ".env and .env.* remain ignored except .env.example.",
-    "Bridge config file permissions are best-effort 0600, with environment-variable credentials preferred when operators do not want local file secrets.",
-    "Test fixtures use fake placeholder key values only."
+    "build.sh must not read, print, persist, or transform provider API keys.",
+    "Environment variables pass through to existing appforge/bridge code without logging their values.",
+    ".env and .env.* remain ignored by existing .gitignore policy.",
+    "Bridge logs should capture service startup output but not receive secrets from the launcher."
   ],
-  "reconciliation": "On each health request the backend reconciles APPFORGE_DRIVER, bridge reachability, active selection, provider registry, and configured status. If bridge config JSON is missing or unreadable, llm_bridge/src/config.ts falls back to an empty provider/active state. Deleting an active provider clears active selection. Frontend refreshes providers, active state, and health after save/delete/activate operations.",
+  "reconciliation": "Each run reconciles state from source of truth rather than trusting hidden caches: Python readiness checks .venv/bin/appforge after optional install, frontend readiness depends on npm build unless explicitly skipped, bridge readiness uses live health, smoke readiness uses live HTTP probes, and docs are validated by review/diff.",
   "observability": [
-    "ProviderSettings displays configured state, key source, active model, loading state, and latest test result.",
-    "FastAPI /api/health reports actionable llm-bridge readiness messages.",
-    "Bridge errors are surfaced through LLM_BRIDGE_ERROR responses without raw secrets.",
-    "Tests in tests/test_web.py assert readiness degradation and proxy delegation."
+    "Launcher terminal output names each major step and the final URL.",
+    "Smoke mode prints probe progress and success/failure.",
+    "Bridge startup writes .appforge-web/llm-bridge.log only when the launcher owns that process.",
+    "Verification commands record bash syntax, smoke, pytest, typecheck, and build results."
   ],
   "tests": [
     {
-      "name": "configured-active-readiness",
-      "evidence": "tests/test_web.py test_llm_bridge_health_requires_configured_active_provider covers missing and configured active provider states."
+      "name": "process-local-smoke-memory",
+      "evidence": "./build.sh --smoke must start, probe, and cleanup launcher-owned PIDs without persisting a launcher config file."
     },
     {
-      "name": "same-origin-proxy-memory-boundary",
-      "evidence": "tests/test_web.py test_llm_provider_api_proxies_to_bridge verifies FastAPI passes provider data to appforge.llm_bridge without live provider calls."
+      "name": "dependency-state-reconciliation",
+      "evidence": "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 smoke reuses current .venv/assets, while normal mode runs configured sync/build paths."
     },
     {
-      "name": "frontend-contract-build",
-      "evidence": "npm run typecheck and npm run build validate TypeScript/Vue payload state and packaged static assets."
+      "name": "source-doc-memory",
+      "evidence": "README.md, docs/WEB_APP.md, and CHANGELOG.md contain the launcher path and options."
     },
     {
-      "name": "bridge-type-contract",
-      "evidence": "bun run typecheck validates bridge config, registry, server, and type surfaces."
+      "name": "secret-exclusion",
+      "evidence": "Security review checks build.sh and docs for no committed or echoed provider secrets."
     }
   ],
   "traceability": [
     {
       "requirement": "FR-001",
-      "memory_surface": "MEM-003",
-      "workflow_steps": "WF-001"
+      "memory_surface": "MEM-001, MEM-005, MEM-007",
+      "workflow_steps": "WF-001, WF-005, WF-007"
     },
     {
       "requirement": "FR-002",
-      "memory_surface": "MEM-001, MEM-002, MEM-003",
-      "workflow_steps": "WF-002, WF-003, WF-004, WF-005"
+      "memory_surface": "MEM-002, MEM-003",
+      "workflow_steps": "WF-002, WF-003"
     },
     {
       "requirement": "FR-003",
-      "memory_surface": "MEM-001, MEM-004",
-      "workflow_steps": "WF-002, WF-003, WF-004, WF-005"
+      "memory_surface": "MEM-005, MEM-006",
+      "workflow_steps": "WF-006"
     },
     {
       "requirement": "FR-004",
-      "memory_surface": "MEM-001, MEM-004, MEM-005",
-      "workflow_steps": "WF-006, WF-007"
+      "memory_surface": "MEM-001, MEM-004",
+      "workflow_steps": "WF-004, WF-005"
     },
     {
       "requirement": "FR-005",
-      "memory_surface": "MEM-001, MEM-002",
-      "workflow_steps": "WF-002, WF-003, WF-004, WF-005, WF-007"
+      "memory_surface": "MEM-007",
+      "workflow_steps": "WF-007"
     },
     {
-      "requirement": "NFR-004",
-      "memory_surface": "MEM-006",
-      "workflow_steps": "verification dependency install/build"
+      "requirement": "NFR-001",
+      "memory_surface": "MEM-001, MEM-005",
+      "workflow_steps": "WF-001, WF-005"
     }
   ]
 }

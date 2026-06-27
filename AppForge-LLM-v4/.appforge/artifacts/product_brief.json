@@ -1,41 +1,41 @@
 {
   "schema_version": "1.0",
-  "summary": "Add a local LLM bridge integration to AppForge-LLM v4 so the current Vue/FastAPI web app can configure external model providers and run pipeline stages through an llm-bridge driver.",
-  "problem": "AppForge-LLM v4 previously depended on local coding-agent CLIs or a generic command driver. The current app needed the interrupted LLM bridge work completed so users can configure API-key based providers in the web UI, select an active model, and have the backend expose a driver/readiness path that can use that provider through the local bridge.",
+  "summary": "Add a top-level build.sh launcher that prepares AppForge-LLM v4 from source and opens the existing local web app UI as the primary pipeline entry point.",
+  "problem": "The app already has a browser-based pipeline, but source users still need to remember several CLI-oriented setup and launch commands before they reach the UI. The requested change is a simpler path where running build.sh brings up the local web app environment directly.",
   "target_users": [
-    "Local AppForge-LLM v4 users who want to run app-generation stages with an external LLM provider instead of only Codex or Claude CLI",
-    "Developers maintaining the AppForge-LLM v4 FastAPI/Vue app and its pipeline runner",
-    "Operators running the local web server and local llm_bridge service"
+    "Local AppForge-LLM v4 users who want to run product-generation pipelines through the browser UI",
+    "Developers validating the repository from source without memorizing setup commands",
+    "Operators who need a reproducible one-command local web server start on macOS/Linux"
   ],
   "desired_outcomes": [
-    "The web UI exposes a provider settings flow for storing API keys, selecting default models, testing provider connectivity, and activating the model used by AppForge.",
-    "The FastAPI server proxies provider management to a same-origin /api/llm surface and reports truthful readiness for APPFORGE_DRIVER=llm-bridge.",
-    "The pipeline runner can create an llm-bridge driver that calls the local bridge for stage generation.",
-    "The bridge service supports provider listing, model listing, provider upsert/delete, active model selection, health, test, generate, and stream endpoints.",
-    "The implementation is covered by backend web tests, bridge typecheck, frontend typecheck, frontend production build, and the existing Python test suite."
+    "A repository-root build.sh exists, is executable, and starts the existing appforge web server on a loopback host by default.",
+    "The launcher prepares the Python environment and packaged frontend assets when needed, while allowing explicit skip flags for repeat runs and CI smoke checks.",
+    "Running the launcher in normal mode opens the web UI automatically through the existing appforge web browser-opening behavior.",
+    "The launcher has a non-interactive smoke mode that proves the web UI and health endpoint can start without opening a browser.",
+    "README and web-app documentation identify build.sh as the easiest source-start path while preserving CLI compatibility."
   ],
   "constraints": [
-    "Keep the integration local-first; no deployment, publishing, or remote infrastructure provisioning is in scope.",
-    "Do not commit API keys or display stored secrets back in the browser.",
-    "Preserve existing Codex, Claude, generic, and auto driver behavior.",
-    "Reuse the repository's Vue/FastAPI/AppForge patterns rather than replacing the app shell.",
-    "Use the local llm_bridge service as the provider boundary; the browser must stay same-origin through FastAPI proxy endpoints."
+    "Reuse the existing appforge web FastAPI/Vue production entry point; do not create a second web server or parallel UI.",
+    "Keep default binding loopback-only and preserve existing AppForge safety defaults.",
+    "Do not deploy, publish, or require external provider credentials.",
+    "Do not force llm-bridge usage; the launcher should respect APPFORGE_DRIVER and existing provider configuration.",
+    "Avoid destructive repository operations and preserve existing source and tracked AppForge artifacts."
   ],
   "assumptions": [
-    "Provider credentials are supplied by local environment variables or by the local bridge config file, not by source-controlled files.",
-    "A single-shot llm-bridge driver is acceptable for stage text generation; fully agentic file-editing stages still need a CLI driver.",
-    "The bridge can be started separately from the web server with Bun using the llm_bridge package.",
-    "Routine ambiguity in the user's phrase '그것' maps to the interrupted LLM bridge/provider-settings implementation visible in the worktree."
+    "Python 3.11+, npm, and the existing project dependency metadata are the supported source-development path.",
+    "uv is preferred when available for local dependency sync; a Python venv/pip fallback is acceptable.",
+    "Bun/llm_bridge startup is optional and should be activated only when the user selects the llm-bridge driver or explicitly asks the launcher to start it.",
+    "A smoke mode may suppress browser opening to keep automated verification deterministic."
   ],
   "non_goals": [
-    "Do not deploy the web app or bridge service.",
-    "Do not add billing, account management, team sharing, OAuth, or hosted secret storage.",
-    "Do not replace the existing AppForge stage runner or checkpoint architecture.",
-    "Do not guarantee live provider calls without user-supplied credentials.",
-    "Do not broaden the feature into a general multi-agent orchestration system."
+    "Do not redesign the Vue UI or change the pipeline runner behavior.",
+    "Do not add production daemon management, launch agents, Docker packaging, or hosted deployment.",
+    "Do not add new third-party dependencies solely for the launcher.",
+    "Do not guarantee live external LLM calls without configured credentials.",
+    "Do not remove or deprecate the existing appforge CLI commands."
   ],
   "open_questions": [
-    "Which provider/model the user will ultimately activate is left to runtime configuration; the safe default is to expose supported providers and require a configured active provider before reporting readiness.",
-    "Whether llm-bridge should become part of a one-command launcher remains outside this slice; the safe default is documented separate startup."
+    "Whether the user wants a separate native desktop wrapper is intentionally out of scope; the safe default is a local browser UI launcher.",
+    "Which coding-agent or LLM driver should be used remains runtime configuration through APPFORGE_DRIVER and the existing web health readiness."
   ]
 }
