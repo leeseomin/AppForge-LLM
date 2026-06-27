@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
-  "summary": "Minimal traceable plan for completing the LLM bridge/provider settings feature in the current AppForge-LLM v4 app.",
-  "goal": "Allow the local web app to configure external LLM providers through a same-origin settings UI, report truthful llm-bridge readiness, and run AppForge stages through a local bridge-backed driver while preserving existing driver behavior.",
+  "summary": "Add one repository-root build.sh launcher, update source-start documentation, and verify through shell syntax, no-browser smoke startup, backend tests, frontend typecheck/build, and AppForge gates.",
+  "goal": "Make the existing AppForge-LLM v4 browser pipeline the easiest source checkout path by letting users run ./build.sh to prepare and open the local web UI.",
   "affected_requirements": [
     "FR-001",
     "FR-002",
@@ -15,96 +15,63 @@
   ],
   "changes": [
     {
-      "file_or_area": "llm_bridge/",
-      "change": "Add a local Bun/TypeScript bridge service with provider registry, local config persistence, active selection, provider test, generate, stream endpoints, and a regression test that provider upsert responses do not echo API keys.",
-      "reason": "Satisfies FR-005 and owns provider-specific external LLM integration outside the browser and Python web routes.",
-      "verification": "bun test and bun run typecheck in llm_bridge/."
+      "file_or_area": "build.sh",
+      "change": "Add executable bash launcher with argument parsing, safe defaults, Python setup via uv or venv/pip fallback, frontend install/build, optional bridge startup, foreground appforge web mode, --no-open, --check, --smoke, bounded HTTP probes, and cleanup traps for launcher-owned processes.",
+      "reason": "This directly satisfies the requested one-command web UI pipeline while delegating server behavior to the existing appforge web entry point.",
+      "verification": "bash -n build.sh; APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke"
     },
     {
-      "file_or_area": "appforge/llm_bridge.py",
-      "change": "Add a standard-library Python HTTP client for bridge health, provider management, active selection, provider tests, and generation.",
-      "reason": "Satisfies FR-003 and keeps browser requests same-origin through FastAPI.",
-      "verification": "tests/test_web.py proxy tests monkeypatch this client boundary."
+      "file_or_area": "README.md",
+      "change": "Document ./build.sh as the fastest source-start path, list useful launcher environment variables/options, and keep manual appforge web/frontend development commands.",
+      "reason": "Source users should discover the new web-first UX before the longer manual CLI setup.",
+      "verification": "Manual doc review and grep for ./build.sh/--smoke in README.md."
     },
     {
-      "file_or_area": "appforge/web.py",
-      "change": "Expose /api/llm FastAPI endpoints that validate payloads, delegate to appforge.llm_bridge, and return structured LLM_BRIDGE_ERROR responses.",
-      "reason": "Satisfies FR-002 and FR-003 without direct browser-to-bridge calls.",
-      "verification": ".venv/bin/python -m pytest tests/test_web.py -q."
+      "file_or_area": "docs/WEB_APP.md",
+      "change": "Update start instructions with ./build.sh, --smoke, --no-open/APPFORGE_NO_OPEN, and optional llm_bridge startup behavior.",
+      "reason": "The web app guide is the operational reference for starting and verifying the local UI.",
+      "verification": "Manual doc review and grep for ./build.sh/APPFORGE_START_LLM_BRIDGE in docs/WEB_APP.md."
     },
     {
-      "file_or_area": "appforge/drivers.py",
-      "change": "Add LLMBridgeDriver and aliases llm-bridge, llm_bridge, and llm to create_driver while preserving codex, claude, generic, and auto.",
-      "reason": "Satisfies FR-004 pipeline execution through the active local bridge provider.",
-      "verification": ".venv/bin/python -m pytest -q plus bridge typecheck."
+      "file_or_area": "CHANGELOG.md",
+      "change": "Record the launcher and smoke verification behavior.",
+      "reason": "The startup UX change is user-facing and should be visible in release notes.",
+      "verification": "Manual doc review and grep for build.sh in CHANGELOG.md."
     },
     {
-      "file_or_area": "appforge/web_jobs.py",
-      "change": "Harden driver readiness so llm-bridge is ready only when bridge health, active provider, provider registry membership, and configured status all pass.",
-      "reason": "Satisfies FR-004 and mitigates false-ready jobs when the bridge has no usable provider.",
-      "verification": "tests/test_web.py test_llm_bridge_health_requires_configured_active_provider."
-    },
-    {
-      "file_or_area": "frontend/src/App.vue, frontend/src/components/TopBar.vue, frontend/src/components/ProviderSettings.vue, frontend/src/api.ts, frontend/src/types.ts, frontend/src/styles.css",
-      "change": "Wire a top-bar LLM settings control, modal provider settings UI, typed API helpers, payload types, and responsive styling.",
-      "reason": "Satisfies FR-001 and FR-002 in the existing Vue app shell.",
-      "verification": "npm run typecheck and npm run build in frontend/."
-    },
-    {
-      "file_or_area": "frontend/.npmrc and frontend/package-lock.json",
-      "change": "Normalize npm lock resolved URLs to registry.npmjs.org, correct public integrities needed for install, and set replace-registry-host=always.",
-      "reason": "Satisfies NFR-004 so the frontend can reinstall/rebuild outside the internal registry environment.",
-      "verification": "npm install with a clean cache succeeded earlier; npm run typecheck/build continue to pass."
-    },
-    {
-      "file_or_area": "appforge/resources/web/",
-      "change": "Regenerate packaged static frontend assets and index.html after adding ProviderSettings.",
-      "reason": "Keeps the Python web app serving the implemented frontend without requiring a separate Vite dev server.",
-      "verification": "npm run build in frontend/."
-    },
-    {
-      "file_or_area": "tests/test_web.py",
-      "change": "Add focused backend tests for llm-bridge readiness and /api/llm proxy delegation.",
-      "reason": "Covers FR-003, FR-004, and NFR-002 without live provider credentials.",
-      "verification": ".venv/bin/python -m pytest tests/test_web.py -q and .venv/bin/python -m pytest -q."
-    },
-    {
-      "file_or_area": "pyproject.toml, .gitignore, uv.lock, .appforge/",
-      "change": "Keep runtime AppForge logs/prompts/reports/memory/current-stage/stage-result ignored, include local build-backend packages in the dev extra, retain reproducible Python lock state, and store governed pipeline artifacts.",
-      "reason": "Supports OpenAppForge checkpointing and reproducible local verification without committing runtime logs or secrets.",
-      "verification": "AppForge complete gates for each stage and git status review."
+      "file_or_area": ".appforge artifacts/checkpoints",
+      "change": "Update feature-pipeline artifacts and checkpoints for this launcher request through appforge complete.",
+      "reason": "The repository tracks AppForge control-plane artifacts, and this request must have its own artifact/checkpoint loop.",
+      "verification": ".venv/bin/python -m appforge status . reports all stages complete after handoff."
     }
   ],
   "migration_or_compatibility": [
-    "No database or remote data migration is required.",
-    "Existing drivers remain available; users can avoid the new path by leaving APPFORGE_DRIVER unset or using codex, claude, generic, or auto.",
-    "Bridge provider config is local and opt-in; existing projects without bridge config receive not-ready guidance instead of changed behavior.",
-    "Static asset hash filenames change as part of the frontend production build.",
-    "The bridge is a separate local process; one-command launch integration is out of scope."
+    "No data migration is required.",
+    "Existing appforge web, appforge-web, appforge forge/run/status/prompt/complete, frontend dev, and llm_bridge commands remain available.",
+    "Default web binding remains 127.0.0.1:8787 unless overridden by APPFORGE_WEB_HOST/APPFORGE_WEB_PORT.",
+    "No existing provider secrets or driver configuration are changed.",
+    "build.sh is additive and can be ignored by users who prefer manual CLI startup."
   ],
   "risks": [
-    "Live provider success cannot be proven without user API credentials; automated tests must avoid third-party calls.",
-    "Provider config contains secrets on local disk if users choose stored keys instead of environment variables.",
-    "Nested frontend and bridge tooling are not fully auto-detected by root AppForge quality command discovery, so verification must record explicit nested commands.",
-    "npm lock repair changes many resolved URLs, so build/typecheck must prove the lock remains usable.",
-    "The root no-isolation Python build gate requires setuptools and wheel in the synced dev environment."
+    "First-run dependency installation can fail in restricted network environments; skip flags and existing prepared workspace verification mitigate this.",
+    "Smoke tests can collide with an occupied port; APPFORGE_WEB_PORT allows selecting another loopback port.",
+    "Bridge startup could complicate non-bridge usage; the launcher starts bridge only for llm-bridge driver or explicit APPFORGE_START_LLM_BRIDGE=1.",
+    "Shell cleanup must avoid killing unrelated processes; cleanup stores and kills only launcher-owned PIDs."
   ],
   "rollback": [
-    "Set APPFORGE_DRIVER to codex, claude, generic, or auto to bypass llm-bridge at runtime.",
-    "Delete or move the bridge config file under APPFORGE_LLM_CONFIG or ~/.appforge/llm/providers.json to clear stored provider state.",
-    "Revert appforge/llm_bridge.py, llm_bridge/, /api/llm routes, ProviderSettings UI, driver readiness changes, tests, and rebuilt static assets as one feature slice if removing the feature.",
-    "Restore prior static asset filenames/index.html if rolling back the frontend build.",
-    "Restore the previous package-lock only if the internal-registry lock behavior is intentionally desired again.",
-    "Remove setuptools/wheel from the dev extra only if the build gate is changed back to isolated builds or the environment supplies those packages another way."
+    "Remove build.sh and revert README.md/docs/WEB_APP.md/CHANGELOG.md documentation edits.",
+    "Rerun appforge web manually using existing documented commands.",
+    "If packaged web assets are refreshed by npm build, rebuild from the previous source or restore the prior asset files from Git.",
+    "No database or runtime migration rollback is needed."
   ],
   "definition_of_done": [
-    "FR-001/FR-002: TopBar opens ProviderSettings and UI can list, save, delete, test, and activate provider/model through typed /api/llm helpers.",
-    "FR-003: FastAPI /api/llm proxy endpoints return structured bridge errors and are covered by tests.",
-    "FR-004: create_driver supports llm-bridge aliases and health refuses false-ready states for missing/unconfigured providers.",
-    "FR-005: llm_bridge typecheck passes for registry/config/server/generation endpoints.",
-    "NFR-001: Secret scan passes and raw provider keys are not returned by provider status or provider upsert payloads.",
-    "NFR-002/NFR-003: .venv/bin/python -m pytest -q, npm run typecheck, npm run build, bun test, and bun run typecheck pass.",
-    "Root package build gate passes with python -m build --no-isolation.",
-    "OpenAppForge verification, security, release, and handoff stages complete with required gates."
+    "build.sh exists at repository root and is executable.",
+    "bash -n build.sh passes.",
+    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke passes and cleans up.",
+    ".venv/bin/python -m pytest -q passes.",
+    "npm --prefix frontend run typecheck passes.",
+    "npm --prefix frontend run build passes.",
+    "README.md, docs/WEB_APP.md, and CHANGELOG.md document the launcher.",
+    "AppForge verification, security, release, and handoff stages pass and produce a source archive."
   ]
 }

@@ -1,240 +1,254 @@
 {
   "schema_version": "1.0",
-  "summary": "Bounded loop design for LLM bridge setup, provider testing, health reconciliation, stage generation, and verification. Repeatable reads are safe, provider writes require explicit user action, and model generation is bounded by AppForge stage attempts.",
+  "summary": "Bounded loop design for the build.sh launcher: dependency reconciliation runs once per invocation, bridge health checks are finite, smoke polling has a strict timeout, and cleanup handles only launcher-owned processes.",
   "loops": [
     {
       "id": "LOOP-001",
-      "purpose": "Refresh provider list, active selection, model list, and bridge health while ProviderSettings is open.",
+      "purpose": "Parse and validate launcher arguments without recurrence.",
       "entry_conditions": [
-        "ProviderSettings mounts",
-        "User saves/deletes provider config",
-        "User activates provider/model",
-        "User manually retries after a bridge error"
+        "build.sh process starts"
       ],
       "exit_conditions": [
-        "All requested provider/active/model/health calls resolve",
-        "A bridge/proxy error is shown to the user",
-        "The settings dialog closes or the component unmounts"
+        "All arguments are recognized and mode is selected",
+        "Unknown argument triggers usage output and exit"
       ],
       "guardrails": [
-        "Use same-origin GET requests for refresh reads.",
-        "Do not mutate bridge config during refresh.",
-        "Do not hot-spin; refresh happens on mount or after explicit actions rather than an unbounded tight timer.",
-        "Do not retain raw API key values from the refresh payload."
+        "No side effects before argument validation succeeds.",
+        "Help exits immediately.",
+        "Only one mode branch is selected."
       ],
-      "max_iterations": 4,
-      "feedback_signal": "ProviderSettings loading/error state, configured badges, active provider/model display, and refreshed health banner.",
-      "state_updates": "Reads MEM-001/MEM-002/MEM-004 and writes only MEM-003 session state.",
-      "failure_policy": "Stop the refresh sequence, display the bridge error, keep prior form state where possible, and wait for manual retry.",
+      "max_iterations": 1,
+      "feedback_signal": "Usage text or normal step logging.",
+      "state_updates": "Writes MEM-001 process-local mode/flag variables.",
+      "failure_policy": "Print usage, exit non-zero, and start no child processes.",
       "workflow_steps": [
-        "WF-002"
+        "WF-001"
       ],
       "memory_surfaces": [
-        "MEM-001",
-        "MEM-002",
-        "MEM-003",
-        "MEM-004"
+        "MEM-001"
       ]
     },
     {
       "id": "LOOP-002",
-      "purpose": "Let the user iteratively save, test, delete, and activate provider settings until the selected provider is configured.",
+      "purpose": "Reconcile Python and frontend readiness for a launcher run.",
       "entry_conditions": [
-        "User submits provider save",
-        "User clicks provider test",
-        "User deletes provider config",
-        "User activates provider/model"
+        "Arguments parsed",
+        "Install/build steps are not explicitly skipped"
       ],
       "exit_conditions": [
-        "The requested write/test succeeds and the UI refreshes",
-        "Validation or bridge error is displayed",
-        "User closes the dialog or switches driver/provider"
+        ".venv/bin/appforge is executable",
+        "Packaged frontend assets are built",
+        "A dependency or build command fails"
       ],
       "guardrails": [
-        "Each write requires a user action.",
-        "Provider config writes are scoped to one provider id.",
-        "Stored keys are never echoed back after save.",
-        "Unknown provider ids are rejected by the bridge.",
-        "Deleting the active provider clears active selection."
+        "Run each setup command at most once per launcher invocation.",
+        "Frontend dependency install runs only when frontend/node_modules is missing.",
+        "A failed setup step exits before starting the web server."
       ],
-      "max_iterations": 10,
-      "feedback_signal": "Toast messages, provider configured flag, test result, active provider/model, and /api/health readiness.",
-      "state_updates": "Writes MEM-001 for provider/active state and MEM-003 for transient form/test state; triggers LOOP-001 refresh after successful writes.",
-      "failure_policy": "Do not retry automatically. Preserve previous durable provider config unless the bridge confirms a write. Show the error and wait for corrected user input.",
+      "max_iterations": 2,
+      "feedback_signal": "Step-prefixed terminal messages and command exit status.",
+      "state_updates": "Reads MEM-002/MEM-003 and updates .venv, frontend/node_modules, and appforge/resources/web when not skipped.",
+      "failure_policy": "Exit non-zero with the failing command visible; user can fix dependencies and rerun.",
       "workflow_steps": [
-        "WF-003",
-        "WF-004",
-        "WF-005"
+        "WF-002",
+        "WF-003"
       ],
       "memory_surfaces": [
-        "MEM-001",
-        "MEM-003",
-        "MEM-004"
+        "MEM-002",
+        "MEM-003"
       ]
     },
     {
       "id": "LOOP-003",
-      "purpose": "Reconcile llm-bridge readiness from current environment, bridge health, active selection, registry, and configured-provider state.",
+      "purpose": "Probe or start llm_bridge only when bridge mode is requested.",
       "entry_conditions": [
-        "Frontend requests /api/health",
-        "JobManager health is requested before job creation",
-        "ProviderSettings changes provider config or active selection"
+        "APPFORGE_DRIVER indicates llm-bridge or APPFORGE_START_LLM_BRIDGE=1",
+        "APPFORGE_SKIP_LLM_BRIDGE is not set"
       ],
       "exit_conditions": [
-        "Ready response is returned with configured active provider",
-        "Not-ready response is returned with a specific setup message",
-        "Bridge request times out or fails and the error is returned"
+        "Existing bridge health returns success",
+        "Launcher-started bridge health returns success",
+        "Bun is missing or bridge health timeout expires",
+        "Bridge startup is intentionally skipped"
       ],
       "guardrails": [
-        "Readiness is recomputed and not cached as durable state.",
-        "Bridge ping, active selection, and provider list are all required before claiming ready.",
-        "Missing bridge, missing active provider, unknown provider, and unconfigured provider are separate terminal not-ready states.",
-        "Timeouts are bounded by appforge.llm_bridge client timeouts."
+        "Do not start bridge for default auto/codex/claude/generic drivers.",
+        "Do not kill existing bridge processes not owned by this launcher.",
+        "Bound health attempts by APPFORGE_BRIDGE_TIMEOUT.",
+        "Write bridge output only to ignored runtime log path."
       ],
-      "max_iterations": 3,
-      "feedback_signal": "/api/health driver readiness payload and health banner message.",
-      "state_updates": "Reads MEM-001/MEM-002 and writes no durable state; emits MEM-004 health response.",
-      "failure_policy": "Return not-ready with actionable setup guidance; do not start llm-bridge jobs from a false-ready state.",
+      "max_iterations": 20,
+      "feedback_signal": "Bridge health step messages and .appforge-web/llm-bridge.log for launcher-owned starts.",
+      "state_updates": "Reads MEM-001/MEM-004; may write MEM-004 log and launcher-owned bridge PID.",
+      "failure_policy": "If bridge was required, exit before web launch; if explicitly skipped, continue with existing AppForge readiness behavior.",
       "workflow_steps": [
-        "WF-006"
+        "WF-004"
       ],
       "memory_surfaces": [
         "MEM-001",
-        "MEM-002",
         "MEM-004"
       ]
     },
     {
       "id": "LOOP-004",
-      "purpose": "Run a stage-generation attempt through LLMBridgeDriver and the bridge /generate endpoint.",
+      "purpose": "Run the normal foreground web server until user cancellation.",
       "entry_conditions": [
-        "APPFORGE_DRIVER is llm-bridge, llm_bridge, or llm",
-        "AppForge runner starts a stage attempt",
-        "Bridge has an active configured provider"
+        "Setup is ready",
+        "Mode is normal or --no-open"
       ],
       "exit_conditions": [
-        "Bridge returns generated text and the stage output log is written",
-        "Bridge returns an error and the stage attempt fails",
-        "Generation request times out"
+        "User stops appforge web",
+        "appforge web exits with success or failure"
       ],
       "guardrails": [
-        "Do not auto-retry provider generation inside the driver.",
-        "Use the existing AppForge checkpoint/stage attempt as the idempotency boundary.",
-        "Do not log provider API keys.",
-        "Preserve existing Codex, Claude, auto, and generic driver paths."
+        "Use exec for the foreground web server so signal handling is natural.",
+        "Default to browser opening unless APPFORGE_NO_OPEN=1 or --no-open.",
+        "Do not supervise or restart the server endlessly."
       ],
       "max_iterations": 1,
-      "feedback_signal": "Stage log output, driver process result, and AppForge stage status.",
-      "state_updates": "Reads MEM-001 provider/active config and writes MEM-005 stage evidence through existing AppForge logs/checkpoints.",
-      "failure_policy": "Fail the current stage attempt with the bridge error; operator may fix configuration or provider issue and rerun via AppForge checkpoint flow.",
+      "feedback_signal": "appforge web terminal output and visible browser UI.",
+      "state_updates": "Reads MEM-001/MEM-003/MEM-005; existing web app may update .appforge-web after user jobs.",
+      "failure_policy": "Surface appforge/uvicorn exit code; cleanup launcher-owned bridge process if needed.",
       "workflow_steps": [
-        "WF-007"
+        "WF-005"
       ],
       "memory_surfaces": [
         "MEM-001",
+        "MEM-003",
         "MEM-005"
       ]
     },
     {
       "id": "LOOP-005",
-      "purpose": "Verify implementation across backend, frontend, bridge, and packaged static assets until all required quality gates pass or a concrete blocker is recorded.",
+      "purpose": "Smoke-test web startup without opening a browser.",
       "entry_conditions": [
-        "Implementation changes are complete",
-        "Dependencies are installed or available locally",
-        "OpenAppForge verification/release stages request quality evidence"
+        "--smoke mode selected",
+        "Setup is ready"
       ],
       "exit_conditions": [
-        "Python tests, frontend typecheck/build, bridge typecheck, and AppForge required gates pass",
-        "A command fails with actionable output and the stage is not marked complete until fixed or blocked"
+        "/api/health and / return HTTP 200",
+        "APPFORGE_SMOKE_TIMEOUT expires",
+        "The web process exits before probes pass"
       ],
       "guardrails": [
-        "Record exact commands and results.",
-        "Do not classify skipped AppForge gates as the only verification evidence.",
-        "Do not weaken tests or security checks to pass.",
-        "Avoid live provider calls because credentials are user-supplied and external."
+        "Force no-browser startup.",
+        "Sleep between probes to avoid hot spinning.",
+        "Use a bounded timeout and finite attempts.",
+        "Kill only launcher-owned web and bridge PIDs in the EXIT trap."
       ],
-      "max_iterations": 3,
-      "feedback_signal": "Command exit codes, pytest summary, Vite build output, TypeScript typecheck output, and AppForge gate review.",
-      "state_updates": "Writes verification/release artifacts and generated web assets; does not write provider secrets.",
-      "failure_policy": "Fix scoped regressions and rerun targeted checks. If blocked by missing credentials or external provider availability, record the limitation and keep live-provider proof manual.",
+      "max_iterations": 120,
+      "feedback_signal": "Probe progress, HTTP status, success/failure line, and process cleanup messages.",
+      "state_updates": "Reads MEM-005/MEM-006 and writes only process-local probe status plus existing .appforge-web runtime files.",
+      "failure_policy": "Print failure guidance, cleanup launcher-owned processes, and exit non-zero.",
       "workflow_steps": [
-        "verification",
-        "release"
+        "WF-006"
       ],
       "memory_surfaces": [
         "MEM-005",
         "MEM-006"
       ]
+    },
+    {
+      "id": "LOOP-006",
+      "purpose": "Validate implementation and release evidence after code edits.",
+      "entry_conditions": [
+        "Implementation files changed"
+      ],
+      "exit_conditions": [
+        "All required quality gates pass",
+        "A gate fails and is fixed within the current work cycle",
+        "A true blocker is documented"
+      ],
+      "guardrails": [
+        "Do not claim a gate passed unless the exact command ran successfully.",
+        "Keep failed command output distinct from new fixes.",
+        "Do not rerun indefinitely; stop and investigate repeated identical failures."
+      ],
+      "max_iterations": 3,
+      "feedback_signal": "Command exit status and AppForge verification/release reports.",
+      "state_updates": "Writes verification/release artifacts and may refresh packaged web assets through npm build.",
+      "failure_policy": "Fix actionable failures, otherwise mark the relevant stage blocked with evidence.",
+      "workflow_steps": [
+        "verification",
+        "release",
+        "handoff"
+      ],
+      "memory_surfaces": [
+        "MEM-003",
+        "MEM-006",
+        "MEM-007"
+      ]
     }
   ],
-  "retry_budget": "UI refresh loops are bounded to the current action and stop on success, close, or visible error. Provider write/test actions require explicit user retries. Health reconciliation performs at most the bridge read sequence for each request. LLM generation runs once per AppForge stage attempt. Verification can repeat a failing command up to three fix/verify cycles before recording a blocker.",
-  "convergence": "The feature converges when an active provider is configured and health reports llm-bridge ready, or when health returns a specific not-ready state that tells the user which setup step remains. Verification converges when all local deterministic commands pass and live-provider proof is documented as credential-dependent manual work.",
+  "retry_budget": "Argument parsing runs once. Python/frontend setup commands run at most once per invocation. Bridge health checks use APPFORGE_BRIDGE_TIMEOUT with finite polling. Smoke probes use APPFORGE_SMOKE_TIMEOUT with bounded one-second sleeps. Verification may repeat fix/check cycles up to three times before recording a blocker.",
+  "convergence": "The launcher converges when normal mode execs the existing appforge web server or smoke mode receives HTTP 200 from both /api/health and /. It exits safely on argument errors, dependency/build failures, required bridge failure, web process exit, or smoke timeout.",
   "human_escape_hatches": [
-    "Close ProviderSettings to stop UI configuration work.",
-    "Delete provider config or clear the active provider.",
-    "Set APPFORGE_DRIVER to codex, claude, generic, or auto instead of llm-bridge.",
-    "Fix or remove APPFORGE_LLM_BRIDGE_URL/APPFORGE_LLM_CONFIG values and restart the bridge.",
-    "Rerun or abandon an AppForge stage attempt through the existing checkpoint workflow."
+    "Run ./build.sh --help to inspect options.",
+    "Use Ctrl-C to stop normal foreground web mode.",
+    "Use APPFORGE_SKIP_INSTALL=1 and APPFORGE_SKIP_FRONTEND_BUILD=1 to bypass setup loops in prepared workspaces.",
+    "Use APPFORGE_NO_OPEN=1 or --no-open to suppress browser opening.",
+    "Use APPFORGE_SKIP_LLM_BRIDGE=1 to avoid launcher-owned bridge startup.",
+    "Use APPFORGE_WEB_HOST and APPFORGE_WEB_PORT to choose a different loopback endpoint."
   ],
   "observability": [
-    "ProviderSettings exposes loading, error, configured, active, and test-result states.",
-    "/api/health exposes precise llm-bridge readiness states.",
-    "LLMBridgeDriver writes success/failure through the existing stage log.",
-    "AppForge artifacts record verification commands and release readiness evidence."
+    "Every major loop prints a prefixed status line.",
+    "Smoke mode prints success or timeout and the tested URL.",
+    "Bridge startup logs are written to .appforge-web/llm-bridge.log when launcher-owned.",
+    "Verification reports capture exact commands and pass/fail evidence."
   ],
   "tests": [
     {
-      "name": "readiness-loop-terminal-states",
-      "evidence": "tests/test_web.py test_llm_bridge_health_requires_configured_active_provider verifies missing and configured active provider outcomes."
+      "name": "shell-syntax-loop",
+      "evidence": "bash -n build.sh validates argument/control-flow syntax."
     },
     {
-      "name": "proxy-loop-boundary",
-      "evidence": "tests/test_web.py test_llm_provider_api_proxies_to_bridge verifies provider proxy calls without live external loops."
+      "name": "smoke-convergence-loop",
+      "evidence": "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke proves bounded web probes and cleanup."
     },
     {
-      "name": "frontend-loop-contract",
-      "evidence": "npm run typecheck and npm run build validate ProviderSettings action states and packaged app code."
+      "name": "regression-loop",
+      "evidence": ".venv/bin/python -m pytest -q, npm --prefix frontend run typecheck, and npm --prefix frontend run build pass."
     },
     {
-      "name": "bridge-loop-contract",
-      "evidence": "bun run typecheck validates bridge endpoint and registry control flow."
+      "name": "docs-loop",
+      "evidence": "README.md, docs/WEB_APP.md, and CHANGELOG.md document the launcher behavior and escape hatches."
     }
   ],
   "traceability": [
     {
-      "workflow_step": "WF-002",
+      "workflow_step": "WF-001",
       "loop": "LOOP-001",
-      "memory_surface": "MEM-001, MEM-002, MEM-003, MEM-004"
+      "memory_surface": "MEM-001"
+    },
+    {
+      "workflow_step": "WF-002",
+      "loop": "LOOP-002",
+      "memory_surface": "MEM-002"
     },
     {
       "workflow_step": "WF-003",
       "loop": "LOOP-002",
-      "memory_surface": "MEM-001, MEM-003"
+      "memory_surface": "MEM-003"
     },
     {
       "workflow_step": "WF-004",
-      "loop": "LOOP-002",
-      "memory_surface": "MEM-001, MEM-003"
-    },
-    {
-      "workflow_step": "WF-005",
-      "loop": "LOOP-002",
+      "loop": "LOOP-003",
       "memory_surface": "MEM-001, MEM-004"
     },
     {
-      "workflow_step": "WF-006",
-      "loop": "LOOP-003",
-      "memory_surface": "MEM-001, MEM-002, MEM-004"
+      "workflow_step": "WF-005",
+      "loop": "LOOP-004",
+      "memory_surface": "MEM-001, MEM-003, MEM-005"
     },
     {
-      "workflow_step": "WF-007",
-      "loop": "LOOP-004",
-      "memory_surface": "MEM-001, MEM-005"
+      "workflow_step": "WF-006",
+      "loop": "LOOP-005",
+      "memory_surface": "MEM-005, MEM-006"
     },
     {
       "workflow_step": "verification",
-      "loop": "LOOP-005",
-      "memory_surface": "MEM-005, MEM-006"
+      "loop": "LOOP-006",
+      "memory_surface": "MEM-003, MEM-006, MEM-007"
     }
   ]
 }

@@ -5,7 +5,7 @@
   "stage": "change_plan",
   "status": "completed",
   "attempt": 1,
-  "timestamp": "2026-06-27T08:35:03+00:00",
+  "timestamp": "2026-06-27T09:09:18+00:00",
   "artifacts": {
     "change_plan": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/change_plan.json"
   },
@@ -34,46 +34,51 @@
     "stage_result": {
       "stage": "change_plan",
       "status": "completed",
-      "summary": "Mapped the implemented LLM bridge feature to specific files, requirements, compatibility notes, risks, rollback steps, and executable definition of done.",
+      "summary": "Planned a narrow additive launcher/docs change with executable verification and rollback.",
       "files_changed": [
         ".appforge/artifacts/change_plan.json",
         ".appforge/stage-result.json"
       ],
       "commands_run": [
         {
-          "command": ".venv/bin/python -m appforge prompt . --output .appforge/current-stage.md",
-          "result": "passed; generated the change_plan stage packet"
+          "command": ".venv/bin/python -m appforge prompt . --stage change_plan --output .appforge/current-stage.md",
+          "result": "passed; rendered and read the change-plan stage packet"
         },
         {
-          "command": "git diff --stat -- AppForge-LLM-v4",
-          "result": "passed; reviewed tracked diff stat for target app"
+          "command": ".venv/bin/python -m appforge tool run git_diff --project .",
+          "result": "passed; current diff is AppForge control-plane artifacts/checkpoints only"
         },
         {
-          "command": "git status --short -- AppForge-LLM-v4",
-          "result": "passed; reviewed tracked and untracked target app changes"
+          "command": "git status --short",
+          "result": "passed; product source not edited yet"
         }
       ],
       "checks": [
         {
-          "name": "requirements-mapped",
+          "name": "changes map to requirements",
           "passed": true,
-          "evidence": "change_plan.affected_requirements includes FR-001 through FR-005 and NFR-001 through NFR-004."
+          "evidence": "change_plan.affected_requirements lists FR-001 through FR-005 and NFR-001 through NFR-004; each change names verification."
         },
         {
-          "name": "rollback-defined",
+          "name": "compatibility addressed",
           "passed": true,
-          "evidence": "change_plan.rollback includes runtime bypass, config cleanup, feature revert, static asset restore, and lockfile restore paths."
+          "evidence": "migration_or_compatibility preserves existing CLI, frontend dev, and bridge commands."
         },
         {
-          "name": "definition-of-done-executable",
+          "name": "definition of done executable",
           "passed": true,
-          "evidence": "change_plan.definition_of_done lists exact pytest, npm, bun, secret scan, and OpenAppForge stage completion gates."
+          "evidence": "definition_of_done names exact bash, smoke, pytest, npm, AppForge, and archive outcomes."
         }
       ],
       "decisions": [
         {
-          "decision": "Keep bridge startup as a separate local process in this slice.",
-          "reason": "The accepted requirements need provider configuration and driver usage, while launcher consolidation was explicitly out of scope in the product brief."
+          "decision": "Implement as one additive root shell script plus docs.",
+          "reason": "This meets the user's build.sh request with the smallest surface while leaving existing Python/FastAPI/Vue runtime behavior intact.",
+          "alternatives": [
+            "Change appforge web internals",
+            "Add a new Python CLI command",
+            "Build a separate dev server wrapper"
+          ]
         }
       ],
       "unresolved": []

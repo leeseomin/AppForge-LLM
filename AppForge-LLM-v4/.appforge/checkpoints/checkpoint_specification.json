@@ -5,7 +5,7 @@
   "stage": "specification",
   "status": "completed",
   "attempt": 1,
-  "timestamp": "2026-06-27T08:29:17+00:00",
+  "timestamp": "2026-06-27T09:04:36+00:00",
   "artifacts": {
     "requirements_spec": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/requirements_spec.json"
   },
@@ -35,42 +35,42 @@
     "stage_result": {
       "stage": "specification",
       "status": "completed",
-      "summary": "Defined traceable FR/NFR requirements, scope, assumptions, risks, quality gates, and acceptance criteria for the LLM bridge feature.",
+      "summary": "Defined testable launcher requirements, non-functional safety/repeatability gates, risks, and traceability from the product brief.",
       "files_changed": [
         ".appforge/artifacts/requirements_spec.json",
         ".appforge/stage-result.json"
       ],
       "commands_run": [
         {
-          "command": ".venv/bin/python -m appforge prompt . --output .appforge/current-stage.md",
-          "result": "passed; generated the specification stage packet"
-        },
-        {
-          "command": "cat appforge/resources/schemas/artifacts/requirements_spec.schema.json",
-          "result": "passed; inspected required artifact schema"
+          "command": ".venv/bin/python -m appforge prompt . --stage specification --output .appforge/current-stage.md",
+          "result": "passed; rendered and read the specification stage packet"
         }
       ],
       "checks": [
         {
-          "name": "requirements-stable-ids",
+          "name": "stable requirement IDs",
           "passed": true,
-          "evidence": "requirements_spec.json defines FR-001 through FR-005 and NFR-001 through NFR-004."
+          "evidence": "requirements_spec defines FR-001 through FR-005 and NFR-001 through NFR-004."
         },
         {
-          "name": "acceptance-covers-unhappy-paths",
+          "name": "acceptance criteria cover lifecycle boundaries",
           "passed": true,
-          "evidence": "FR-003 and FR-004 include bridge errors, missing bridge/provider, unknown provider, and unconfigured provider criteria."
+          "evidence": "FR-003 covers smoke startup/probing/cleanup; FR-004 covers optional bridge and env pass-through behavior."
         },
         {
-          "name": "quality-gates-defined",
+          "name": "quality gates executable",
           "passed": true,
-          "evidence": "requirements_spec.json lists Python tests, frontend typecheck/build, and bridge typecheck gates."
+          "evidence": "quality_gates names exact shell, smoke, pytest, typecheck, and build commands."
         }
       ],
       "decisions": [
         {
-          "decision": "Make bridge configured-provider readiness a hard requirement.",
-          "reason": "Bridge reachability without credentials or a valid active provider is not enough for the app to use an external LLM."
+          "decision": "Keep llm_bridge optional in the launcher requirement set.",
+          "reason": "The user requested easier web UI access, while the existing app supports non-bridge drivers; forcing bridge startup would make the default path harder.",
+          "alternatives": [
+            "Always start llm_bridge",
+            "Never support bridge startup from build.sh"
+          ]
         }
       ],
       "unresolved": []

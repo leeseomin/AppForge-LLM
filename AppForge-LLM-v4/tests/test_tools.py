@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import sys
 import zipfile
 
 import pytest
 
+from appforge.tooling.detection import quality_commands
 from appforge.tooling.command import CommandPolicy, run_command
 from appforge.tooling.registry import ToolRegistry
 from appforge.util import safe_resolve
@@ -15,6 +17,22 @@ def test_registry_discovers_unique_tool_contracts() -> None:
     assert len(names) >= 20
     assert len(names) == len(set(names))
     assert {"run_tests", "secret_scan", "archive_workspace", "release_readiness"}.issubset(names)
+
+
+def test_python_quality_commands_use_current_interpreter(tmp_path, monkeypatch) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[build-system]\nrequires = []\nbuild-backend = 'setuptools.build_meta'\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "tests").mkdir()
+    monkeypatch.setenv("PATH", "")
+
+    commands = quality_commands(tmp_path)
+
+    assert commands["tests"] is not None
+    assert commands["tests"][0] == sys.executable
+    assert commands["build"] is not None
+    assert commands["build"][0] == sys.executable
 
 
 def test_workspace_escape_is_rejected(tmp_path) -> None:

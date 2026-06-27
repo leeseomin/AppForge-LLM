@@ -1,83 +1,96 @@
 {
   "schema_version": "1.0",
-  "summary": "The LLM bridge provider-settings feature is implemented, verified, security-reviewed, release-documented, and archived for source handoff. The current web app can configure provider keys through FastAPI /api/llm proxy routes, activate a provider/model, report truthful llm-bridge readiness, and run pipeline stages through the local bridge driver.",
+  "summary": "The build.sh source web-launcher feature is implemented, verified, security-reviewed, release-documented, and archived. A new engineer can run ./build.sh from the source checkout to prepare and open the existing AppForge-LLM v4 web UI, or run the skip-mode smoke command for deterministic local verification.",
   "delivered": [
-    "Local Bun/TypeScript llm_bridge service with provider registry, persisted provider config, active provider/model selection, health, provider test, generate, stream, typecheck, and regression test coverage.",
-    "Python appforge.llm_bridge standard-library HTTP client plus FastAPI /api/llm proxy routes so the browser remains same-origin.",
-    "LLMBridgeDriver and driver aliases llm-bridge, llm_bridge, and llm wired through appforge.drivers.create_driver.",
-    "JobManager readiness checks that require bridge reachability, active provider selection, and configured provider state before APPFORGE_DRIVER=llm-bridge is marked ready.",
-    "Vue ProviderSettings modal integrated into TopBar/App, with API helpers, shared TypeScript types, styling, provider save/delete/test/activate flows, and packaged production web assets.",
-    "Security hardening: bridge provider upsert no longer echoes raw saved provider config or API keys, and bridge responses no longer advertise wildcard CORS.",
-    "Archive hardening: source archiver now ignores .appforge-web, projects, *.egg-info directories, and .DS_Store files; tests cover these exclusions.",
-    "Documentation updates in README.md, docs/WEB_APP.md, and CHANGELOG.md for bridge startup, configuration variables, wheel/source behavior, rollback, and known limitations.",
-    "Release artifacts: dist/openappforge-0.4.0-py3-none-any.whl and dist/openappforge-0.4.0.tar.gz rebuilt from final source.",
+    "Executable repository-root build.sh launcher with --help, --check, --no-open, and --smoke modes.",
+    "Python setup path in build.sh using uv sync --extra dev when available, with python3 venv/pip fallback.",
+    "Frontend setup path in build.sh that installs frontend dependencies only when frontend/node_modules is missing and rebuilds packaged FastAPI web assets.",
+    "Normal launcher path delegating to .venv/bin/appforge web with 127.0.0.1:8787 defaults and browser opening enabled by default.",
+    "Prepared-workspace smoke path that starts appforge web without browser opening, probes /api/health and /, then stops only the launcher-owned server PID.",
+    "Optional llm_bridge reuse/startup path gated by APPFORGE_DRIVER=llm-bridge or APPFORGE_START_LLM_BRIDGE=1, with APPFORGE_SKIP_LLM_BRIDGE=1 as an escape hatch.",
+    "README.md, docs/WEB_APP.md, and CHANGELOG.md updates presenting ./build.sh as the easiest source UI path while preserving existing CLI/frontend commands.",
+    "AppForge quality-command detector fix: Python quality commands now use sys.executable so run_tests and run_build gates execute in the active interpreter even when python is not on PATH.",
+    "Regression coverage in tests/test_tools.py for PATH-empty Python quality command detection.",
+    "Release artifacts: dist/openappforge-0.4.0-py3-none-any.whl and dist/openappforge-0.4.0.tar.gz.",
     "Source archive: .appforge/reports/AppForge-LLM-v4-source.zip with manifest .appforge/reports/AppForge-LLM-v4-source.zip.manifest.json."
   ],
   "quickstart": [
-    "From source: uv sync --extra dev",
-    "Start the bridge: cd llm_bridge && bun install && bun run start",
-    "Start the web app with the bridge driver from the repository root: APPFORGE_DRIVER=llm-bridge .venv/bin/appforge web",
-    "Open http://127.0.0.1:8787, open Provider Settings, save or rely on a provider key, choose/test a model, and activate the provider.",
-    "Alternative CLI compatibility remains: APPFORGE_DRIVER=auto .venv/bin/appforge web, or APPFORGE_DRIVER=generic APPFORGE_AGENT_CMD='my-agent --workspace {workspace} --prompt {prompt_file}' .venv/bin/appforge web.",
-    "Rebuild frontend assets after UI changes: npm --prefix frontend install && npm --prefix frontend run build",
-    "Bridge development checks: cd llm_bridge && bun run typecheck && bun run test",
-    "Backend checks: .venv/bin/python -m pytest -q",
-    "Production package build: env PATH=.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin .venv/bin/python -m appforge tool run run_build --project . --input '{}'"
+    "Fast source UI path: ./build.sh",
+    "Prepared-workspace smoke: APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke",
+    "Prepared-workspace setup check: APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check",
+    "Headless foreground server: ./build.sh --no-open",
+    "Alternate port: APPFORGE_WEB_PORT=8799 ./build.sh",
+    "Optional bridge path: APPFORGE_DRIVER=llm-bridge ./build.sh, or APPFORGE_START_LLM_BRIDGE=1 ./build.sh",
+    "Manual source path remains: python -m venv .venv; source .venv/bin/activate; python -m pip install -e '.[dev]'; npm --prefix frontend install; npm --prefix frontend run build; appforge web",
+    "Core verification: bash -n build.sh; .venv/bin/python -m pytest -q; npm --prefix frontend run typecheck; npm --prefix frontend run build"
   ],
   "architecture_reference": [
-    ".appforge/artifacts/requirements_spec.json maps feature requirements REQ-1 through REQ-7 to provider configuration, backend proxy, llm-bridge driver, readiness, tests, security, and docs.",
-    ".appforge/artifacts/workflow_spec.json defines provider setup, readiness, and stage-generation flows including failure/recovery paths.",
-    ".appforge/artifacts/memory_spec.json defines bridge config retention, browser state, and AppForge checkpoint/artifact retention boundaries.",
-    ".appforge/artifacts/loop_spec.json documents health polling, provider test retry, stage execution, and archive/source handoff loops.",
-    ".appforge/artifacts/change_plan.json records the accepted implementation plan and verification scope.",
-    "Core code references: llm_bridge/src/server.ts, llm_bridge/src/registry.ts, appforge/llm_bridge.py, appforge/web.py, appforge/web_jobs.py, appforge/drivers.py, frontend/src/components/ProviderSettings.vue, frontend/src/api.ts, frontend/src/types.ts.",
-    "Archive hygiene references: appforge/constants.py, appforge/util.py, tests/test_tools.py."
+    ".appforge/artifacts/requirements_spec.json defines FR-001 through FR-005 and NFR-001 through NFR-004 for the launcher.",
+    ".appforge/artifacts/workflow_spec.json defines WF-001 through WF-007 for argument parsing, Python/frontend setup, optional bridge startup, normal web launch, smoke checks, and docs.",
+    ".appforge/artifacts/memory_spec.json defines MEM-001 through MEM-007 for process-local launcher state, dependency readiness, packaged web assets, optional bridge runtime, web runtime, smoke status, and documentation.",
+    ".appforge/artifacts/loop_spec.json defines LOOP-001 through LOOP-006 for bounded setup, bridge, foreground web, smoke, and verification loops.",
+    ".appforge/artifacts/change_plan.json records the accepted implementation plan and rollback.",
+    "Primary source references: build.sh, README.md, docs/WEB_APP.md, CHANGELOG.md, appforge/tooling/detection.py, tests/test_tools.py, appforge/cli.py, appforge/web.py, frontend/vite.config.ts."
   ],
   "verification_reference": [
-    ".appforge/artifacts/verification_report.json contains the main verification record.",
-    ".appforge/artifacts/security_report.json contains threat model, secret scan, SBOM, dependency-audit limitation, and fixed security findings.",
-    ".appforge/artifacts/release_report.json contains final build artifacts, hashes, install smoke, configuration, known issues, and rollback.",
-    ".venv/bin/python -m pytest -q passed with 23 tests and one existing Starlette TestClient deprecation warning.",
-    "npm run typecheck and npm run build passed in frontend/ during verification; packaged assets are present under appforge/resources/web/.",
-    "bun run typecheck passed in llm_bridge/; bun run test passed the no-key-echo/no-wildcard-CORS regression.",
-    "run_build passed after final source changes and rebuilt dist/openappforge-0.4.0-py3-none-any.whl plus dist/openappforge-0.4.0.tar.gz.",
-    "Wheel smoke passed: uv pip install --no-deps --target /private/tmp/appforge-v4-release-install-20260627-1754 dist/openappforge-0.4.0-py3-none-any.whl; PYTHONPATH import check printed 0.4.0, 0.4.0, True.",
-    "archive_workspace passed and wrote .appforge/reports/AppForge-LLM-v4-source.zip with 266 files and 454337 bytes.",
-    "ZIP assertion passed: required bridge/UI files were present and .DS_Store, .appforge, .appforge-web, projects, node_modules, and egg-info paths were absent."
+    ".appforge/artifacts/implementation_report.json documents the launcher implementation decisions and initial checks.",
+    ".appforge/artifacts/verification_report.json contains the full verification record, including the initial AppForge gate failure and detector fix.",
+    ".appforge/artifacts/security_report.json contains the threat model, secret scan result, dependency audit limitation, and residual risks.",
+    ".appforge/artifacts/release_report.json contains build artifacts, hashes, release checks, known issues, and rollback.",
+    "bash -n build.sh passed.",
+    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke passed with approved loopback bind and cleaned up pid 17492.",
+    ".venv/bin/python -m pytest -q passed with 24 tests and one existing Starlette TestClient deprecation warning.",
+    "npm --prefix frontend run typecheck and npm --prefix frontend run build passed.",
+    "AppForge run_tests and run_build passed with skipped=false after the sys.executable detector fix.",
+    "secret_scan passed with findings=[].",
+    "archive_workspace produced .appforge/reports/AppForge-LLM-v4-source.zip with 267 files and 459108 bytes."
   ],
   "operations_reference": [
-    "APPFORGE_DRIVER=llm-bridge enables the bridge driver; auto, codex, claude, and generic remain supported.",
-    "APPFORGE_LLM_BRIDGE_URL defaults to http://127.0.0.1:8788 for FastAPI-to-bridge calls.",
-    "APPFORGE_LLM_PROVIDER optionally overrides the active provider; APPFORGE_MODEL optionally overrides the model.",
-    "Bridge process defaults: APPFORGE_LLM_BRIDGE_HOST=127.0.0.1 and APPFORGE_LLM_BRIDGE_PORT=8788.",
-    "Bridge config defaults to ~/.appforge/llm/providers.json unless APPFORGE_LLM_CONFIG_DIR or APPFORGE_LLM_CONFIG is set.",
-    "Provider keys may come from the UI or provider environment variables such as OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY, OPENROUTER_API_KEY, and XAI_API_KEY.",
-    "Keep the web server and bridge loopback-only unless an authenticated reverse proxy, host firewall, and OS isolation are in place.",
-    "Runtime rollback: stop the bridge and set APPFORGE_DRIVER back to auto/codex/claude/generic. Provider rollback: delete provider settings in UI or remove the local bridge config file."
+    "APPFORGE_WEB_HOST controls build.sh/appforge web bind host and defaults to 127.0.0.1.",
+    "APPFORGE_WEB_PORT controls build.sh/appforge web bind port and defaults to 8787.",
+    "APPFORGE_NO_OPEN=1 or --no-open suppresses browser opening.",
+    "APPFORGE_SKIP_INSTALL=1 reuses the current .venv.",
+    "APPFORGE_SKIP_FRONTEND_BUILD=1 reuses current packaged web assets.",
+    "APPFORGE_START_LLM_BRIDGE=1 or APPFORGE_DRIVER=llm-bridge requests bridge reuse/startup.",
+    "APPFORGE_SKIP_LLM_BRIDGE=1 leaves bridge management to another terminal/process.",
+    "APPFORGE_LLM_BRIDGE_URL defaults to http://127.0.0.1:8788.",
+    "APPFORGE_SMOKE_TIMEOUT and APPFORGE_BRIDGE_TIMEOUT bound health polling.",
+    "Launcher-owned bridge logs go to APPFORGE_DATA_DIR or .appforge-web by default; this runtime directory is ignored and excluded from source archives."
   ],
   "open_items": [
-    "Live provider connectivity and provider-side authorization were not verified because no API credentials were supplied.",
-    "Online dependency audit is deferred because network downloads are disabled in this AppForge project; the local secret scan and SBOM passed.",
-    "The llm-bridge driver is single-shot per stage and does not perform CLI-agent file editing; use Codex, Claude Code, or generic command driver for fully agentic file edits.",
-    "The Python wheel includes the FastAPI proxy and packaged web UI, but the Bun llm_bridge service is a source-tree component; use the source checkout/source archive or an already-running bridge.",
-    "Setuptools license metadata deprecation warnings remain and should be cleaned up before 2027-Feb-18."
+    "First-run dependency downloads were not exercised because network downloads are disabled in this AppForge runner.",
+    "Online dependency audit was not performed for the same network policy reason.",
+    "generate_sbom currently inventories root manifests only and does not enumerate nested frontend or llm_bridge npm dependencies.",
+    "Setuptools emits existing project.license/classifier deprecation warnings during python -m build; build succeeds, but license metadata should be modernized before the 2027-Feb-18 setuptools deadline.",
+    "Launcher-owned llm_bridge startup was not tested with live provider credentials; provider-backed use still depends on Bun, bridge dependencies, and user/provider configuration."
   ],
   "next_steps": [
-    "Run a live provider smoke with user-owned credentials: start llm_bridge, save/test a provider in the UI, activate a model, and launch a tiny feature request with APPFORGE_DRIVER=llm-bridge.",
-    "Consider packaging or installing the Bun llm_bridge service more ergonomically if wheel-only installation becomes a supported distribution target.",
-    "Modernize pyproject.toml license metadata to remove setuptools deprecation warnings.",
+    "Run ./build.sh from a clean network-approved source checkout to exercise first-run uv/pip/npm preparation.",
     "Run an online dependency audit in an environment where network access is approved.",
-    "Decide whether to expose a one-command launcher that starts both FastAPI and the bridge for local-only use."
+    "Extend AppForge SBOM generation to inspect nested frontend/package.json and llm_bridge/package.json manifests.",
+    "Modernize pyproject.toml license metadata to remove setuptools deprecation warnings.",
+    "Optionally add shell unit tests or a small Bats-style harness for build.sh argument parsing if the launcher grows."
   ],
   "source_archive": {
     "path": ".appforge/reports/AppForge-LLM-v4-source.zip",
     "manifest": ".appforge/reports/AppForge-LLM-v4-source.zip.manifest.json",
-    "files": 266,
-    "bytes": 454337,
-    "exclusion_evidence": "ZIP assertion found bad=[] and missing=[] for required bridge/UI files and excluded runtime/build paths."
+    "files": 267,
+    "bytes": 459108,
+    "sha256": "f8e25671482873e99571802db9a0689d00bb3b4700745baec9430c0ef7f85fe5",
+    "assertions": {
+      "has_build_sh": true,
+      "has_detector_fix": true,
+      "has_regression_test": true,
+      "excludes_git": true,
+      "excludes_appforge": true,
+      "excludes_appforge_web": true,
+      "excludes_venv": true,
+      "excludes_node_modules": true,
+      "excludes_dist": true
+    }
   },
   "build_artifacts": [
-    "dist/openappforge-0.4.0-py3-none-any.whl (216163 bytes, sha256 986c084f71aff449e1d61ee5404f566b166722e8159b2f1cfdd9082127abe6cd)",
-    "dist/openappforge-0.4.0.tar.gz (155218 bytes, sha256 a332f7e6f2c0abd24db9fb372b43c97cff2750f91c0c0cace50cd173d5c94a43)"
+    "dist/openappforge-0.4.0-py3-none-any.whl (212K, sha256 ff941e4447bf868feb30f7a6f5eca9afb8ce8a751b0a3cd6e12944fdddeb7908)",
+    "dist/openappforge-0.4.0.tar.gz (153K, sha256 ccf2be726d212cd2fff55fba020b129e4edd0ef76f7d7c2ea829b2d6930faaef)"
   ]
 }

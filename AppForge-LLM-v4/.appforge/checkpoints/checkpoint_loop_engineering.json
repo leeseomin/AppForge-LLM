@@ -5,7 +5,7 @@
   "stage": "loop_engineering",
   "status": "completed",
   "attempt": 1,
-  "timestamp": "2026-06-27T08:33:38+00:00",
+  "timestamp": "2026-06-27T09:08:21+00:00",
   "artifacts": {
     "loop_spec": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/loop_spec.json"
   },
@@ -34,42 +34,42 @@
     "stage_result": {
       "stage": "loop_engineering",
       "status": "completed",
-      "summary": "Defined bounded loops for settings refresh, provider save/test/activate, health reconciliation, llm-bridge generation, and verification.",
+      "summary": "Defined finite launcher loops for argument parsing, dependency reconciliation, optional bridge health, foreground web mode, smoke probing, cleanup, and verification.",
       "files_changed": [
         ".appforge/artifacts/loop_spec.json",
         ".appforge/stage-result.json"
       ],
       "commands_run": [
         {
-          "command": ".venv/bin/python -m appforge prompt . --output .appforge/current-stage.md",
-          "result": "passed; generated the loop_engineering stage packet"
-        },
-        {
-          "command": "sed -n ... .appforge/current-stage.md and appforge/resources/schemas/artifacts/loop_spec.schema.json",
-          "result": "passed; inspected loop stage packet and schema"
+          "command": ".venv/bin/python -m appforge prompt . --stage loop_engineering --output .appforge/current-stage.md",
+          "result": "passed; rendered and read the loop-engineering stage packet"
         }
       ],
       "checks": [
         {
-          "name": "loop-budgets-present",
+          "name": "entry/exit/budget for every loop",
           "passed": true,
-          "evidence": "loop_spec.json defines max_iterations and failure_policy for LOOP-001 through LOOP-005."
+          "evidence": "loop_spec.loops defines LOOP-001 through LOOP-006 with entry_conditions, exit_conditions, guardrails, max_iterations, feedback_signal, and failure_policy."
         },
         {
-          "name": "no-hidden-infinite-retries",
+          "name": "hot spin prevented",
           "passed": true,
-          "evidence": "Provider writes require explicit user action and LLM generation has max_iterations 1 per stage attempt."
+          "evidence": "LOOP-005 requires one-second bounded smoke sleeps and APPFORGE_SMOKE_TIMEOUT; LOOP-003 bounds bridge health checks."
         },
         {
-          "name": "loop-traceability",
+          "name": "traceability to workflow and memory",
           "passed": true,
-          "evidence": "loop_spec.traceability maps workflow steps WF-002 through WF-007 plus verification to loop IDs and memory surfaces."
+          "evidence": "loop_spec.traceability maps loops to WF steps and MEM surfaces."
         }
       ],
       "decisions": [
         {
-          "decision": "Bound LLM bridge generation to one driver call per AppForge stage attempt.",
-          "reason": "Automatic model retries can duplicate expensive or stateful external calls; the checkpointed stage attempt is the safer recovery boundary."
+          "decision": "Do not add automatic restart supervision for appforge web.",
+          "reason": "The requested UX is a local foreground UI launcher; endless restarts would hide server failures and complicate Ctrl-C behavior.",
+          "alternatives": [
+            "Add a restart loop",
+            "Use a process manager"
+          ]
         }
       ],
       "unresolved": []

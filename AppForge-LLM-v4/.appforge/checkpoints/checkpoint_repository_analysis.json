@@ -5,7 +5,7 @@
   "stage": "repository_analysis",
   "status": "completed",
   "attempt": 1,
-  "timestamp": "2026-06-27T08:27:02+00:00",
+  "timestamp": "2026-06-27T09:03:38+00:00",
   "artifacts": {
     "repository_analysis": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/repository_analysis.json"
   },
@@ -41,7 +41,7 @@
         },
         "artifacts": [],
         "error": null,
-        "duration_seconds": 0.0007,
+        "duration_seconds": 0.0006,
         "command": null
       }
     },
@@ -55,11 +55,11 @@
         "success": true,
         "data": {
           "returncode": 0,
-          "stdout": "## main...origin/main\n D ../.claude/skills/openappforge/SKILL.md\n D ../.github/copilot-instructions.md\n D ../.windsurfrules\n M .gitignore\n M appforge/drivers.py\n D appforge/resources/web/assets/index-3L9V13um.css\n D appforge/resources/web/assets/index-ef0cSNAN.js\n M appforge/resources/web/index.html\n M appforge/web.py\n M appforge/web_jobs.py\n M frontend/package-lock.json\n M frontend/package.json\n M frontend/src/App.vue\n M frontend/src/api.ts\n M frontend/src/components/TopBar.vue\n M frontend/src/styles.css\n M frontend/src/types.ts\n M tests/test_web.py\n?? .appforge/\n?? appforge/llm_bridge.py\n?? appforge/resources/web/assets/index-Bto0ykgx.js\n?? appforge/resources/web/assets/index-C_67LZJ9.css\n?? frontend/.npmrc\n?? frontend/src/components/ProviderSettings.vue\n?? llm_bridge/\n?? uv.lock\n",
+          "stdout": "## main...origin/main\n M .appforge/artifacts/product_brief.json\n M .appforge/artifacts/repository_analysis.json\n M .appforge/checkpoints/checkpoint_intake.json\n M .appforge/project.json\n M .appforge/request.md\n M .appforge/state.json\n",
           "stderr": "",
           "timed_out": false,
           "is_repository": true,
-          "status": "## main...origin/main\n D ../.claude/skills/openappforge/SKILL.md\n D ../.github/copilot-instructions.md\n D ../.windsurfrules\n M .gitignore\n M appforge/drivers.py\n D appforge/resources/web/assets/index-3L9V13um.css\n D appforge/resources/web/assets/index-ef0cSNAN.js\n M appforge/resources/web/index.html\n M appforge/web.py\n M appforge/web_jobs.py\n M frontend/package-lock.json\n M frontend/package.json\n M frontend/src/App.vue\n M frontend/src/api.ts\n M frontend/src/components/TopBar.vue\n M frontend/src/styles.css\n M frontend/src/types.ts\n M tests/test_web.py\n?? .appforge/\n?? appforge/llm_bridge.py\n?? appforge/resources/web/assets/index-Bto0ykgx.js\n?? appforge/resources/web/assets/index-C_67LZJ9.css\n?? frontend/.npmrc\n?? frontend/src/components/ProviderSettings.vue\n?? llm_bridge/\n?? uv.lock\n"
+          "status": "## main...origin/main\n M .appforge/artifacts/product_brief.json\n M .appforge/artifacts/repository_analysis.json\n M .appforge/checkpoints/checkpoint_intake.json\n M .appforge/project.json\n M .appforge/request.md\n M .appforge/state.json\n"
         },
         "artifacts": [],
         "error": null,
@@ -89,54 +89,58 @@
     "stage_result": {
       "stage": "repository_analysis",
       "status": "completed",
-      "summary": "Mapped the AppForge-LLM v4 repository, stack, entry points, change surface, risks, and baseline evidence for the LLM bridge/provider-settings feature.",
+      "summary": "Mapped the real web entry points, stack, baseline status, likely files, and launcher risks before product-code edits.",
       "files_changed": [
         ".appforge/artifacts/repository_analysis.json",
         ".appforge/stage-result.json"
       ],
       "commands_run": [
         {
-          "command": ".venv/bin/python -m appforge prompt . --output .appforge/current-stage.md",
-          "result": "passed; generated the repository_analysis stage packet"
+          "command": ".venv/bin/python -m appforge prompt . --stage repository_analysis --output .appforge/current-stage.md",
+          "result": "passed; rendered and read the repository-analysis stage packet"
         },
         {
-          "command": ".venv/bin/python -m appforge tool run detect_stack --project . --input '{}'",
-          "result": "passed; detected root Python/FastAPI stack"
+          "command": ".venv/bin/python -m appforge tool run detect_stack --project .",
+          "result": "passed; detected Python/FastAPI/pyproject.toml"
         },
         {
-          "command": ".venv/bin/python -m appforge tool run git_status --project . --input '{}'",
-          "result": "passed; captured current dirty worktree including unrelated root-level deletions"
+          "command": ".venv/bin/python -m appforge tool run git_status --project .",
+          "result": "passed; only AppForge control-plane files modified"
         },
         {
-          "command": "cat appforge/resources/schemas/artifacts/repository_analysis.schema.json",
-          "result": "passed; inspected required artifact schema"
+          "command": ".venv/bin/python -m pytest -q",
+          "result": "passed; 23 tests with 1 Starlette TestClient deprecation warning"
+        },
+        {
+          "command": "npm --prefix frontend run typecheck",
+          "result": "passed"
         }
       ],
       "checks": [
         {
-          "name": "entry-points-grounded",
+          "name": "entry points grounded",
           "passed": true,
-          "evidence": "repository_analysis.json lists FastAPI, JobManager, driver, Vue, API helper, bridge, and test entry points."
+          "evidence": "repository_analysis.entry_points cites pyproject.toml, appforge/cli.py, appforge/web.py, frontend/vite.config.ts, README.md, and docs/WEB_APP.md."
         },
         {
-          "name": "baseline-captured",
+          "name": "baseline captured",
           "passed": true,
-          "evidence": "detect_stack and git_status tool outputs were captured; later verification commands are summarized in baseline_status."
+          "evidence": "baseline_status records git status, Python tests, frontend typecheck, and missing launcher scripts."
         },
         {
-          "name": "risk-and-change-surface-identified",
+          "name": "risk and change surface identified",
           "passed": true,
-          "evidence": "repository_analysis.json records risk_areas and files_likely_to_change."
+          "evidence": "risk_areas and files_likely_to_change isolate launcher, docs, smoke, bridge opt-in, and process cleanup risks."
         }
       ],
       "decisions": [
         {
-          "decision": "Record nested frontend and bridge stacks manually in addition to detect_stack output.",
-          "reason": "The built-in detect_stack tool only reported the root pyproject/FastAPI stack, while direct manifests show frontend/package.json and llm_bridge/package.json."
-        },
-        {
-          "decision": "Preserve unrelated root-level deleted files.",
-          "reason": "git_status shows deletions outside AppForge-LLM-v4; they are not part of this feature and should not be reverted."
+          "decision": "Keep launcher outside the Python package as build.sh.",
+          "reason": "The request names build.sh and the existing appforge web command already owns server behavior; a shell wrapper can prepare local source dependencies and then delegate.",
+          "alternatives": [
+            "Add a new Python console script",
+            "Modify appforge web startup semantics directly"
+          ]
         }
       ],
       "unresolved": []

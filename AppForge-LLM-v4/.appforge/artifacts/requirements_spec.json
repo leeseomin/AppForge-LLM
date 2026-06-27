@@ -1,162 +1,180 @@
 {
   "schema_version": "1.0",
-  "summary": "Requirements for making AppForge-LLM v4 configure and use external LLM providers through a local llm_bridge service.",
+  "summary": "Requirements for a one-command build.sh source launcher that prepares and opens the existing AppForge-LLM v4 local web app UI.",
   "scope": {
     "in_scope": [
-      "Same-origin FastAPI /api/llm proxy endpoints for provider management and active model selection",
-      "Vue provider settings UI launched from the current app header",
-      "Local Bun/TypeScript llm_bridge service with provider registry, config persistence, testing, generation, and streaming endpoints",
-      "llm-bridge AgentDriver and truthful JobManager readiness",
-      "Tests and build verification for backend, frontend, and bridge"
+      "Repository-root build.sh launcher for source checkout users.",
+      "Python environment preparation using existing project metadata.",
+      "Frontend dependency/build preparation for packaged FastAPI static assets.",
+      "Delegation to the existing appforge web loopback server with automatic browser opening by default.",
+      "No-browser smoke mode for deterministic verification.",
+      "Optional llm_bridge process startup only when requested by driver/configuration.",
+      "README, web guide, and changelog documentation."
     ],
     "out_of_scope": [
-      "Hosted secret storage, team accounts, billing, deployment, OAuth, or production infrastructure",
-      "Replacing Codex, Claude, generic, or auto driver behavior",
-      "Guaranteeing live third-party provider success without credentials"
+      "Changing AppForge pipeline semantics, job APIs, or Vue UI layout.",
+      "Adding deployment, native desktop packaging, Docker, launch agents, or production process supervision.",
+      "Requiring live third-party LLM credentials.",
+      "Removing or deprecating the existing appforge CLI entry points."
     ]
   },
   "functional_requirements": [
     {
       "id": "FR-001",
-      "statement": "The web UI must let a user open LLM connection settings from the existing top bar.",
+      "statement": "A repository-root build.sh must launch the existing local web app UI as the default source-start path.",
       "priority": "must",
       "acceptance_criteria": [
-        "A visible LLM connection control exists in TopBar.vue.",
-        "Activating the control renders ProviderSettings.vue as a modal/dialog.",
-        "Closing the dialog returns to the existing app without clearing the current job or prompt state."
+        "build.sh exists at repository root and is executable.",
+        "Normal mode delegates to .venv/bin/appforge web or an equivalent local appforge module entry point.",
+        "Default host is 127.0.0.1 and default port is 8787 unless overridden by environment variables.",
+        "Normal mode leaves browser opening enabled through the existing appforge web behavior."
       ]
     },
     {
       "id": "FR-002",
-      "statement": "The settings UI must list providers, accept API key/base URL/default model input, test a provider, delete stored keys, and activate a provider/model.",
+      "statement": "The launcher must prepare source dependencies enough for the packaged web app to run.",
       "priority": "must",
       "acceptance_criteria": [
-        "The UI calls /api/llm/providers, /api/llm/providers/{id}/models, PUT/DELETE /api/llm/providers/{id}, POST /api/llm/providers/{id}/test, and GET/PUT /api/llm/active.",
-        "Stored keys are never shown back to the user; placeholders only identify stored or environment-backed keys.",
-        "Provider changes trigger a health refresh so readiness reflects the new state."
+        "If installation is not skipped, the launcher uses uv sync --extra dev when uv is available.",
+        "If uv is unavailable, the launcher creates .venv with python3 and installs -e '.[dev]' through pip.",
+        "If frontend installation/build is not skipped, the launcher installs frontend dependencies when node_modules is missing and runs npm --prefix frontend run build.",
+        "Clear error messages are emitted for missing python3, npm, or required commands."
       ]
     },
     {
       "id": "FR-003",
-      "statement": "The FastAPI app must proxy LLM provider management to the configured local bridge URL and return structured bridge errors.",
+      "statement": "The launcher must support fast, repeatable, non-interactive verification without opening a browser.",
       "priority": "must",
       "acceptance_criteria": [
-        "FastAPI exposes same-origin /api/llm endpoints that delegate to appforge.llm_bridge.",
-        "BridgeError responses include code LLM_BRIDGE_ERROR, a user-facing message, and bridge context when available.",
-        "Tests verify endpoint delegation parameters without live provider calls."
+        "--smoke starts the web server with browser opening disabled.",
+        "--smoke polls /api/health and / until both return HTTP 200 or a bounded timeout expires.",
+        "--smoke terminates the server it started before exiting.",
+        "APPFORGE_SKIP_INSTALL=1 and APPFORGE_SKIP_FRONTEND_BUILD=1 allow smoke checks to reuse already-prepared local dependencies."
       ]
     },
     {
       "id": "FR-004",
-      "statement": "APPFORGE_DRIVER=llm-bridge must be a supported driver/readiness path.",
+      "statement": "The launcher must respect existing runtime configuration and make llm_bridge startup optional.",
       "priority": "must",
       "acceptance_criteria": [
-        "create_driver accepts llm-bridge, llm_bridge, and llm aliases.",
-        "JobManager.health reports llm-bridge ready only when the bridge is reachable and the selected provider is configured.",
-        "Missing bridge, missing active provider, unknown provider, or unconfigured provider produce actionable setup messages."
+        "APPFORGE_DRIVER and other existing AppForge environment variables pass through to appforge web.",
+        "The launcher does not force APPFORGE_DRIVER=llm-bridge.",
+        "When APPFORGE_DRIVER is llm-bridge or APPFORGE_START_LLM_BRIDGE=1 is set, the launcher starts llm_bridge only if Bun is available and no bridge health endpoint is already reachable.",
+        "Bridge startup is skipped when APPFORGE_SKIP_LLM_BRIDGE=1 is set."
       ]
     },
     {
       "id": "FR-005",
-      "statement": "The local bridge service must provide provider registry/config/active-selection/test/generate/stream endpoints.",
+      "statement": "Documentation must present build.sh as the easiest source UI path while preserving CLI compatibility.",
       "priority": "must",
       "acceptance_criteria": [
-        "llm_bridge/src/server.ts exposes health, providers, provider models, upsert/delete, test, active selection, generate, and stream routes.",
-        "Unknown provider IDs are rejected for provider-specific routes and active selection.",
-        "Provider configs are stored locally outside source-controlled files."
+        "README.md fastest-start source instructions show ./build.sh before manual setup commands.",
+        "docs/WEB_APP.md start instructions mention ./build.sh and the smoke/no-open options.",
+        "CHANGELOG.md records the launcher and smoke verification behavior.",
+        "Docs state that existing appforge web and frontend dev commands remain available."
       ]
     }
   ],
   "non_functional_requirements": [
     {
       "id": "NFR-001",
-      "statement": "Secrets must stay local and out of source control.",
-      "measure": "No API keys appear in committed source, tests use fake values, .env patterns remain ignored, and the bridge config path is under APPFORGE_LLM_CONFIG/APPFORGE_LLM_CONFIG_DIR/APPFORGE_DATA_DIR or ~/.appforge/llm."
+      "statement": "The launcher must remain local-first and safe by default.",
+      "measure": "Default host remains 127.0.0.1; no deployment, public bind, destructive operation, or credential collection is added."
     },
     {
       "id": "NFR-002",
-      "statement": "The integration must preserve existing web app and driver behavior.",
-      "measure": "Existing Python suite passes and auto/codex/claude/generic branches remain available in create_driver and driver_readiness."
+      "statement": "The launcher must be deterministic enough for CI-style local smoke checks.",
+      "measure": "bash -n build.sh and APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke both pass in the prepared workspace."
     },
     {
       "id": "NFR-003",
-      "statement": "Frontend and bridge type contracts must be valid.",
-      "measure": "npm run typecheck, npm run build, and bun run typecheck pass."
+      "statement": "The change must preserve existing backend and frontend behavior.",
+      "measure": ".venv/bin/python -m pytest -q, npm --prefix frontend run typecheck, and npm --prefix frontend run build pass after implementation."
     },
     {
       "id": "NFR-004",
-      "statement": "Dependency install must be reproducible from public npm for the frontend.",
-      "measure": "frontend/package-lock.json uses registry.npmjs.org resolved URLs, matching public integrities for corrected packages, and frontend/.npmrc sets replace-registry-host=always."
+      "statement": "Repeat runs should not force slow dependency work when the workspace is already prepared.",
+      "measure": "Environment flags allow install and frontend build steps to be skipped, and frontend install only runs automatically when node_modules is absent."
     }
   ],
   "user_flows": [
-    "User starts llm_bridge, opens AppForge-LLM v4, clicks LLM connection, saves provider credentials, tests the provider, activates a model, and sees health become ready for llm-bridge.",
-    "User runs a job with APPFORGE_DRIVER=llm-bridge and the runner calls the active provider through bridge /generate.",
-    "User has no bridge/provider configured and receives actionable setup guidance instead of a false-ready state."
+    "A source user runs ./build.sh, waits for dependency/build preparation, and the default browser opens http://127.0.0.1:8787 with the existing AppForge web UI.",
+    "A developer runs APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke to verify the packaged UI and health endpoint without browser interaction.",
+    "A provider-backed user runs APPFORGE_DRIVER=llm-bridge ./build.sh and, when Bun is available, the launcher starts or reuses the local bridge before opening the UI."
   ],
   "open_questions": [],
   "assumptions": [
-    "The bridge process is started separately from the FastAPI web process.",
-    "Live provider calls require user credentials and are not exercised in automated tests.",
-    "Single-shot bridge generation is acceptable for llm-bridge driver scope."
+    "Prepared workspaces may use skip flags for faster verification; first-run source setup may require local package-manager access.",
+    "The existing web app remains the authoritative UX; the launcher is only an ergonomic entry point.",
+    "Bridge provider credentials and active model configuration remain managed by existing environment variables and web provider settings."
   ],
   "risks": [
     {
       "id": "R-001",
-      "risk": "Readiness could claim llm-bridge is usable when no configured provider exists.",
-      "impact": "Users start jobs that fail at the first stage.",
-      "mitigation": "Readiness calls list_providers and checks the selected provider's configured flag."
+      "risk": "A smoke run could leave a server running on the configured port.",
+      "impact": "Subsequent runs fail due to port contention.",
+      "mitigation": "Track the started server PID and kill it in an EXIT trap."
     },
     {
       "id": "R-002",
-      "risk": "Provider secrets could leak through UI or tests.",
-      "impact": "Credential exposure.",
-      "mitigation": "Do not return stored keys to the browser; tests use placeholder fake keys only."
+      "risk": "Dependency installation could fail in a network-restricted environment.",
+      "impact": "First-run launcher cannot prepare from scratch.",
+      "mitigation": "Support skip flags for already-prepared workspaces and keep verification explicit about local dependency state."
     },
     {
       "id": "R-003",
-      "risk": "Lockfile points to unreachable internal registry.",
-      "impact": "Frontend verification and rebuilds fail.",
-      "mitigation": "Normalize package-lock resolved URLs and add frontend/.npmrc replace-registry-host=always."
+      "risk": "Forcing bridge startup could block non-bridge users.",
+      "impact": "The default web UI path becomes harder than the CLI.",
+      "mitigation": "Start bridge only when llm-bridge driver or explicit APPFORGE_START_LLM_BRIDGE is selected."
     }
   ],
   "quality_gates": [
     {
       "id": "QG-001",
-      "gate": ".venv/bin/python -m pytest -q",
-      "evidence": "Must pass the full backend/AppForge test suite."
+      "gate": "bash -n build.sh",
+      "evidence": "Shell syntax validates."
     },
     {
       "id": "QG-002",
-      "gate": "npm run typecheck and npm run build in frontend/",
-      "evidence": "Must pass Vue type checking and production web asset build."
+      "gate": "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke",
+      "evidence": "Launcher starts web server, probes /api/health and /, and exits cleanly."
     },
     {
       "id": "QG-003",
-      "gate": "bun run typecheck in llm_bridge/",
-      "evidence": "Must pass TypeScript validation for bridge code."
+      "gate": ".venv/bin/python -m pytest -q",
+      "evidence": "Backend/control-plane regression suite passes."
+    },
+    {
+      "id": "QG-004",
+      "gate": "npm --prefix frontend run typecheck && npm --prefix frontend run build",
+      "evidence": "Frontend TypeScript contract and packaged assets remain valid."
     }
   ],
   "traceability": [
     {
       "from": "product_brief.desired_outcomes[0]",
-      "to": "FR-001, FR-002",
-      "relationship": "UI provider settings outcome"
+      "to": "FR-001",
+      "relationship": "Launcher existence and web server start"
     },
     {
       "from": "product_brief.desired_outcomes[1]",
-      "to": "FR-003, FR-004",
-      "relationship": "FastAPI proxy and readiness outcome"
+      "to": "FR-002, NFR-004",
+      "relationship": "Environment and frontend preparation"
     },
     {
       "from": "product_brief.desired_outcomes[2]",
-      "to": "FR-004",
-      "relationship": "Pipeline driver outcome"
+      "to": "FR-001",
+      "relationship": "Browser-opening default UI path"
     },
     {
       "from": "product_brief.desired_outcomes[3]",
+      "to": "FR-003, NFR-002",
+      "relationship": "No-browser smoke verification"
+    },
+    {
+      "from": "product_brief.desired_outcomes[4]",
       "to": "FR-005",
-      "relationship": "Bridge endpoint outcome"
+      "relationship": "Documentation updates"
     }
   ]
 }

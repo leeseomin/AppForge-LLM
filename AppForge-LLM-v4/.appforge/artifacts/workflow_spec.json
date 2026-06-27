@@ -1,221 +1,273 @@
 {
   "schema_version": "1.0",
-  "summary": "Restartable workflow for configuring a local LLM bridge, proxying provider operations through FastAPI, and using the active provider through APPFORGE_DRIVER=llm-bridge.",
-  "trigger": "A local user opens the AppForge-LLM v4 web app, opens LLM connection settings, configures an external provider, activates a model, then runs AppForge with APPFORGE_DRIVER=llm-bridge.",
+  "summary": "Restartable local workflow for build.sh to prepare source dependencies, build packaged web assets, optionally start llm_bridge, and launch or smoke-test the existing appforge web UI.",
+  "trigger": "A local user or verifier runs ./build.sh with normal mode, --smoke, --no-open, or environment overrides.",
   "inputs": [
     {
-      "name": "bridge_url",
-      "source": "APPFORGE_LLM_BRIDGE_URL or default http://127.0.0.1:32187",
+      "name": "mode",
+      "source": "build.sh arguments: normal, --smoke, --check, --no-open, --help",
       "required": true
     },
     {
-      "name": "provider_id",
-      "source": "ProviderSettings selected provider",
+      "name": "web_host",
+      "source": "APPFORGE_WEB_HOST or default 127.0.0.1",
       "required": true
     },
     {
-      "name": "api_key",
-      "source": "User input or provider environment variable",
-      "required": false,
-      "sensitive": true
+      "name": "web_port",
+      "source": "APPFORGE_WEB_PORT or default 8787",
+      "required": true
     },
     {
-      "name": "base_url",
-      "source": "User input or provider default",
+      "name": "skip_install",
+      "source": "APPFORGE_SKIP_INSTALL",
       "required": false
     },
     {
-      "name": "model",
-      "source": "User input, provider default model, or selected model chip",
+      "name": "skip_frontend_build",
+      "source": "APPFORGE_SKIP_FRONTEND_BUILD",
       "required": false
     },
     {
-      "name": "stage_prompt",
-      "source": "AppForge stage packet passed to LLMBridgeDriver",
-      "required": true
+      "name": "driver",
+      "source": "APPFORGE_DRIVER or existing AppForge default",
+      "required": false
+    },
+    {
+      "name": "bridge_start",
+      "source": "APPFORGE_START_LLM_BRIDGE, APPFORGE_DRIVER=llm-bridge, APPFORGE_SKIP_LLM_BRIDGE, and APPFORGE_LLM_BRIDGE_URL",
+      "required": false
     }
   ],
   "steps": [
     {
       "id": "WF-001",
-      "action": "Render the existing top bar with an LLM connection control and open ProviderSettings on user action.",
-      "success": "The settings dialog opens without mutating the current prompt, job, event, or toast state.",
-      "failure": "The UI keeps the existing app state visible and reports the component/API error through the existing toast path.",
+      "action": "Parse arguments and environment overrides, choose normal/check/smoke behavior, and derive URL and no-open flags.",
+      "success": "The launcher has a single mode, safe loopback defaults, and clear help output.",
+      "failure": "Unknown arguments print usage and exit without starting processes.",
       "reads": [
-        "frontend runtime state"
+        "command line",
+        "environment"
       ],
       "writes": [
-        "settingsOpen session state"
+        "process-local shell variables"
+      ],
+      "requirements": [
+        "FR-001",
+        "FR-003"
       ]
     },
     {
       "id": "WF-002",
-      "action": "Load bridge health, provider list, active selection, and provider models through same-origin /api/llm endpoints.",
-      "success": "ProviderSettings displays configured/unconfigured provider status, current active provider/model, and model choices.",
-      "failure": "Bridge errors are shown as actionable UI messages and no provider config is changed.",
+      "action": "Prepare the Python environment unless APPFORGE_SKIP_INSTALL=1.",
+      "success": "uv sync --extra dev or the venv/pip fallback creates an executable .venv/bin/appforge path.",
+      "failure": "The launcher exits with an actionable message for missing python3, uv/pip failure, or absent appforge command.",
       "reads": [
-        "bridge registry",
-        "bridge local config"
+        "pyproject.toml",
+        "uv.lock",
+        ".venv state"
       ],
       "writes": [
-        "ProviderSettings local form state"
+        ".venv",
+        "editable package metadata"
       ],
+      "idempotency_key": "project root plus pyproject/uv.lock contents",
       "retryable": true,
-      "idempotency_key": "GET method plus provider_id"
+      "requirements": [
+        "FR-002"
+      ]
     },
     {
       "id": "WF-003",
-      "action": "Save provider settings through PUT /api/llm/providers/{provider_id}.",
-      "success": "The bridge stores the provider config locally, returns redacted status, and the UI refreshes providers and health.",
-      "failure": "Validation or bridge failure is returned as LLM_BRIDGE_ERROR; previous provider config remains the source of truth.",
+      "action": "Prepare packaged frontend assets unless APPFORGE_SKIP_FRONTEND_BUILD=1.",
+      "success": "frontend/node_modules exists when needed and npm --prefix frontend run build refreshes appforge/resources/web/.",
+      "failure": "The launcher exits with an actionable npm/build error before starting the web server.",
       "reads": [
-        "provider form state"
+        "frontend/package.json",
+        "frontend/package-lock.json",
+        "frontend/src",
+        "frontend/node_modules"
       ],
       "writes": [
-        "llm bridge config file"
+        "frontend/node_modules when missing",
+        "appforge/resources/web"
       ],
+      "idempotency_key": "frontend/package-lock.json plus frontend/src contents",
       "retryable": true,
-      "idempotency_key": "provider_id plus submitted base_url/default_model/api_key replacement"
+      "requirements": [
+        "FR-002",
+        "NFR-004"
+      ]
     },
     {
       "id": "WF-004",
-      "action": "Test provider connectivity through POST /api/llm/providers/{provider_id}/test.",
-      "success": "The UI displays the bridge test result without exposing secrets.",
-      "failure": "The UI displays the provider error and keeps saved config unchanged.",
+      "action": "Optionally start llm_bridge when requested and not already healthy.",
+      "success": "A reachable bridge is reused, or Bun starts llm_bridge in the background with a cleanup trap for launcher-owned processes.",
+      "failure": "If bridge startup was required for llm-bridge mode and Bun/startup fails, the launcher exits before opening the web UI.",
       "reads": [
-        "bridge provider config",
-        "provider credentials"
+        "APPFORGE_DRIVER",
+        "APPFORGE_START_LLM_BRIDGE",
+        "APPFORGE_SKIP_LLM_BRIDGE",
+        "APPFORGE_LLM_BRIDGE_URL",
+        "llm_bridge/package.json"
       ],
       "writes": [
-        "test result session state"
+        ".appforge-web/llm-bridge.log",
+        "launcher-owned bridge process"
       ],
+      "idempotency_key": "APPFORGE_LLM_BRIDGE_URL health response",
       "retryable": true,
-      "idempotency_key": "provider_id plus test request body"
+      "requirements": [
+        "FR-004"
+      ]
     },
     {
       "id": "WF-005",
-      "action": "Activate a provider/model through PUT /api/llm/active.",
-      "success": "The bridge records the active provider/model; FastAPI health can report llm-bridge readiness when configured.",
-      "failure": "Unknown provider or invalid bridge response is rejected and active selection remains unchanged.",
+      "action": "Launch the existing appforge web server.",
+      "success": "Normal mode execs appforge web with browser opening unless --no-open or APPFORGE_NO_OPEN=1 is set.",
+      "failure": "Uvicorn/appforge startup errors surface in the terminal and the process exits non-zero.",
       "reads": [
-        "provider list",
-        "selected model"
+        ".venv/bin/appforge",
+        "APPFORGE_* runtime variables",
+        "appforge/resources/web"
       ],
       "writes": [
-        "llm bridge active selection"
+        ".appforge-web job/runtime state only when the user starts a job through the UI"
       ],
-      "retryable": true,
-      "idempotency_key": "provider_id plus model"
+      "requirements": [
+        "FR-001",
+        "FR-004"
+      ]
     },
     {
       "id": "WF-006",
-      "action": "Evaluate JobManager health for APPFORGE_DRIVER=llm-bridge.",
-      "success": "Health is ready only when the bridge responds, an active provider exists, the active provider is known, and it is configured.",
-      "failure": "Health returns setup guidance for missing bridge, missing active provider, unknown provider, or unconfigured provider.",
+      "action": "In --smoke mode, start appforge web without browser opening, poll /api/health and /, then terminate launcher-owned processes.",
+      "success": "Both probes return HTTP 200 within the timeout and the launcher exits zero after cleanup.",
+      "failure": "Probe timeout prints log tail guidance, kills launcher-owned processes, and exits non-zero.",
       "reads": [
-        "APPFORGE_DRIVER",
-        "APPFORGE_LLM_BRIDGE_URL",
-        "bridge health",
-        "bridge active selection",
-        "bridge provider list"
+        "http://host:port/api/health",
+        "http://host:port/"
       ],
       "writes": [
-        "health response only"
+        "temporary web process",
+        "optional .appforge-web runtime files"
       ],
+      "idempotency_key": "configured host/port plus started web PID",
       "retryable": true,
-      "idempotency_key": "health poll timestamp-free request"
+      "requirements": [
+        "FR-003",
+        "NFR-002"
+      ]
     },
     {
       "id": "WF-007",
-      "action": "Run an AppForge stage with LLMBridgeDriver calling bridge /generate.",
-      "success": "The bridge returns model text, the driver writes it to the stage output log, and the runner continues its existing checkpoint flow.",
-      "failure": "Bridge failure becomes a driver/stage failure with the provider error preserved in logs without credentials.",
+      "action": "Update source documentation for the new preferred source launcher path.",
+      "success": "README.md, docs/WEB_APP.md, and CHANGELOG.md describe ./build.sh, smoke/no-open behavior, and retained manual CLI commands.",
+      "failure": "Documentation omission fails review and verification traceability.",
       "reads": [
-        "stage prompt",
-        "bridge active provider",
-        "provider credentials"
+        "README.md",
+        "docs/WEB_APP.md",
+        "CHANGELOG.md"
       ],
       "writes": [
-        "AppForge stage log/output"
+        "README.md",
+        "docs/WEB_APP.md",
+        "CHANGELOG.md"
       ],
-      "retryable": false,
-      "idempotency_key": "AppForge checkpoint stage attempt"
+      "requirements": [
+        "FR-005"
+      ]
     }
   ],
-  "idempotency": "Read operations are naturally idempotent. Provider save and active-selection operations are last-write-wins for a single provider_id/model tuple. Stage generation is guarded by the existing AppForge stage attempt/checkpoint boundary rather than retried blindly.",
-  "retries": "UI read/test/save actions may be retried manually by the user after errors. Health polling may repeat without side effects. Driver generation should rely on AppForge stage retry semantics so failed stage attempts remain inspectable and do not duplicate checkpoints.",
+  "idempotency": "Normal setup steps are safe to rerun because dependency managers reconcile existing state. Frontend install only runs when node_modules is missing, frontend build overwrites packaged assets deterministically, smoke cleanup kills only PIDs captured by the launcher, and bridge startup first checks the configured health endpoint.",
+  "retries": "Dependency/build steps can be rerun manually after fixing missing tools or network access. Smoke polling uses a bounded timeout and short sleep interval. The launcher does not retry indefinitely or resubmit AppForge jobs.",
   "credentials": [
-    "Provider API keys are entered by the local user or inherited from provider environment variables.",
-    "Secrets are stored only by the local llm_bridge config mechanism or environment, never in Vue state longer than form submission and never echoed back after save.",
-    "FastAPI proxies requests to a localhost bridge URL and does not require browser access to provider credentials."
+    "No credentials are collected by build.sh.",
+    "Existing provider secrets remain in environment variables or llm_bridge config managed by the existing provider-settings flow.",
+    "The launcher must not echo API keys or write .env files."
   ],
   "observability": [
-    "ProviderSettings shows loading, test result, configured state, and active provider/model state.",
-    "JobManager.health exposes driver readiness and actionable setup messages.",
-    "LLMBridgeDriver writes bridge generation output/failure to the existing AppForge stage log path.",
-    "Backend tests assert readiness and proxy delegation behavior without live provider calls."
+    "Launcher prints prefixed step messages for setup, frontend build, bridge, server URL, smoke probes, and cleanup.",
+    "Smoke mode uses terminal status and appforge/uvicorn output to identify failures.",
+    "llm_bridge background startup writes to .appforge-web/llm-bridge.log when launcher-owned."
   ],
-  "manual_override": "A user can close the settings dialog without changing app state, delete provider config, switch active provider/model, change APPFORGE_DRIVER away from llm-bridge, or run the existing Codex/Claude/generic drivers.",
+  "manual_override": "Users can run --help for options, set APPFORGE_SKIP_INSTALL=1 or APPFORGE_SKIP_FRONTEND_BUILD=1 for prepared workspaces, set APPFORGE_NO_OPEN=1 or --no-open for headless startup, set APPFORGE_WEB_HOST/PORT, choose APPFORGE_DRIVER, disable bridge startup with APPFORGE_SKIP_LLM_BRIDGE=1, and stop normal mode with Ctrl-C.",
   "state_model": [
     {
-      "state": "ui_closed",
-      "entry": "Main app loads or user closes ProviderSettings.",
-      "exit": "User clicks the top-bar LLM connection control.",
-      "on_error": "Existing app remains usable."
+      "state": "parsed",
+      "entry": "build.sh starts and validates arguments.",
+      "exit": "Mode, URL, and flags are derived.",
+      "on_error": "Print usage and exit before side effects."
     },
     {
-      "state": "settings_loading",
-      "entry": "ProviderSettings mounts and calls bridge proxy read endpoints.",
-      "exit": "Provider, model, active, and health payloads are loaded.",
-      "on_error": "Show bridge/setup error while leaving provider form editable."
+      "state": "python_ready",
+      "entry": "Python setup begins unless skipped.",
+      "exit": ".venv/bin/appforge is executable.",
+      "on_error": "Exit with setup error."
     },
     {
-      "state": "provider_configured",
-      "entry": "Save succeeds for a provider through the bridge.",
-      "exit": "User deletes config, overwrites config, or chooses another provider.",
-      "on_error": "Preserve previous bridge config."
+      "state": "frontend_ready",
+      "entry": "Frontend setup/build begins unless skipped.",
+      "exit": "Packaged web assets exist and npm build passed or was explicitly skipped.",
+      "on_error": "Exit before server start."
     },
     {
-      "state": "active_ready",
-      "entry": "Active provider exists and is configured; health reports llm-bridge ready.",
-      "exit": "Bridge stops, active provider is deleted, or provider becomes unconfigured.",
-      "on_error": "Health degrades to an actionable not-ready response."
+      "state": "bridge_ready_or_skipped",
+      "entry": "Bridge decision evaluates driver and bridge env.",
+      "exit": "Bridge is healthy, started, or intentionally skipped.",
+      "on_error": "Exit when bridge was required but unavailable."
     },
     {
-      "state": "stage_generating",
-      "entry": "AppForge starts a stage with LLMBridgeDriver.",
-      "exit": "Bridge returns generated text and the stage runner records output.",
-      "on_error": "Stage attempt fails through existing AppForge failure handling."
+      "state": "web_running",
+      "entry": "appforge web starts.",
+      "exit": "Normal mode remains foreground until user stops it, or smoke mode continues to probes.",
+      "on_error": "Surface appforge/uvicorn error and cleanup launcher-owned background processes."
+    },
+    {
+      "state": "smoke_verified",
+      "entry": "Smoke mode probes health and root UI.",
+      "exit": "Both probes pass and cleanup completes.",
+      "on_error": "Timeout/failure exits non-zero after cleanup."
     }
   ],
-  "compensation": "No remote deployment or destructive external effect is part of this feature. Compensation is local: delete provider config, change active provider/model, edit environment variables, or rerun the AppForge stage attempt from its checkpoint.",
-  "concurrency": "The settings UI treats the latest user action as authoritative. Bridge config writes are per-provider last-write-wins. AppForge job execution remains governed by the existing JobManager and stage checkpoint model.",
-  "timeout_policy": "Provider and bridge calls use the bridge/client request timeouts implemented at the API boundary; UI loading states remain bounded by returned promise failure. AppForge stage generation uses the driver process/request timeout behavior and surfaces failures as stage errors.",
+  "compensation": "No deployment or irreversible external side effects occur. If setup/build fails, the user can rerun after fixing dependencies. If smoke starts a process, EXIT cleanup kills launcher-owned web and bridge PIDs. Generated frontend assets can be rebuilt from source, and .appforge-web runtime logs/state are ignored runtime artifacts.",
+  "concurrency": "One build.sh invocation owns only its child PIDs. If another process already uses the web port, appforge web fails or smoke probes time out rather than attempting destructive port cleanup. Bridge reuse is by health probe, not by killing existing bridge processes.",
+  "timeout_policy": "Smoke probes use a bounded timeout controlled by APPFORGE_SMOKE_TIMEOUT with a safe default. Bridge startup health checks use a shorter bounded timeout. Normal web mode has no launcher timeout because it is the intended foreground server.",
   "traceability": [
     {
       "requirement": "FR-001",
-      "workflow_step": "WF-001",
-      "evidence": "Top-bar control opens ProviderSettings without clearing current app state."
+      "workflow_step": "WF-001, WF-005",
+      "evidence": "Argument parsing and appforge web launch define default UI path."
     },
     {
       "requirement": "FR-002",
-      "workflow_step": "WF-002, WF-003, WF-004, WF-005",
-      "evidence": "Settings flow lists providers, saves/deletes config, tests provider connectivity, and activates provider/model."
+      "workflow_step": "WF-002, WF-003",
+      "evidence": "Python and frontend preparation steps."
     },
     {
       "requirement": "FR-003",
-      "workflow_step": "WF-002, WF-003, WF-004, WF-005",
-      "evidence": "Browser uses same-origin /api/llm endpoints and receives structured bridge errors."
+      "workflow_step": "WF-006",
+      "evidence": "Bounded smoke probes and cleanup."
     },
     {
       "requirement": "FR-004",
-      "workflow_step": "WF-006, WF-007",
-      "evidence": "llm-bridge readiness and driver execution are separate guarded states."
+      "workflow_step": "WF-004, WF-005",
+      "evidence": "Environment pass-through and optional bridge start."
     },
     {
       "requirement": "FR-005",
-      "workflow_step": "WF-002, WF-003, WF-004, WF-005, WF-007",
-      "evidence": "Bridge endpoints supply registry/config/active/test/generate behavior."
+      "workflow_step": "WF-007",
+      "evidence": "Documentation update step."
+    },
+    {
+      "requirement": "NFR-001",
+      "workflow_step": "WF-001, WF-005",
+      "evidence": "Loopback defaults and no deployment actions."
+    },
+    {
+      "requirement": "NFR-002",
+      "workflow_step": "WF-006",
+      "evidence": "No-browser deterministic smoke mode."
     }
   ]
 }

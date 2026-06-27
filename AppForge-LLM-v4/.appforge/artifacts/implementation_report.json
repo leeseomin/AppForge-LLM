@@ -1,75 +1,44 @@
 {
   "schema_version": "1.0",
-  "summary": "Implemented the LLM bridge vertical slice across the local bridge service, FastAPI proxy, AppForge driver/readiness path, Vue provider settings UI, backend tests, frontend build assets, and dependency lock repair.",
+  "summary": "Implemented the source-checkout build.sh web launcher as an additive root script with dependency preparation, packaged frontend build support, optional llm_bridge startup, foreground appforge web delegation, bounded smoke verification, and updated source-start documentation.",
   "features_completed": [
-    "Local Bun/TypeScript llm_bridge service with provider registry, config persistence, active selection, provider test, generate, and stream endpoints.",
-    "Bridge regression test proving provider upsert responses do not echo stored API keys.",
-    "Python appforge.llm_bridge HTTP client for bridge health, provider management, active selection, tests, and generation.",
-    "FastAPI /api/llm same-origin provider proxy with structured LLM_BRIDGE_ERROR handling.",
-    "LLMBridgeDriver and driver aliases llm-bridge, llm_bridge, and llm in create_driver.",
-    "JobManager health readiness that refuses false-ready llm-bridge state unless the active provider is known and configured.",
-    "Vue TopBar LLM connection control and ProviderSettings modal for provider save/delete/test/activate flows.",
-    "Frontend API/type extensions and responsive settings styles.",
-    "Backend tests for readiness and provider proxy delegation.",
-    "Regenerated packaged frontend assets under appforge/resources/web.",
-    "Frontend lockfile registry/integrity repair plus .npmrc replace-registry-host=always.",
-    "Python dev extra includes setuptools and wheel so the no-isolation package build gate has the declared build backend available."
+    "Added executable repository-root build.sh with safe loopback defaults, --help, --check, --no-open, and --smoke modes.",
+    "Implemented Python environment preparation through uv sync --extra dev with a python3 venv/pip fallback and clear missing-command errors.",
+    "Implemented frontend preparation that installs frontend dependencies only when node_modules is missing and runs npm --prefix frontend run build unless skipped.",
+    "Delegated normal runtime to .venv/bin/appforge web, preserving browser opening by default and honoring APPFORGE_WEB_HOST, APPFORGE_WEB_PORT, APPFORGE_LOG_LEVEL, APPFORGE_NO_OPEN, and existing APPFORGE_* runtime variables.",
+    "Implemented finite no-browser smoke verification that starts appforge web, probes /api/health and /, then kills only the launcher-owned server PID.",
+    "Implemented optional llm_bridge reuse/startup only when APPFORGE_DRIVER=llm-bridge or APPFORGE_START_LLM_BRIDGE=1 is selected, with APPFORGE_SKIP_LLM_BRIDGE as an escape hatch.",
+    "Updated README.md, docs/WEB_APP.md, and CHANGELOG.md so ./build.sh is the easiest source UI path while preserving manual appforge web and frontend dev commands."
   ],
   "files_changed": [
-    ".gitignore",
-    ".appforge/artifacts/*.json",
-    "pyproject.toml",
-    "uv.lock",
-    "appforge/drivers.py",
-    "appforge/llm_bridge.py",
-    "appforge/web.py",
-    "appforge/web_jobs.py",
-    "appforge/resources/web/index.html",
-    "appforge/resources/web/assets/index-Bto0ykgx.js",
-    "appforge/resources/web/assets/index-C_67LZJ9.css",
-    "appforge/resources/web/assets/index-3L9V13um.css",
-    "appforge/resources/web/assets/index-ef0cSNAN.js",
-    "frontend/.npmrc",
-    "frontend/package-lock.json",
-    "frontend/src/App.vue",
-    "frontend/src/api.ts",
-    "frontend/src/components/ProviderSettings.vue",
-    "frontend/src/components/TopBar.vue",
-    "frontend/src/styles.css",
-    "frontend/src/types.ts",
-    "llm_bridge/package.json",
-    "llm_bridge/tsconfig.json",
-    "llm_bridge/bun.lock",
-    "llm_bridge/src/config.ts",
-    "llm_bridge/src/index.ts",
-    "llm_bridge/src/llm.ts",
-    "llm_bridge/src/registry.ts",
-    "llm_bridge/src/server.ts",
-    "llm_bridge/src/types.ts",
-    "llm_bridge/src/version.ts",
-    "llm_bridge/test/server.test.ts",
-    "llm_bridge/vendor/llm/**",
-    "tests/test_web.py"
+    "build.sh",
+    "README.md",
+    "docs/WEB_APP.md",
+    "CHANGELOG.md",
+    ".appforge/artifacts/implementation_report.json",
+    ".appforge/stage-result.json"
   ],
   "commands_run": [
-    ".venv/bin/python -m appforge prompt . --output .appforge/current-stage.md",
-    ".venv/bin/python -m appforge tool run detect_stack --project . --input '{}'",
-    "git diff --name-status -- AppForge-LLM-v4",
-    "git status --short -- AppForge-LLM-v4"
+    ".venv/bin/python -m appforge prompt . --stage implementation --output .appforge/current-stage.md",
+    "bash -n build.sh",
+    "./build.sh --help",
+    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke (sandbox run failed with local bind operation not permitted)",
+    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke (approved local bind run passed)",
+    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check",
+    "APPFORGE_DRIVER=llm-bridge APPFORGE_SKIP_LLM_BRIDGE=1 APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check",
+    "git diff -- build.sh README.md docs/WEB_APP.md CHANGELOG.md",
+    "rg -n \"build\\.sh|APPFORGE_START_LLM_BRIDGE|APPFORGE_SMOKE_TIMEOUT|--smoke|--no-open|--check\" README.md docs/WEB_APP.md CHANGELOG.md"
   ],
   "decisions": [
-    "Keep bridge provider secrets in the local bridge config/environment and expose only has_key/key_source/status metadata to the browser; provider upsert no longer returns the raw saved config.",
-    "Use the FastAPI server as the same-origin proxy boundary instead of letting the browser call the bridge directly.",
-    "Make configured active provider status part of readiness instead of treating bridge reachability as sufficient.",
-    "Keep bridge generation single-shot per AppForge stage attempt and rely on AppForge checkpoints for reruns.",
-    "Avoid adding a direct frontend dependency on @vue/shared; it remains only a Vue transitive dependency.",
-    "Keep llm_bridge as a separate local process rather than broadening this slice into launcher orchestration.",
-    "Add setuptools and wheel to the dev extra because AppForge's root build gate runs python -m build --no-isolation inside the synced local environment."
+    "Keep build.sh as an additive shell launcher rather than changing appforge web internals, because the existing FastAPI/Vue runtime already owns serving and browser-opening behavior.",
+    "Use APPFORGE_DATA_DIR for launcher smoke and bridge logs so runtime files align with the existing web app state directory.",
+    "Use curl for HTTP health probes because it is available on the target macOS/local shell environment and keeps the launcher independent from Python snippets during polling.",
+    "Run llm_bridge only for explicit bridge mode or APPFORGE_START_LLM_BRIDGE=1 so default auto/codex/claude/generic users are not blocked by Bun or provider setup.",
+    "Keep --smoke and --check skip-friendly so prepared workspaces can verify startup without network-dependent dependency installation."
   ],
   "known_gaps": [
-    "Live third-party provider calls require user-supplied credentials and were not automated.",
-    "Bridge startup remains separate from the FastAPI web server in this slice.",
-    "AppForge detect_stack only detects the root Python/FastAPI app; frontend and bridge checks are recorded explicitly in verification."
+    "First-run dependency installation was not exercised because network downloads are not allowed by the current AppForge runner; skip-mode verification used the prepared workspace.",
+    "Launcher-owned llm_bridge startup was not exercised with Bun because the implementation stage only verified the bridge skip/reuse branch locally; full provider-backed operation still requires user credentials and bridge dependencies."
   ],
   "requirements_covered": [
     "FR-001",
@@ -85,23 +54,28 @@
   "traceability": [
     {
       "requirement": "FR-001",
-      "files": "frontend/src/App.vue, frontend/src/components/TopBar.vue, frontend/src/components/ProviderSettings.vue, frontend/src/styles.css"
+      "files": "build.sh",
+      "evidence": "Executable launcher delegates to .venv/bin/appforge web with 127.0.0.1:8787 defaults and browser opening unless no-open is selected."
     },
     {
       "requirement": "FR-002",
-      "files": "frontend/src/components/ProviderSettings.vue, frontend/src/api.ts, frontend/src/types.ts, appforge/web.py"
+      "files": "build.sh",
+      "evidence": "ensure_python_env and ensure_frontend implement uv/venv/npm setup and skip flags."
     },
     {
       "requirement": "FR-003",
-      "files": "appforge/web.py, appforge/llm_bridge.py, tests/test_web.py"
+      "files": "build.sh",
+      "evidence": "--smoke starts appforge web with --no-open-browser, probes /api/health and /, and cleans up the owned PID."
     },
     {
       "requirement": "FR-004",
-      "files": "appforge/drivers.py, appforge/web_jobs.py, tests/test_web.py"
+      "files": "build.sh",
+      "evidence": "maybe_start_bridge only acts for llm-bridge or APPFORGE_START_LLM_BRIDGE and respects APPFORGE_SKIP_LLM_BRIDGE."
     },
     {
       "requirement": "FR-005",
-      "files": "llm_bridge/src/config.ts, llm_bridge/src/registry.ts, llm_bridge/src/server.ts, llm_bridge/src/llm.ts"
+      "files": "README.md, docs/WEB_APP.md, CHANGELOG.md",
+      "evidence": "Docs promote ./build.sh, smoke/no-open/check options, bridge behavior, and retained CLI/manual commands."
     }
   ]
 }

@@ -1,0 +1,359 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT_DIR"
+
+MODE="serve"
+NO_OPEN=0
+WEB_PID=""
+BRIDGE_PID=""
+
+APPFORGE_WEB_HOST="${APPFORGE_WEB_HOST:-127.0.0.1}"
+APPFORGE_WEB_PORT="${APPFORGE_WEB_PORT:-8787}"
+APPFORGE_LOG_LEVEL="${APPFORGE_LOG_LEVEL:-info}"
+APPFORGE_SMOKE_TIMEOUT="${APPFORGE_SMOKE_TIMEOUT:-30}"
+APPFORGE_BRIDGE_TIMEOUT="${APPFORGE_BRIDGE_TIMEOUT:-15}"
+APPFORGE_LLM_BRIDGE_URL="${APPFORGE_LLM_BRIDGE_URL:-http://127.0.0.1:8788}"
+APPFORGE_RUNTIME_DIR="${APPFORGE_DATA_DIR:-.appforge-web}"
+
+APPFORGE_BIN="$ROOT_DIR/.venv/bin/appforge"
+WEB_URL="http://${APPFORGE_WEB_HOST}:${APPFORGE_WEB_PORT}"
+case "$APPFORGE_RUNTIME_DIR" in
+  /*) APPFORGE_RUNTIME_PATH="$APPFORGE_RUNTIME_DIR" ;;
+  *) APPFORGE_RUNTIME_PATH="$ROOT_DIR/$APPFORGE_RUNTIME_DIR" ;;
+esac
+
+WEB_LOG="$APPFORGE_RUNTIME_PATH/web-smoke.log"
+BRIDGE_LOG="$APPFORGE_RUNTIME_PATH/llm-bridge.log"
+
+export APPFORGE_LLM_BRIDGE_URL
+
+log() {
+  printf '[build.sh] %s\n' "$*"
+}
+
+die() {
+  printf '[build.sh] error: %s\n' "$*" >&2
+  exit 1
+}
+
+have() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+is_true() {
+  case "${1:-}" in
+    1 | true | TRUE | yes | YES | on | ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+usage() {
+  cat <<'USAGE'
+Usage: ./build.sh [--smoke] [--check] [--no-open] [--help]
+
+Prepare and launch the local AppForge-LLM v4 web UI.
+
+Options:
+  --smoke     Start appforge web without opening a browser, probe /api/health and /, then stop it.
+  --check     Prepare Python/frontend dependencies and exit without starting the web server.
+  --no-open   Launch normally but suppress browser opening.
+  -h, --help  Show this help.
+
+Environment:
+  APPFORGE_WEB_HOST                 Bind host, default 127.0.0.1.
+  APPFORGE_WEB_PORT                 Bind port, default 8787.
+  APPFORGE_NO_OPEN=1                Suppress browser opening.
+  APPFORGE_SKIP_INSTALL=1           Reuse the current .venv instead of syncing Python deps.
+  APPFORGE_SKIP_FRONTEND_BUILD=1    Reuse current packaged frontend assets.
+  APPFORGE_DRIVER=llm-bridge        Request the local llm_bridge driver path.
+  APPFORGE_START_LLM_BRIDGE=1       Start or reuse llm_bridge before the web server.
+  APPFORGE_SKIP_LLM_BRIDGE=1        Do not start llm_bridge from this launcher.
+  APPFORGE_LLM_BRIDGE_URL           Bridge health URL base, default http://127.0.0.1:8788.
+  APPFORGE_SMOKE_TIMEOUT            Smoke timeout in seconds, default 30.
+  APPFORGE_BRIDGE_TIMEOUT           Bridge startup timeout in seconds, default 15.
+USAGE
+}
+
+set_mode() {
+  local next_mode="$1"
+  if [[ "$MODE" != "serve" && "$MODE" != "$next_mode" ]]; then
+    die "Choose only one of --smoke or --check."
+  fi
+  MODE="$next_mode"
+}
+
+for arg in "$@"; do
+  case "$arg" in
+    --smoke)
+      set_mode "smoke"
+      ;;
+    --check)
+      set_mode "check"
+      ;;
+    --no-open)
+      NO_OPEN=1
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      die "Unknown argument: $arg"
+      ;;
+  esac
+done
+
+if is_true "${APPFORGE_NO_OPEN:-}"; then
+  NO_OPEN=1
+fi
+
+if [[ "$MODE" == "smoke" ]]; then
+  NO_OPEN=1
+fi
+
+validate_uint() {
+  local name="$1"
+  local value="$2"
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    die "$name must be a positive integer; got '$value'."
+  fi
+  local numeric=$((10#$value))
+  if (( numeric < 1 )); then
+    die "$name must be greater than zero; got '$value'."
+  fi
+}
+
+validate_uint "APPFORGE_WEB_PORT" "$APPFORGE_WEB_PORT"
+WEB_PORT_NUM=$((10#$APPFORGE_WEB_PORT))
+if (( WEB_PORT_NUM > 65535 )); then
+  die "APPFORGE_WEB_PORT must be between 1 and 65535; got '$APPFORGE_WEB_PORT'."
+fi
+validate_uint "APPFORGE_SMOKE_TIMEOUT" "$APPFORGE_SMOKE_TIMEOUT"
+validate_uint "APPFORGE_BRIDGE_TIMEOUT" "$APPFORGE_BRIDGE_TIMEOUT"
+
+cleanup() {
+  local status=$?
+  set +e
+  if [[ -n "${WEB_PID:-}" ]] && kill -0 "$WEB_PID" >/dev/null 2>&1; then
+    log "Stopping web server pid $WEB_PID."
+    kill "$WEB_PID" >/dev/null 2>&1
+    wait "$WEB_PID" >/dev/null 2>&1
+  fi
+  if [[ -n "${BRIDGE_PID:-}" ]] && kill -0 "$BRIDGE_PID" >/dev/null 2>&1; then
+    log "Stopping llm_bridge pid $BRIDGE_PID."
+    kill "$BRIDGE_PID" >/dev/null 2>&1
+    wait "$BRIDGE_PID" >/dev/null 2>&1
+  fi
+  exit "$status"
+}
+
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+require_curl() {
+  have curl || die "curl is required for smoke and bridge health checks."
+}
+
+http_ok() {
+  local url="$1"
+  curl -fsS --max-time 2 --output /dev/null "$url" >/dev/null 2>&1
+}
+
+tail_web_log() {
+  if [[ -f "$WEB_LOG" ]]; then
+    log "Last web server log lines:"
+    tail -n 40 "$WEB_LOG" >&2
+  fi
+}
+
+ensure_python_env() {
+  if is_true "${APPFORGE_SKIP_INSTALL:-}"; then
+    log "Skipping Python dependency sync because APPFORGE_SKIP_INSTALL is set."
+  elif have uv; then
+    log "Syncing Python dependencies with uv."
+    uv sync --extra dev || die "uv sync --extra dev failed."
+  else
+    have python3 || die "python3 is required when uv is unavailable."
+    log "Preparing .venv with python3 and pip."
+    if [[ ! -d "$ROOT_DIR/.venv" ]]; then
+      python3 -m venv "$ROOT_DIR/.venv" || die "python3 -m venv .venv failed."
+    fi
+    "$ROOT_DIR/.venv/bin/python" -m pip install -e '.[dev]' || die "pip install -e '.[dev]' failed."
+  fi
+
+  if [[ ! -x "$APPFORGE_BIN" ]]; then
+    die ".venv/bin/appforge is missing or not executable. Run uv sync --extra dev or unset APPFORGE_SKIP_INSTALL."
+  fi
+}
+
+ensure_frontend() {
+  if is_true "${APPFORGE_SKIP_FRONTEND_BUILD:-}"; then
+    log "Skipping frontend build because APPFORGE_SKIP_FRONTEND_BUILD is set."
+    [[ -f "$ROOT_DIR/appforge/resources/web/index.html" ]] || die "Packaged web assets are missing; run npm --prefix frontend run build."
+    return
+  fi
+
+  have npm || die "npm is required to install/build the frontend."
+  if [[ ! -d "$ROOT_DIR/frontend/node_modules" ]]; then
+    log "Installing frontend dependencies."
+    npm --prefix frontend install || die "npm --prefix frontend install failed."
+  fi
+
+  log "Building packaged frontend assets."
+  npm --prefix frontend run build || die "npm --prefix frontend run build failed."
+  [[ -f "$ROOT_DIR/appforge/resources/web/index.html" ]] || die "Frontend build did not produce appforge/resources/web/index.html."
+}
+
+normalize_driver() {
+  printf '%s' "${1:-auto}" | tr '[:upper:]_' '[:lower:]-'
+}
+
+bridge_health_url() {
+  printf '%s/health' "${APPFORGE_LLM_BRIDGE_URL%/}"
+}
+
+wait_for_bridge() {
+  local deadline=$((SECONDS + APPFORGE_BRIDGE_TIMEOUT))
+  local health_url
+  health_url="$(bridge_health_url)"
+
+  while (( SECONDS < deadline )); do
+    if http_ok "$health_url"; then
+      log "llm_bridge is healthy at $health_url."
+      return 0
+    fi
+    if [[ -n "${BRIDGE_PID:-}" ]] && ! kill -0 "$BRIDGE_PID" >/dev/null 2>&1; then
+      log "llm_bridge exited before becoming healthy. See $BRIDGE_LOG."
+      return 1
+    fi
+    sleep 1
+  done
+
+  log "llm_bridge did not become healthy within ${APPFORGE_BRIDGE_TIMEOUT}s. See $BRIDGE_LOG."
+  return 1
+}
+
+maybe_start_bridge() {
+  local driver
+  driver="$(normalize_driver "${APPFORGE_DRIVER:-auto}")"
+  local requested=0
+  if [[ "$driver" == "llm-bridge" ]] || is_true "${APPFORGE_START_LLM_BRIDGE:-}"; then
+    requested=1
+  fi
+
+  if (( requested == 0 )); then
+    return
+  fi
+
+  if is_true "${APPFORGE_SKIP_LLM_BRIDGE:-}"; then
+    log "Skipping llm_bridge startup because APPFORGE_SKIP_LLM_BRIDGE is set."
+    return
+  fi
+
+  require_curl
+  if http_ok "$(bridge_health_url)"; then
+    log "Reusing healthy llm_bridge at ${APPFORGE_LLM_BRIDGE_URL%/}."
+    return
+  fi
+
+  have bun || die "Bun is required to start llm_bridge. Install Bun, start the bridge manually, or set APPFORGE_SKIP_LLM_BRIDGE=1."
+  [[ -d "$ROOT_DIR/llm_bridge" ]] || die "llm_bridge/ directory is missing."
+
+  if [[ ! -d "$ROOT_DIR/llm_bridge/node_modules" ]]; then
+    if is_true "${APPFORGE_SKIP_INSTALL:-}"; then
+      die "llm_bridge/node_modules is missing and APPFORGE_SKIP_INSTALL is set. Run bun install in llm_bridge or unset APPFORGE_SKIP_INSTALL."
+    fi
+    log "Installing llm_bridge dependencies."
+    (cd "$ROOT_DIR/llm_bridge" && bun install) || die "bun install failed in llm_bridge."
+  fi
+
+  mkdir -p "$APPFORGE_RUNTIME_PATH"
+  log "Starting llm_bridge; logs go to $BRIDGE_LOG."
+  (cd "$ROOT_DIR/llm_bridge" && bun run start >"$BRIDGE_LOG" 2>&1) &
+  BRIDGE_PID=$!
+
+  wait_for_bridge || die "Unable to start a healthy llm_bridge."
+}
+
+build_web_command() {
+  WEB_CMD=("$APPFORGE_BIN" web --host "$APPFORGE_WEB_HOST" --port "$APPFORGE_WEB_PORT" --log-level "$APPFORGE_LOG_LEVEL")
+  if (( NO_OPEN == 1 )); then
+    WEB_CMD+=(--no-open-browser)
+  fi
+}
+
+start_web_background() {
+  mkdir -p "$APPFORGE_RUNTIME_PATH"
+  log "Starting AppForge web smoke server at $WEB_URL."
+  build_web_command
+  "${WEB_CMD[@]}" >"$WEB_LOG" 2>&1 &
+  WEB_PID=$!
+}
+
+wait_for_web_endpoint() {
+  local label="$1"
+  local url="$2"
+  local deadline=$((SECONDS + APPFORGE_SMOKE_TIMEOUT))
+
+  while (( SECONDS < deadline )); do
+    if [[ -n "${WEB_PID:-}" ]] && ! kill -0 "$WEB_PID" >/dev/null 2>&1; then
+      log "Web server exited before $label became ready."
+      tail_web_log
+      return 1
+    fi
+    if http_ok "$url"; then
+      log "$label is ready: $url"
+      return 0
+    fi
+    sleep 1
+  done
+
+  log "Timed out after ${APPFORGE_SMOKE_TIMEOUT}s waiting for $label at $url."
+  tail_web_log
+  return 1
+}
+
+run_smoke() {
+  require_curl
+  start_web_background
+  wait_for_web_endpoint "Health endpoint" "$WEB_URL/api/health" || exit 1
+  wait_for_web_endpoint "Web UI" "$WEB_URL/" || exit 1
+  log "Smoke check passed for $WEB_URL."
+}
+
+run_check() {
+  log "Check passed. AppForge web assets and launcher dependencies are ready."
+}
+
+run_foreground_web() {
+  build_web_command
+  if (( NO_OPEN == 1 )); then
+    log "Launching AppForge web UI at $WEB_URL without opening a browser."
+  else
+    log "Launching AppForge web UI at $WEB_URL and opening the default browser."
+  fi
+  "${WEB_CMD[@]}"
+}
+
+ensure_python_env
+ensure_frontend
+maybe_start_bridge
+
+case "$MODE" in
+  smoke)
+    run_smoke
+    ;;
+  check)
+    run_check
+    ;;
+  serve)
+    run_foreground_web
+    ;;
+  *)
+    die "Unknown launcher mode: $MODE"
+    ;;
+esac

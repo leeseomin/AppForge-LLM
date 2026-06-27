@@ -5,7 +5,7 @@
   "stage": "implementation",
   "status": "completed",
   "attempt": 1,
-  "timestamp": "2026-06-27T08:35:57+00:00",
+  "timestamp": "2026-06-27T09:28:30+00:00",
   "artifacts": {
     "implementation_report": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/implementation_report.json"
   },
@@ -49,66 +49,115 @@
   "review": {
     "passed": true,
     "critical_count": 0,
-    "finding_count": 0,
+    "finding_count": 1,
     "review_focus": [
       "Code matches repository conventions",
       "Requirements are covered by implementation and tests",
       "No placeholder logic or fake success remains"
     ],
-    "findings": []
+    "findings": [
+      {
+        "severity": "suggestion",
+        "criterion": "unresolved",
+        "finding": "Network-disabled runner means first-run dependency downloads are represented by code path and documentation, while verification uses the prepared workspace skip path.",
+        "proposed_change": "Resolve it now or document why it is safely deferred with an owner and verification step."
+      }
+    ]
   },
   "driver": {},
   "metadata": {
     "stage_result": {
       "stage": "implementation",
       "status": "completed",
-      "summary": "Reported the completed LLM bridge vertical slice across bridge, FastAPI, driver/readiness, Vue UI, tests, assets, and dependency lock repair.",
+      "summary": "Added the root build.sh source launcher, verified syntax/help/check/smoke behavior, and documented the web-first startup path.",
       "files_changed": [
+        "build.sh",
+        "README.md",
+        "docs/WEB_APP.md",
+        "CHANGELOG.md",
         ".appforge/artifacts/implementation_report.json",
         ".appforge/stage-result.json"
       ],
       "commands_run": [
         {
-          "command": ".venv/bin/python -m appforge prompt . --output .appforge/current-stage.md",
-          "result": "passed; generated the implementation stage packet"
+          "command": ".venv/bin/python -m appforge prompt . --stage implementation --output .appforge/current-stage.md",
+          "result": "passed; rendered and read the implementation stage packet"
         },
         {
-          "command": ".venv/bin/python -m appforge tool run detect_stack --project . --input '{}'",
-          "result": "passed; detected root Python/FastAPI stack"
+          "command": "bash -n build.sh",
+          "result": "passed; shell syntax validated"
         },
         {
-          "command": "git diff --name-status -- AppForge-LLM-v4",
-          "result": "passed; reviewed tracked implementation file changes"
+          "command": "./build.sh --help",
+          "result": "passed; usage output lists smoke, check, no-open, and environment options"
         },
         {
-          "command": "git status --short -- AppForge-LLM-v4",
-          "result": "passed; reviewed tracked and untracked target app changes"
+          "command": "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke",
+          "result": "first sandbox run failed with local bind operation not permitted; approved local-bind rerun passed and cleaned up pid 16103"
+        },
+        {
+          "command": "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check",
+          "result": "passed; prepared-workspace check mode completed without starting web"
+        },
+        {
+          "command": "APPFORGE_DRIVER=llm-bridge APPFORGE_SKIP_LLM_BRIDGE=1 APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check",
+          "result": "passed; bridge skip escape hatch was honored"
+        },
+        {
+          "command": "rg -n \"build\\.sh|APPFORGE_START_LLM_BRIDGE|APPFORGE_SMOKE_TIMEOUT|--smoke|--no-open|--check\" README.md docs/WEB_APP.md CHANGELOG.md",
+          "result": "passed; docs mention launcher commands and options"
         }
       ],
       "checks": [
         {
-          "name": "implementation-covers-requirements",
+          "name": "FR-001 launcher exists and delegates to appforge web",
           "passed": true,
-          "evidence": "implementation_report.requirements_covered lists FR-001 through FR-005 and NFR-001 through NFR-004."
+          "evidence": "build.sh is executable; build_web_command invokes .venv/bin/appforge web with default host/port and optional --no-open-browser."
         },
         {
-          "name": "known-gaps-truthful",
+          "name": "FR-002 dependency preparation",
           "passed": true,
-          "evidence": "implementation_report.known_gaps states live provider calls need user credentials and bridge startup remains separate."
+          "evidence": "ensure_python_env implements uv sync and venv/pip fallback; ensure_frontend implements conditional npm install plus npm build."
         },
         {
-          "name": "native-detect-stack",
+          "name": "FR-003 smoke loop",
           "passed": true,
-          "evidence": "AppForge detect_stack tool passed for root Python/FastAPI app."
+          "evidence": "Approved APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke returned 0 after /api/health and / HTTP probes."
+        },
+        {
+          "name": "FR-004 bridge optionality",
+          "passed": true,
+          "evidence": "maybe_start_bridge only runs for llm-bridge/APPFORGE_START_LLM_BRIDGE and APPFORGE_SKIP_LLM_BRIDGE=1 --check passed."
+        },
+        {
+          "name": "FR-005 documentation",
+          "passed": true,
+          "evidence": "README.md, docs/WEB_APP.md, and CHANGELOG.md contain ./build.sh, --smoke, --no-open, and bridge option references."
         }
       ],
       "decisions": [
         {
-          "decision": "Defer final command evidence to verification stage.",
-          "reason": "The feature spans Python, nested Vue, and nested Bun packages; verification is the stage designed to record all exact test/typecheck/build gate outputs."
+          "decision": "Implement the UX improvement as one additive shell launcher.",
+          "reason": "The current appforge web command is already the authoritative web UI runtime; a wrapper satisfies the requested easier UX without duplicating server logic.",
+          "alternatives": [
+            "Modify appforge web startup internals",
+            "Add a second Python launcher command",
+            "Require users to run frontend and backend dev servers manually"
+          ]
+        },
+        {
+          "decision": "Use bounded curl probes for smoke and bridge health checks.",
+          "reason": "The smoke path needs deterministic HTTP status evidence and should not spin forever.",
+          "alternatives": [
+            "Use arbitrary sleeps",
+            "Use a Python probe script",
+            "Skip endpoint checks"
+          ]
         }
       ],
-      "unresolved": []
+      "unresolved": [
+        "Network-disabled runner means first-run dependency downloads are represented by code path and documentation, while verification uses the prepared workspace skip path."
+      ]
     },
     "manual_completion": true
   }

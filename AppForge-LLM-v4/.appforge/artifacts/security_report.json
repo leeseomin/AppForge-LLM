@@ -1,77 +1,76 @@
 {
   "schema_version": "1.0",
-  "summary": "Security review passed after fixing two bridge hardening issues: provider upsert no longer echoes raw saved API keys, and the bridge no longer advertises wildcard CORS. Secret scan passed with zero findings.",
+  "summary": "Security review passed for the build.sh launcher and quality-detector fix. The launcher remains loopback-first, does not collect or echo secrets, uses bounded health probes, logs only runtime startup output, and cleans up only PIDs it captured. AppForge secret_scan found zero likely committed credentials.",
   "passed": true,
   "threat_model": [
-    "Assets: provider API keys, bridge provider config, active provider/model selection, AppForge stage prompts/outputs, generated source archives, and local web session state.",
-    "Actors: local user/operator, local browser tab, FastAPI web process, llm_bridge process, external LLM provider APIs, and potentially malicious local web pages trying to reach localhost services.",
-    "Entry points: FastAPI /api/llm endpoints, bridge /providers /active /test /generate /stream endpoints, ProviderSettings form inputs, environment variables, and local provider config file.",
-    "Trust boundaries: browser to FastAPI same-origin boundary, FastAPI to localhost bridge boundary, bridge to external provider boundary, bridge local config file boundary, and generated AppForge artifacts/logs boundary.",
-    "Abuse cases reviewed: raw key echo to browser, committed keys, arbitrary provider id activation, malformed JSON, false-ready driver state, direct browser CORS access to bridge, and logging/storing provider secrets outside the bridge config."
+    "Assets: local provider API keys in existing environment/bridge config, AppForge stage prompts and outputs, generated source archives, packaged web assets, .venv/frontend dependency state, and launcher-owned process PIDs.",
+    "Actors: local user/operator, local browser tab, appforge FastAPI web process, optional local Bun llm_bridge process, dependency managers, external LLM providers, and other local processes that may already occupy configured ports.",
+    "Entry points: build.sh command-line flags, APPFORGE_* environment variables, appforge web host/port, optional llm_bridge health URL, npm/uv/pip/bun dependency commands, and FastAPI /api endpoints served by the existing app.",
+    "Trust boundaries: shell launcher to local filesystem, launcher to child process PIDs, browser to loopback FastAPI, FastAPI to optional loopback bridge, and local config/environment variables to provider-backed generation.",
+    "Abuse cases reviewed: public bind by default, secret echo through logs, shell argument injection, killing unrelated processes, infinite polling, stale bridge reuse, dependency install failure, committed credentials, and test fixtures that contain fake secret-shaped strings."
   ],
   "checks": [
     {
       "check": "Secret scan",
       "passed": "passed",
-      "evidence": ".venv/bin/python -m appforge tool run secret_scan --project . --input '{}' returned success with findings=[] after adding the bridge regression test and CORS hardening."
+      "evidence": ".venv/bin/python -m appforge tool run secret_scan --project . --input '{}' returned success with findings=[]."
     },
     {
-      "check": "Provider secret echo",
-      "passed": "passed",
-      "evidence": "llm_bridge/src/server.ts no longer returns the raw saved provider config from PUT /providers/{id}; bun run test passed a regression asserting the fake key and apiKey field are absent from the response."
-    },
-    {
-      "check": "Bridge CORS boundary",
-      "passed": "passed",
-      "evidence": "llm_bridge/src/server.ts removed Access-Control-Allow-Origin: *; bun run test asserts provider response does not advertise wildcard CORS."
-    },
-    {
-      "check": "Unknown provider validation",
-      "passed": "passed",
-      "evidence": "Bridge provider-specific routes and active selection reject unknown provider ids with UNKNOWN_PROVIDER."
-    },
-    {
-      "check": "Readiness safety",
-      "passed": "passed",
-      "evidence": "tests/test_web.py readiness coverage passed in the full Python suite; llm-bridge is not ready unless active provider is configured."
+      "check": "Dependency audit",
+      "passed": "not run",
+      "evidence": ".venv/bin/python -m appforge tool run dependency_audit --project . --input '{}' failed fast with 'This tool requires allow_network=true'; project network downloads are disabled."
     },
     {
       "check": "SBOM generation",
       "passed": "passed",
-      "evidence": "generate_sbom returned success and wrote .appforge/reports/sbom.cdx.json with components=0 for root manifests detected by AppForge."
+      "evidence": ".venv/bin/python -m appforge tool run generate_sbom --project . --input '{}' returned success and wrote .appforge/reports/sbom.cdx.json with components=0 for root manifests detected by AppForge."
     },
     {
-      "check": "Dependency audit",
-      "passed": "skipped",
-      "evidence": "dependency_audit tool refused to run without allow_network=true; runner network downloads are disabled for this project, so no online audit was performed."
+      "check": "Secret and boundary grep",
+      "passed": "passed",
+      "evidence": "rg review found only documented environment names and test fixtures; no committed real credential or private key was found."
+    },
+    {
+      "check": "Launcher loopback default",
+      "passed": "passed",
+      "evidence": "build.sh defaults APPFORGE_WEB_HOST to 127.0.0.1 and APPFORGE_WEB_PORT to 8787, matching the existing appforge web safe default."
+    },
+    {
+      "check": "Launcher process cleanup",
+      "passed": "passed",
+      "evidence": "cleanup only checks and kills captured WEB_PID and BRIDGE_PID values. Smoke verification stopped pid 17492 and ps -p 17492 showed no remaining process."
+    },
+    {
+      "check": "Launcher secret handling",
+      "passed": "passed",
+      "evidence": "build.sh passes APPFORGE_* environment variables through to appforge web but does not echo provider API key variables or write .env files."
+    },
+    {
+      "check": "Quality detector gate safety",
+      "passed": "passed",
+      "evidence": "appforge/tooling/detection.py now uses sys.executable for Python quality commands rather than trusting PATH; tests/test_tools.py covers PATH-empty detection."
     }
   ],
   "findings": [
     {
-      "severity": "critical",
-      "status": "fixed",
-      "finding": "Bridge provider upsert returned the raw saved provider config, which could echo an API key through FastAPI to the browser.",
-      "fix": "Removed saved config from the response and added llm_bridge/test/server.test.ts regression coverage."
-    },
-    {
       "severity": "suggestion",
-      "status": "fixed",
-      "finding": "Bridge responses used Access-Control-Allow-Origin: *, unnecessary because the web UI uses the FastAPI same-origin proxy.",
-      "fix": "Removed wildcard allow-origin headers and added regression coverage."
+      "status": "documented",
+      "finding": "Online dependency audit was not run because the dependency_audit tool requires allow_network=true and this AppForge project disallows network downloads.",
+      "fix": "Documented the limitation, generated the available local SBOM, and kept deterministic pytest/frontend/build checks green."
     },
     {
       "severity": "suggestion",
       "status": "documented",
-      "finding": "Online dependency audit was not run because the security tool requires network-enabled invocation and this AppForge project disallows network downloads.",
-      "fix": "Documented the limitation and generated the available local SBOM."
+      "finding": "AppForge generate_sbom only inspects root manifests, so frontend/ and llm_bridge/ package manifests are not reflected in the generated component count.",
+      "fix": "Recorded the tooling limitation as residual risk; npm lockfiles remain in source and frontend build/typecheck passed."
     }
   ],
-  "secrets_scan": "passed; AppForge secret_scan found zero likely committed credentials. The bridge regression test constructs its fake key to avoid scanner-shaped literals.",
-  "dependency_audit": "skipped by policy; dependency_audit requires allow_network=true and network downloads are disabled for the project. Local deterministic checks still passed: .venv/bin/python -m pytest -q, bun run test, bun run typecheck, npm run typecheck, npm run build, and AppForge run_build.",
+  "secrets_scan": "passed; AppForge secret_scan found zero likely committed credentials. Manual rg review only found documented environment variable names and synthetic test fixtures.",
+  "dependency_audit": "not run; dependency_audit requires allow_network=true and network downloads are disabled for this project. No online vulnerability audit evidence is claimed.",
   "residual_risks": [
-    "Live provider connectivity and provider-side authorization cannot be verified without user API credentials.",
-    "If a user sets APPFORGE_LLM_BRIDGE_HOST/HOST to a non-loopback interface, the unauthenticated bridge could be reachable beyond the local machine; default host remains 127.0.0.1.",
-    "Provider API keys stored in the local bridge config are protected by best-effort file permissions, but local machine compromise can still expose them.",
-    "Setuptools license metadata deprecation warnings remain from existing pyproject metadata; they do not block the current build but should be cleaned up before the 2027-Feb-18 setuptools deadline."
+    "First-run dependency installation and online dependency audit remain unproven under the network-disabled runner; prepared-workspace checks and local builds passed.",
+    "If a user overrides APPFORGE_WEB_HOST, APPFORGE_LLM_BRIDGE_HOST, HOST, or PORT to a non-loopback interface, the local unauthenticated app or bridge could be exposed beyond the machine; defaults remain loopback.",
+    "Provider API keys remain owned by the existing environment/llm_bridge configuration path, not by build.sh; local machine compromise can still expose local secrets.",
+    "The generated SBOM currently reports root-manifest coverage only and does not enumerate nested frontend or llm_bridge npm dependencies."
   ]
 }
