@@ -1,106 +1,108 @@
 {
   "schema_version": "1.0",
-  "summary": "Verified the build.sh uv compatibility fix against the reported unsupported-sync class, the local uv-sync failure class, the prepared-workspace path, web smoke startup, Python tests, frontend checks, and AppForge quality gates.",
+  "summary": "Verified the LLM settings bridge autostart fix with focused API regressions, the full Python suite, real local bridge provider listing outside the sandbox, web smoke startup, AppForge quality tools, and llm_bridge typecheck/tests.",
   "passed": true,
   "test_commands": [
-    "bash -n build.sh",
-    "APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check",
-    "bash -c 'uv() { printf \"error: unrecognized subcommand '\\''sync'\\''\\n\" >&2; return 2; }; export -f uv; APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check'",
-    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check",
-    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke",
+    ".venv/bin/python -m pytest tests/test_web.py -q",
     ".venv/bin/python -m pytest -q",
-    "npm --prefix frontend run typecheck",
-    "npm --prefix frontend run build",
+    ".venv/bin/python TestClient runtime probe for /api/llm/providers in sandbox",
+    ".venv/bin/python TestClient runtime probe for /api/llm/providers outside sandbox",
+    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke --no-open in sandbox",
+    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke --no-open outside sandbox",
     ".venv/bin/python -m appforge tool run run_tests --project . --input '{}'",
-    ".venv/bin/python -m appforge tool run run_build --project . --input '{}'"
+    ".venv/bin/python -m appforge tool run run_build --project . --input '{}'",
+    ".venv/bin/python -m appforge tool run detect_quality_commands --project . --input '{}'",
+    "bun run typecheck in llm_bridge",
+    "bun test in llm_bridge"
   ],
   "results": [
     {
-      "check": "shell syntax",
+      "check": "focused web LLM settings tests",
       "passed": "true",
-      "evidence": "bash -n build.sh returned success."
+      "evidence": "tests/test_web.py passed 9 tests, including autostart retry, autostart guidance, and HTTP-error preservation cases."
     },
     {
-      "check": "local uv sync failure fallback",
+      "check": "full Python suite",
       "passed": "true",
-      "evidence": "APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check first showed the sandboxed uv cache failure, then fell back to pip editable install without build isolation and completed."
+      "evidence": ".venv/bin/python -m pytest -q passed 27 tests with one pre-existing Starlette TestClient deprecation warning."
     },
     {
-      "check": "unsupported uv sync fallback",
+      "check": "real local bridge autostart",
       "passed": "true",
-      "evidence": "A shell-exported uv function returning unrecognized subcommand 'sync' caused build.sh to skip uv sync and complete through pip fallback."
+      "evidence": "Outside the command sandbox, a TestClient request to /api/llm/providers returned HTTP 200 and provider IDs openai, anthropic, google, openrouter, xai, deepseek, groq, cerebras."
     },
     {
-      "check": "prepared workspace check",
+      "check": "sandbox limitation captured",
       "passed": "true",
-      "evidence": "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check returned success."
+      "evidence": "The same runtime probe inside the sandbox failed with Operation not permitted / Bun listen failure, proving why the successful runtime check needed escalation rather than hiding the failure."
     },
     {
       "check": "web smoke",
       "passed": "true",
-      "evidence": "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke returned HTTP success for /api/health and /, then stopped its web pid."
-    },
-    {
-      "check": "backend tests",
-      "passed": "true",
-      "evidence": ".venv/bin/python -m pytest -q returned 24 passed with one existing Starlette TestClient deprecation warning."
-    },
-    {
-      "check": "frontend typecheck and build",
-      "passed": "true",
-      "evidence": "npm --prefix frontend run typecheck and npm --prefix frontend run build returned success; Vite rebuilt the packaged assets."
+      "evidence": "Outside the command sandbox, APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke --no-open reached /api/health and / then stopped the web process."
     },
     {
       "check": "AppForge run_tests gate",
       "passed": "true",
-      "evidence": "appforge tool run run_tests executed .venv/bin/python -m pytest -q and returned success."
+      "evidence": "appforge tool run run_tests executed .venv/bin/python -m pytest -q successfully."
     },
     {
       "check": "AppForge run_build gate",
       "passed": "true",
-      "evidence": "appforge tool run run_build executed .venv/bin/python -m build --no-isolation and returned success."
+      "evidence": "appforge tool run run_build built sdist and wheel successfully; setuptools license deprecation warnings are pre-existing metadata warnings."
+    },
+    {
+      "check": "llm_bridge typecheck and tests",
+      "passed": "true",
+      "evidence": "bun run typecheck completed tsc --noEmit and bun test passed the llm_bridge server test."
     }
   ],
   "acceptance_results": [
     {
-      "requirement": "FR-002 / WF-002 Python environment preparation",
+      "requirement": "FR-004 / WF-004 bridge startup",
       "passed": "true",
-      "evidence": "uv sync remains preferred, unsupported uv sync falls back to pip, uv sync runtime failure falls back to pip, and .venv/bin/appforge remains executable after setup."
+      "evidence": "The LLM settings API now starts the local bundled bridge on network-level connection failure and retries once, while preserving explicit launcher bridge behavior."
     },
     {
-      "requirement": "FR-003 / LOOP-005 smoke verification",
+      "requirement": "NFR-001 local-first safe default",
       "passed": "true",
-      "evidence": "--smoke reached both the health endpoint and web UI endpoint on 127.0.0.1:8799 and cleaned up the child web process."
+      "evidence": "Autostart is restricted to http loopback hosts and does not manage remote bridge URLs."
     },
     {
-      "requirement": "NFR-002 deterministic local check",
+      "requirement": "NFR-002 deterministic checks",
       "passed": "true",
-      "evidence": "bash syntax, prepared --check, fallback --check, and no-browser smoke all returned success."
+      "evidence": "Focused tests, full pytest, AppForge run_tests/run_build, llm_bridge typecheck/test, and outside-sandbox smoke completed with success."
     },
     {
       "requirement": "NFR-003 preserve backend/frontend behavior",
       "passed": "true",
-      "evidence": "pytest, frontend typecheck, frontend build, and AppForge run_build all passed after the patch."
+      "evidence": "Full Python test suite and package build passed after adding the new Python module and route retry wrapper."
     },
     {
-      "requirement": "MEM-002 dependency-state reconciliation",
+      "requirement": "MEM-004 bridge runtime evidence",
       "passed": "true",
-      "evidence": "The launcher reconciles a uv-created venv missing pip by bootstrapping pip, then performs editable install."
+      "evidence": "Autostart writes llm-bridge.log under the configured runtime directory and shuts down only the process it started."
     },
     {
-      "requirement": "LOOP-002 bounded setup loop",
+      "requirement": "LOOP-003 bounded bridge loop",
       "passed": "true",
-      "evidence": "Each invocation attempts uv sync at most once, then falls back to one pip install path before exiting or continuing."
+      "evidence": "The process manager checks health, starts once under a lock, polls only until APPFORGE_BRIDGE_TIMEOUT, and returns actionable timeout/process-exit guidance."
+    },
+    {
+      "requirement": "LOOP-006 verification loop",
+      "passed": "true",
+      "evidence": "Failed sandbox runtime checks were preserved as failures, then rerun outside sandbox to collect valid localhost evidence."
     }
   ],
-  "coverage": "The reported uv subcommand compatibility failure, the local uv execution failure, prepared-workspace skip mode, web smoke convergence, Python package tests, frontend TypeScript/build, and AppForge required test/build gates were covered. No live external LLM provider call was needed or attempted.",
+  "coverage": "Verification covers the reported connection-refused class, the provider listing path used when the LLM settings dialog opens, failure guidance when autostart cannot run, preservation of bridge HTTP errors, full backend regression behavior, package build, local web smoke, and llm_bridge TypeScript/test health. A live external model call is intentionally not covered because it requires user credentials.",
   "failures": [
-    "Pre-fix reproduction: APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check failed because uv sync could not access /Users/lee/Library/Caches/uv under sandbox restrictions.",
-    "Intermediate failure: the first pip fallback assumed pip existed in a uv-created .venv; fixed by bootstrapping pip with ensurepip.",
-    "Intermediate failure: pip editable install with build isolation tried to download setuptools in a network-restricted run; fixed by using --no-build-isolation when setuptools and wheel are already available."
+    "Sandbox runtime probe failed with localhost Operation not permitted and Bun listen failure; this was rerun outside sandbox and passed.",
+    "Sandbox build.sh --smoke failed because uvicorn could not bind 127.0.0.1; the same command was rerun outside sandbox and passed.",
+    "AppForge run_build emitted pre-existing setuptools license metadata deprecation warnings while returning success."
   ],
   "manual_checks": [
-    "Reviewed build.sh fallback branch ordering for unsupported uv, failed uv sync, missing pip, missing build backend packages, and final .venv/bin/appforge validation.",
-    "Reviewed README.md, docs/WEB_APP.md, and CHANGELOG.md text for uv-or-pip fallback accuracy."
+    "Reviewed appforge/llm_bridge_process.py for loopback-only URL handling, no shell interpolation, bounded timeout, and launcher-owned process cleanup.",
+    "Reviewed appforge/web.py to confirm only status_code 0 BridgeError triggers autostart and retry.",
+    "Reviewed tests/test_web.py to confirm the regression assertions exercise behavior visible to /api/llm/* clients."
   ]
 }

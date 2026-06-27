@@ -5,7 +5,7 @@
   "stage": "implementation",
   "status": "completed",
   "attempt": 1,
-  "timestamp": "2026-06-27T09:47:35+00:00",
+  "timestamp": "2026-06-27T10:06:01+00:00",
   "artifacts": {
     "implementation_report": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/implementation_report.json"
   },
@@ -41,7 +41,7 @@
         },
         "artifacts": [],
         "error": null,
-        "duration_seconds": 0.0009,
+        "duration_seconds": 0.0006,
         "command": null
       }
     }
@@ -49,7 +49,7 @@
   "review": {
     "passed": true,
     "critical_count": 0,
-    "finding_count": 1,
+    "finding_count": 2,
     "review_focus": [
       "Code matches repository conventions",
       "Requirements are covered by implementation and tests",
@@ -59,7 +59,13 @@
       {
         "severity": "suggestion",
         "criterion": "unresolved",
-        "finding": "A first-run pip fallback in a completely empty environment still requires network access or a local package cache for missing dependencies.",
+        "finding": "Live external provider calls still require user API credentials and were not exercised.",
+        "proposed_change": "Resolve it now or document why it is safely deferred with an owner and verification step."
+      },
+      {
+        "severity": "suggestion",
+        "criterion": "unresolved",
+        "finding": "Missing llm_bridge/node_modules requires the user to run bun install rather than doing implicit network installation from settings.",
         "proposed_change": "Resolve it now or document why it is safely deferred with an owner and verification step."
       }
     ]
@@ -69,105 +75,80 @@
     "stage_result": {
       "stage": "implementation",
       "status": "completed",
-      "summary": "Patched build.sh so uv sync is optional rather than mandatory: unsupported or failed uv sync now falls back to a .venv/pip editable install path, including pip bootstrapping for uv-created environments.",
+      "summary": "Implemented lazy local llm_bridge autostart and one-shot retry for LLM settings APIs, with regression coverage and concrete runtime evidence for the previous connection-refused class.",
       "files_changed": [
-        "build.sh",
-        "README.md",
-        "docs/WEB_APP.md",
-        "CHANGELOG.md",
+        "appforge/llm_bridge_process.py",
+        "appforge/web.py",
+        "tests/test_web.py",
         ".appforge/artifacts/implementation_report.json",
         ".appforge/stage-result.json"
       ],
       "commands_run": [
         {
-          "command": "uv --version",
-          "result": "passed; local uv is 0.7.2"
-        },
-        {
-          "command": "APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check",
-          "result": "failed before patch because uv sync could not access the local uv cache; passed after patch by falling back to pip editable install"
-        },
-        {
-          "command": "bash -n build.sh",
-          "result": "passed"
-        },
-        {
-          "command": "bash -c 'uv() { printf \"error: unrecognized subcommand '\\''sync'\\''\\n\" >&2; return 2; }; export -f uv; APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check'",
-          "result": "passed; simulated old uv without sync support and exercised the fallback path"
-        },
-        {
-          "command": "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check",
-          "result": "passed"
-        },
-        {
-          "command": "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke",
-          "result": "passed"
+          "command": ".venv/bin/python -m pytest tests/test_web.py -q",
+          "result": "passed; 9 tests with one existing Starlette TestClient deprecation warning"
         },
         {
           "command": ".venv/bin/python -m pytest -q",
-          "result": "passed, 24 tests"
+          "result": "passed; 27 tests with one existing Starlette TestClient deprecation warning"
         },
         {
-          "command": "npm --prefix frontend run typecheck",
-          "result": "passed"
+          "command": ".venv/bin/python TestClient runtime probe for /api/llm/providers outside sandbox",
+          "result": "passed; HTTP 200 with provider list openai, anthropic, google, openrouter, xai, deepseek, groq, cerebras"
         },
         {
-          "command": "npm --prefix frontend run build",
-          "result": "passed"
+          "command": "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke --no-open outside sandbox",
+          "result": "passed; /api/health and / returned ready and the web process was stopped"
         }
       ],
       "checks": [
         {
-          "name": "reported uv compatibility failure",
+          "name": "connection-refused regression",
           "passed": true,
-          "evidence": "Simulated uv without sync support completed through pip fallback."
+          "evidence": "test_llm_provider_api_autostarts_local_bridge_and_retries covers first-call BridgeError status_code 0, ensure_running, and successful retry."
         },
         {
-          "name": "local uv sync unusable fallback",
+          "name": "autostart guidance",
           "passed": true,
-          "evidence": "Local uv sync cache permission failure completed through pip fallback."
+          "evidence": "test_llm_provider_api_reports_bridge_autostart_guidance proves manager-supplied action/context reaches the API error payload."
         },
         {
-          "name": "launcher syntax",
+          "name": "bridge HTTP error preservation",
           "passed": true,
-          "evidence": "bash -n build.sh returned success."
+          "evidence": "test_llm_provider_api_does_not_autostart_bridge_http_errors returns 404 without calling ensure_running."
+        },
+        {
+          "name": "real local provider listing",
+          "passed": true,
+          "evidence": "Outside-sandbox TestClient run started/reused local llm_bridge and /api/llm/providers returned HTTP 200."
         },
         {
           "name": "web smoke",
           "passed": true,
-          "evidence": "Smoke mode served /api/health and / on 127.0.0.1:8799 and stopped its pid."
-        },
-        {
-          "name": "backend regression",
-          "passed": true,
-          "evidence": ".venv/bin/python -m pytest -q returned 24 passed."
-        },
-        {
-          "name": "frontend regression",
-          "passed": true,
-          "evidence": "npm typecheck and build returned success."
+          "evidence": "Outside-sandbox build.sh --smoke reached /api/health and /, then stopped its web pid."
         }
       ],
       "decisions": [
         {
-          "decision": "Use uv sync only when it is supported and successful.",
-          "reason": "The launcher should work across uv versions and local cache restrictions without forcing a uv upgrade.",
+          "decision": "Autostart only local loopback bridge URLs.",
+          "reason": "The app can safely manage its bundled local bridge, but remote bridge processes are outside the local source checkout boundary.",
           "alternatives": [
-            "Require users to upgrade uv",
-            "Remove uv usage entirely"
+            "Try to start bridge for every URL",
+            "Show only manual instructions"
           ]
         },
         {
-          "decision": "Fallback to .venv/bin/python -m pip install for source dependency setup.",
-          "reason": "This matches the documented manual source path and preserves the existing appforge web runtime contract.",
+          "decision": "Retry only network-level BridgeError responses.",
+          "reason": "Connection refused should be recoverable through autostart, while bridge HTTP errors such as unknown provider or validation failures should remain truthful.",
           "alternatives": [
-            "Call uv pip sync",
-            "Exit with a manual remediation message"
+            "Retry every BridgeError",
+            "Never retry"
           ]
         }
       ],
       "unresolved": [
-        "A first-run pip fallback in a completely empty environment still requires network access or a local package cache for missing dependencies."
+        "Live external provider calls still require user API credentials and were not exercised.",
+        "Missing llm_bridge/node_modules requires the user to run bun install rather than doing implicit network installation from settings."
       ]
     },
     "manual_completion": true

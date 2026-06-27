@@ -1,48 +1,58 @@
 {
   "schema_version": "1.0",
-  "summary": "Security review for the build.sh uv fallback hotfix passed. The change remains local-only, adds no credentials or network endpoint, and secret scanning found no likely committed credentials.",
+  "summary": "Security review passed for the LLM bridge autostart change. The new process manager is restricted to local loopback bridge URLs, starts Bun without shell interpolation, avoids secret logging, and preserves existing provider-secret handling in the bridge.",
   "passed": true,
   "threat_model": [
-    "Asset: local source checkout, .venv, packaged web assets, and loopback appforge web runtime.",
-    "Entry point: build.sh arguments and APPFORGE_* environment variables.",
-    "Trust boundary: local shell environment to local package-manager commands and loopback web process.",
-    "Abuse case: a dependency setup failure could leak sensitive environment values in logs; the launcher logs command names and paths but does not echo provider secrets.",
-    "Abuse case: bridge startup could expose provider secrets; this hotfix does not change bridge handling and bridge remains opt-in.",
-    "Abuse case: fallback package installation could fetch dependencies; this remains a local operator-controlled action and is skipped when APPFORGE_SKIP_INSTALL=1."
+    "Assets: provider API keys, active provider/model selection, local bridge config, AppForge runtime state, and localhost bridge/web ports.",
+    "Actors: local user running the source checkout, browser UI user on the same machine, external LLM provider endpoints, and a misconfigured or unavailable local bridge.",
+    "Entry points: /api/llm/* FastAPI routes, APPFORGE_LLM_BRIDGE_URL, APPFORGE_LLM_BRIDGE_AUTOSTART, APPFORGE_SKIP_LLM_BRIDGE, and the Bun llm_bridge process.",
+    "Trust boundaries: browser to FastAPI same-origin API, FastAPI to local Bun bridge HTTP, local process environment to child Bun process, and bridge to external provider APIs.",
+    "Abuse cases reviewed: command injection through bridge URL, auto-starting arbitrary remote services, leaking API keys in logs/errors, infinite startup polling, killing unrelated bridge processes, and masking real bridge HTTP validation errors."
   ],
   "checks": [
     {
       "check": "secret_scan",
       "passed": "true",
-      "evidence": "appforge tool run secret_scan returned passed=true with findings=[]."
+      "evidence": "appforge tool run secret_scan returned passed true with no findings."
+    },
+    {
+      "check": "dependency_audit",
+      "passed": "not_run",
+      "evidence": "appforge tool run dependency_audit returned This tool requires allow_network=true; network audit was not run in this restricted environment."
     },
     {
       "check": "generate_sbom",
       "passed": "true",
-      "evidence": "appforge tool run generate_sbom wrote .appforge/reports/sbom.cdx.json with components=0."
+      "evidence": "appforge tool run generate_sbom wrote .appforge/reports/sbom.cdx.json with 0 lightweight components."
     },
     {
-      "check": "dependency_audit",
-      "passed": "not run",
-      "evidence": "appforge tool run dependency_audit returned: This tool requires allow_network=true. Network is disabled for this runner."
-    },
-    {
-      "check": "launcher secret handling review",
+      "check": "subprocess command injection review",
       "passed": "true",
-      "evidence": "build.sh fallback logs uv/pip setup state and paths but does not print APPFORGE provider variables or API keys."
+      "evidence": "appforge/llm_bridge_process.py calls subprocess.Popen with argv [\"bun\", \"run\", \"start\"], cwd fixed to the bundled llm_bridge directory, and no shell=True."
     },
     {
-      "check": "local-only boundary review",
+      "check": "loopback boundary review",
       "passed": "true",
-      "evidence": "The patch only changes dependency setup before appforge web launch; default host remains 127.0.0.1 and no deployment or public bind is added."
+      "evidence": "_bridge_bind allows only http URLs with hostname 127.0.0.1, localhost, or ::1 before autostarting a process."
+    },
+    {
+      "check": "secret handling review",
+      "passed": "true",
+      "evidence": "The new manager does not inspect API keys; web.py continues passing apiKey only to the existing llm_bridge client and does not add key logging."
+    },
+    {
+      "check": "bounded loop and process ownership",
+      "passed": "true",
+      "evidence": "ensure_running uses an RLock, one managed process reference, APPFORGE_BRIDGE_TIMEOUT polling, and shutdown only terminates the Popen it created."
     }
   ],
   "findings": [],
-  "secrets_scan": "Passed: appforge tool run secret_scan returned no findings.",
-  "dependency_audit": "Not run: dependency_audit requires allow_network=true and this runner has network disabled.",
+  "secrets_scan": "Passed: no likely committed credentials or private keys were found by appforge secret_scan.",
+  "dependency_audit": "Not run: the AppForge dependency_audit tool requires allow_network=true. No network audit was performed in this environment; package build and SBOM generation still passed.",
   "residual_risks": [
-    "Online dependency vulnerability status is unverified until dependency_audit is run with network access.",
-    "SBOM generation remains lightweight/root-manifest-only and reported zero components.",
-    "A first-run pip fallback may need network access or a package cache for missing dependencies."
+    "Live external provider calls depend on user-supplied API keys and provider-side security; this change did not perform credentialed provider calls.",
+    "The child Bun process inherits the process environment, matching existing bridge behavior so provider environment keys can work; operators should avoid launching with unnecessary secrets in the environment.",
+    "If llm_bridge dependencies are missing, the app returns guidance instead of auto-installing, avoiding implicit network work from a settings request.",
+    "Dependency vulnerability status remains unknown until a network-enabled audit is run."
   ]
 }
