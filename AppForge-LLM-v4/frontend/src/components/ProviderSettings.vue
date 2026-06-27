@@ -4,12 +4,24 @@ import {
   ApiError,
   deleteProvider,
   getActiveProvider,
+  getOAuthProviders,
   getProviders,
+  pollOAuth,
+  quickConnect,
+  refreshOAuth,
   saveProvider,
   setActiveProvider,
+  startOAuth,
   testProvider,
 } from '../api';
-import type { ActiveSelection, ProviderStatus, TestResult } from '../types';
+import type {
+  ActiveSelection,
+  OAuthProvider,
+  OAuthPollResult,
+  ProviderStatus,
+  QuickConnectResult,
+  TestResult,
+} from '../types';
 
 const emit = defineEmits<{
   close: [];
@@ -24,6 +36,7 @@ const loadError = ref('');
 
 const expandedId = ref<string | null>(null);
 const busyId = ref<string | null>(null);
+const showAdvanced = ref(false);
 
 const draft = ref<Record<string, { apiKey: string; baseURL: string; defaultModel: string; useCustomModel: boolean }>>({});
 const testResults = ref<Record<string, TestResult>>({});
@@ -31,8 +44,40 @@ const testResults = ref<Record<string, TestResult>>({});
 const activeProviderId = ref<string>('');
 const activeModel = ref<string>('');
 
+// Quick connect state
+const qcProvider = ref<string>('');
+const qcApiKey = ref<string>('');
+const qcModel = ref<string>('');
+const qcBusy = ref(false);
+const qcResult = ref<QuickConnectResult | null>(null);
+
 const activeProvider = computed(() => providers.value.find((p) => p.id === activeProviderId.value) ?? null);
 const activeModelOptions = computed(() => activeProvider.value?.models ?? []);
+
+const qcProviderEntry = computed(() => providers.value.find((p) => p.id === qcProvider.value) ?? null);
+const qcModelOptions = computed(() => qcProviderEntry.value?.models ?? []);
+const qcModelPlaceholder = computed(() => {
+  const first = qcModelOptions.value[0];
+  return first ? `예: ${first.id}` : '모델 ID';
+});
+const qcNeedsBaseURL = computed(() => Boolean(qcProviderEntry.value?.base_url_required) && !qcProviderEntry.value?.base_url);
+const qcCanSubmit = computed(
+  () => Boolean(qcProvider.value) && qcApiKey.value.trim().length > 0 && (!qcNeedsBaseURL.value || qcBaseURL.value.trim().length > 0),
+);
+const qcBaseURL = ref<string>('');
+
+// OAuth state
+const oauthProviders = ref<OAuthProvider[]>([]);
+const oauthProviderId = ref<string>('');
+const oauthMethod = ref<string>('browser');
+const oauthBusy = ref(false);
+const oauthResult = ref<OAuthPollResult | null>(null);
+const oauthInstructions = ref<string>('');
+const oauthUrl = ref<string>('');
+let oauthPollTimer: ReturnType<typeof setInterval> | null = null;
+
+const oauthProviderEntry = computed(() => oauthProviders.value.find((p) => p.id === oauthProviderId.value) ?? null);
+const oauthMethodOptions = computed(() => oauthProviderEntry.value?.methods ?? []);
 
 onMounted(async () => {
   await reload();
@@ -42,15 +87,134 @@ async function reload() {
   loading.value = true;
   loadError.value = '';
   try {
-    const [providersPayload, activePayload] = await Promise.all([getProviders(), getActiveProvider()]);
+    const [providersPayload, activePayload, oauthPayload] = await Promise.all([
+      getProviders(),
+      getActiveProvider(),
+      getOAuthProviders().catch(() => ({ providers: [] })),
+    ]);
     providers.value = providersPayload.providers;
     active.value = activePayload;
     activeProviderId.value = activePayload.provider ?? providers.value[0]?.id ?? '';
     activeModel.value = activePayload.model ?? '';
+    if (!qcProvider.value && activePayload.provider) qcProvider.value = activePayload.provider;
+    oauthProviders.value = oauthPayload.providers;
+    if (!oauthProviderId.value && oauthProviders.value.length > 0) {
+      oauthProviderId.value = oauthProviders.value[0].id;
+      oauthMethod.value = oauthProviders.value[0].methods[0]?.id ?? 'browser';
+    }
   } catch (error) {
     loadError.value = readableError(error, '프로바이더 목록을 불러오지 못했습니다.');
   } finally {
     loading.value = false;
+  }
+}
+
+function onQcProviderChange() {
+  qcModel.value = '';
+  qcResult.value = null;
+  qcBaseURL.value = qcProviderEntry.value?.base_url ?? '';
+}
+
+function onOauthProviderChange() {
+  oauthResult.value = null;
+  oauthInstructions.value = '';
+  oauthUrl.value = '';
+  stopOAuthPoll();
+  const methods = oauthProviderEntry.value?.methods ?? [];
+  oauthMethod.value = methods[0]?.id ?? 'browser';
+}
+
+function stopOAuthPoll() {
+  if (oauthPollTimer) {
+    clearInterval(oauthPollTimer);
+    oauthPollTimer = null;
+  }
+}
+
+async function runOAuthLogin() {
+  if (!oauthProviderId.value) return;
+  oauthBusy.value = true;
+  oauthResult.value = null;
+  oauthInstructions.value = '';
+  oauthUrl.value = '';
+  stopOAuthPoll();
+  try {
+    const result = await startOAuth({
+      provider: oauthProviderId.value,
+      method: oauthMethod.value,
+    });
+    oauthInstructions.value = result.instructions;
+    oauthUrl.value = result.url;
+    if (oauthMethod.value === 'browser' && result.url) {
+      window.open(result.url, '_blank', 'noopener,noreferrer');
+    }
+    const providerId = oauthProviderId.value;
+    const pollId = result.pollId;
+    oauthPollTimer = setInterval(async () => {
+      try {
+        const pollResult = await pollOAuth(providerId, pollId);
+        if (pollResult.status === 'success') {
+          stopOAuthPoll();
+          oauthResult.value = pollResult;
+          oauthBusy.value = false;
+          emit('toast', `${providerId} OAuth 로그인 성공`);
+          emit('changed');
+          await reload();
+        } else if (pollResult.status === 'failed') {
+          stopOAuthPoll();
+          oauthResult.value = pollResult;
+          oauthBusy.value = false;
+          emit('toast', `OAuth 로그인 실패: ${pollResult.error || '오류'}`);
+        }
+      } catch {
+        // keep polling on transient errors
+      }
+    }, 2000);
+  } catch (error) {
+    const message = readableError(error, 'OAuth 시작에 실패했습니다.');
+    oauthResult.value = { status: 'failed', error: message };
+    oauthBusy.value = false;
+    emit('toast', message);
+  }
+}
+
+async function doRefreshOAuth() {
+  if (!oauthProviderId.value) return;
+  try {
+    await refreshOAuth(oauthProviderId.value);
+    emit('toast', `${oauthProviderId.value} 토큰 갱신됨`);
+  } catch (error) {
+    emit('toast', readableError(error, '토큰 갱신 실패'));
+  }
+}
+
+async function runQuickConnect() {
+  if (!qcCanSubmit.value) return;
+  qcBusy.value = true;
+  qcResult.value = null;
+  try {
+    const result = await quickConnect({
+      provider: qcProvider.value,
+      apiKey: qcApiKey.value.trim(),
+      baseURL: qcNeedsBaseURL.value ? qcBaseURL.value.trim() : qcBaseURL.value.trim() || undefined,
+      model: qcModel.value.trim() || undefined,
+    });
+    qcResult.value = result;
+    if (result.ok) {
+      qcApiKey.value = '';
+      emit('toast', `${result.provider} / ${result.model} 연결 및 활성화 완료`);
+      emit('changed');
+      await reload();
+    } else {
+      const stepLabel = { save: '저장', test: '연결 테스트', activate: '활성화' }[result.step] || result.step;
+      emit('toast', `빠른 연결 실패 (${stepLabel}): ${result.error || '오류'}`);
+    }
+  } catch (error) {
+    const message = readableError(error, '빠른 연결에 실패했습니다.');
+    qcResult.value = { ok: false, step: 'save', error: message, provider: qcProvider.value };
+    emit('toast', message);
+  } finally {
+    qcBusy.value = false;
   }
 }
 
@@ -219,6 +383,131 @@ function readableError(error: unknown, fallback: string) {
       <p v-if="loading" class="settings-empty">프로바이더 목록을 불러오는 중...</p>
       <p v-else-if="loadError" class="settings-error">{{ loadError }}</p>
 
+      <section v-if="!loading && !loadError" class="quick-connect">
+        <h3>빠른 연결</h3>
+        <p class="settings-hint">
+          프로바이더와 API 키만 입력하면 저장 · 연결 테스트 · 활성 모델 설정까지 한 번에 처리됩니다.
+          모델은 비워두면 프로바이더 기본값을 사용합니다.
+        </p>
+        <div class="qc-row">
+          <label class="qc-field qc-provider">
+            <span>프로바이더</span>
+            <select v-model="qcProvider" @change="onQcProviderChange">
+              <option value="" disabled>선택하세요</option>
+              <option v-for="p in providers" :key="p.id" :value="p.id">
+                {{ p.name }} ({{ p.id }})
+              </option>
+            </select>
+          </label>
+          <label class="qc-field qc-key">
+            <span>API 키</span>
+            <input
+              v-model="qcApiKey"
+              type="password"
+              :placeholder="qcProviderEntry ? (qcProviderEntry.has_key ? '저장된 키 사용 중 (덮어쓰려면 입력)' : 'API 키 입력') : '프로바이더 먼저 선택'"
+              autocomplete="off"
+            />
+          </label>
+        </div>
+        <div class="qc-row">
+          <label v-if="qcNeedsBaseURL" class="qc-field qc-base">
+            <span>Base URL <small>(필수)</small></span>
+            <input v-model="qcBaseURL" type="text" :placeholder="qcProviderEntry?.base_url_default || 'https://...'" />
+          </label>
+          <label class="qc-field qc-model">
+            <span>모델 <small>(선택)</small></span>
+            <input
+              v-model="qcModel"
+              type="text"
+              list="qcModelOptions"
+              :placeholder="qcModelPlaceholder"
+            />
+            <datalist id="qcModelOptions">
+              <option v-for="m in qcModelOptions" :key="m.id" :value="m.id">{{ m.name }}</option>
+            </datalist>
+          </label>
+        </div>
+        <p v-if="qcProviderEntry?.env_key" class="form-hint">
+          환경변수 <code>{{ qcProviderEntry.env_key }}</code> 가 설정되어 있으면 자동으로 사용합니다.
+        </p>
+        <p v-if="qcProviderEntry?.docs_url" class="form-hint">
+          <a :href="qcProviderEntry.docs_url" target="_blank" rel="noopener noreferrer">API 키 발급 가이드 ↗</a>
+        </p>
+        <div class="qc-actions">
+          <button
+            class="primary-button"
+            type="button"
+            :disabled="!qcCanSubmit || qcBusy"
+            @click="runQuickConnect"
+          >
+            {{ qcBusy ? '연결 중...' : '연결하고 활성화' }}
+          </button>
+        </div>
+        <p v-if="qcResult" class="test-result" :class="{ ok: qcResult.ok }">
+          <template v-if="qcResult.ok">
+            ✓ 연결 성공 — 활성: <strong>{{ qcResult.provider }}</strong> / <strong>{{ qcResult.model }}</strong>
+            <span v-if="qcResult.test?.text"> — 응답: “{{ qcResult.test.text }}”</span>
+          </template>
+          <template v-else>
+            ✕ 실패 ({{ { save: '저장', test: '연결 테스트', activate: '활성화' }[qcResult.step] || qcResult.step }}): {{ qcResult.error }}
+          </template>
+        </p>
+      </section>
+
+      <section v-if="!loading && !loadError && oauthProviders.length > 0" class="oauth-block">
+        <h3>OAuth 로그인</h3>
+        <p class="settings-hint">
+          ChatGPT Plus/Pro, xAI Grok 구독, GitHub Copilot으로 브라우저 또는 장치 코드로 로그인합니다.
+          API 키 없이 구독을 통해 접근할 수 있습니다.
+        </p>
+        <div class="qc-row">
+          <label class="qc-field">
+            <span>프로바이더</span>
+            <select v-model="oauthProviderId" @change="onOauthProviderChange">
+              <option v-for="p in oauthProviders" :key="p.id" :value="p.id">
+                {{ p.name || p.id }}
+              </option>
+            </select>
+          </label>
+          <label class="qc-field">
+            <span>방식</span>
+            <select v-model="oauthMethod">
+              <option v-for="m in oauthMethodOptions" :key="m.id" :value="m.id">{{ m.label }}</option>
+            </select>
+          </label>
+        </div>
+        <div class="qc-actions">
+          <button
+            class="primary-button"
+            type="button"
+            :disabled="!oauthProviderId || oauthBusy"
+            @click="runOAuthLogin"
+          >
+            {{ oauthBusy ? '인증 대기 중...' : 'OAuth 로그인' }}
+          </button>
+          <button
+            class="ghost-button"
+            type="button"
+            :disabled="!oauthProviderId || oauthBusy"
+            @click="doRefreshOAuth"
+          >
+            토큰 갱신
+          </button>
+        </div>
+        <p v-if="oauthInstructions" class="form-hint">{{ oauthInstructions }}</p>
+        <p v-if="oauthUrl" class="form-hint">
+          <a :href="oauthUrl" target="_blank" rel="noopener noreferrer">인증 페이지 열기 ↗</a>
+        </p>
+        <p v-if="oauthResult" class="test-result" :class="{ ok: oauthResult.status === 'success' }">
+          <template v-if="oauthResult.status === 'success'">
+            ✓ OAuth 인증 성공 — <strong>{{ oauthResult.provider }}</strong>
+          </template>
+          <template v-else-if="oauthResult.status === 'failed'">
+            ✕ 실패: {{ oauthResult.error }}
+          </template>
+        </p>
+      </section>
+
       <section v-if="!loading && !loadError" class="active-block">
         <h3>사용할 모델</h3>
         <p class="settings-hint">
@@ -258,101 +547,108 @@ function readableError(error: unknown, fallback: string) {
         </p>
       </section>
 
-      <section v-if="!loading && !loadError" class="provider-list">
-        <article
-          v-for="provider in providers"
-          :key="provider.id"
-          class="provider-row"
-          :class="{ 'is-expanded': expandedId === provider.id, 'is-active-provider': active.provider === provider.id }"
-        >
-          <button class="provider-summary" type="button" @click="toggle(provider)">
-            <span class="provider-name">{{ provider.name }}</span>
-            <span class="provider-key-hint">
-              {{ provider.has_key ? (provider.key_source === 'env' ? '환경변수' : '키 저장됨') : '키 없음' }}
-            </span>
-            <span class="provider-status" :class="statusClass(provider)">{{ statusLabel(provider) }}</span>
-            <span class="provider-chevron" aria-hidden="true">{{ expandedId === provider.id ? '▾' : '▸' }}</span>
-          </button>
+      <section v-if="!loading && !loadError" class="advanced-block">
+        <button class="advanced-toggle" type="button" @click="showAdvanced = !showAdvanced">
+          <span class="provider-chevron" aria-hidden="true">{{ showAdvanced ? '▾' : '▸' }}</span>
+          고급 설정 (프로바이더별 상세 편집)
+        </button>
 
-          <div v-if="expandedId === provider.id" class="provider-body">
-            <label class="form-field">
-              <span>API 키</span>
-              <input
-                v-model="ensureDraft(provider).apiKey"
-                :type="'password'"
-                :placeholder="keyPlaceholder(provider)"
-                autocomplete="off"
-              />
-            </label>
-            <p v-if="provider.env_key" class="form-hint">
-              환경변수 <code>{{ provider.env_key }}</code> 가 설정되어 있으면 자동으로 사용합니다.
-            </p>
-
-            <label class="form-field">
-              <span>Base URL <small v-if="provider.base_url_required">(필수)</small></span>
-              <input
-                v-model="ensureDraft(provider).baseURL"
-                :type="'text'"
-                :placeholder="provider.base_url_default || 'https://...'"
-              />
-            </label>
-
-            <label class="form-field">
-              <span>기본 모델</span>
-              <input
-                v-model="ensureDraft(provider).defaultModel"
-                :type="'text'"
-                :list="`models-${provider.id}`"
-                placeholder="모델 ID"
-              />
-              <datalist :id="`models-${provider.id}`">
-                <option v-for="m in provider.models" :key="m.id" :value="m.id">{{ m.name }}</option>
-              </datalist>
-            </label>
-            <div class="model-chips">
-              <button
-                v-for="id in modelSuggestions(provider)"
-                :key="id"
-                type="button"
-                class="model-chip"
-                @click="ensureDraft(provider).defaultModel = id"
-              >
-                {{ id }}
-              </button>
-            </div>
-
-            <p v-if="provider.docs_url" class="form-hint">
-              <a :href="provider.docs_url" target="_blank" rel="noopener noreferrer">API 키 발급 가이드 ↗</a>
-            </p>
-
-            <p v-if="testResults[provider.id]" class="test-result" :class="{ ok: testResults[provider.id].ok }">
-              {{ testResults[provider.id].ok ? '✓ 연결 성공' : '✕ ' + (testResults[provider.id].error || '연결 실패') }}
-              <span v-if="testResults[provider.id].ok && testResults[provider.id].text">
-                — 응답: “{{ testResults[provider.id].text }}”
+        <div v-if="showAdvanced" class="provider-list">
+          <article
+            v-for="provider in providers"
+            :key="provider.id"
+            class="provider-row"
+            :class="{ 'is-expanded': expandedId === provider.id, 'is-active-provider': active.provider === provider.id }"
+          >
+            <button class="provider-summary" type="button" @click="toggle(provider)">
+              <span class="provider-name">{{ provider.name }}</span>
+              <span class="provider-key-hint">
+                {{ provider.has_key ? (provider.key_source === 'env' ? '환경변수' : '키 저장됨') : '키 없음' }}
               </span>
-            </p>
+              <span class="provider-status" :class="statusClass(provider)">{{ statusLabel(provider) }}</span>
+              <span class="provider-chevron" aria-hidden="true">{{ expandedId === provider.id ? '▾' : '▸' }}</span>
+            </button>
 
-            <div class="provider-actions">
-              <button class="secondary-button" type="button" :disabled="busyId === provider.id" @click="save(provider)">
-                저장
-              </button>
-              <button class="ghost-button" type="button" :disabled="busyId === provider.id" @click="test(provider)">
-                연결 테스트
-              </button>
-              <button class="primary-button" type="button" :disabled="busyId === provider.id" @click="activate(provider)">
-                이 모델 활성화
-              </button>
-              <button
-                class="ghost-button danger"
-                type="button"
-                :disabled="busyId === provider.id"
-                @click="remove(provider)"
-              >
-                키 삭제
-              </button>
+            <div v-if="expandedId === provider.id" class="provider-body">
+              <label class="form-field">
+                <span>API 키</span>
+                <input
+                  v-model="ensureDraft(provider).apiKey"
+                  :type="'password'"
+                  :placeholder="keyPlaceholder(provider)"
+                  autocomplete="off"
+                />
+              </label>
+              <p v-if="provider.env_key" class="form-hint">
+                환경변수 <code>{{ provider.env_key }}</code> 가 설정되어 있으면 자동으로 사용합니다.
+              </p>
+
+              <label class="form-field">
+                <span>Base URL <small v-if="provider.base_url_required">(필수)</small></span>
+                <input
+                  v-model="ensureDraft(provider).baseURL"
+                  :type="'text'"
+                  :placeholder="provider.base_url_default || 'https://...'"
+                />
+              </label>
+
+              <label class="form-field">
+                <span>기본 모델</span>
+                <input
+                  v-model="ensureDraft(provider).defaultModel"
+                  :type="'text'"
+                  :list="`models-${provider.id}`"
+                  placeholder="모델 ID"
+                />
+                <datalist :id="`models-${provider.id}`">
+                  <option v-for="m in provider.models" :key="m.id" :value="m.id">{{ m.name }}</option>
+                </datalist>
+              </label>
+              <div class="model-chips">
+                <button
+                  v-for="id in modelSuggestions(provider)"
+                  :key="id"
+                  type="button"
+                  class="model-chip"
+                  @click="ensureDraft(provider).defaultModel = id"
+                >
+                  {{ id }}
+                </button>
+              </div>
+
+              <p v-if="provider.docs_url" class="form-hint">
+                <a :href="provider.docs_url" target="_blank" rel="noopener noreferrer">API 키 발급 가이드 ↗</a>
+              </p>
+
+              <p v-if="testResults[provider.id]" class="test-result" :class="{ ok: testResults[provider.id].ok }">
+                {{ testResults[provider.id].ok ? '✓ 연결 성공' : '✕ ' + (testResults[provider.id].error || '연결 실패') }}
+                <span v-if="testResults[provider.id].ok && testResults[provider.id].text">
+                  — 응답: “{{ testResults[provider.id].text }}”
+                </span>
+              </p>
+
+              <div class="provider-actions">
+                <button class="secondary-button" type="button" :disabled="busyId === provider.id" @click="save(provider)">
+                  저장
+                </button>
+                <button class="ghost-button" type="button" :disabled="busyId === provider.id" @click="test(provider)">
+                  연결 테스트
+                </button>
+                <button class="primary-button" type="button" :disabled="busyId === provider.id" @click="activate(provider)">
+                  이 모델 활성화
+                </button>
+                <button
+                  class="ghost-button danger"
+                  type="button"
+                  :disabled="busyId === provider.id"
+                  @click="remove(provider)"
+                >
+                  키 삭제
+                </button>
+              </div>
             </div>
-          </div>
-        </article>
+          </article>
+        </div>
       </section>
 
       <footer class="settings-footer">

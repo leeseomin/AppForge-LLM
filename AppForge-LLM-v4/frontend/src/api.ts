@@ -3,8 +3,12 @@ import type {
   ApiErrorPayload,
   HealthPayload,
   JobPayload,
+  OAuthProvidersPayload,
+  OAuthStartResult,
+  OAuthPollResult,
   ProviderModelsPayload,
   ProvidersPayload,
+  QuickConnectResult,
   TestResult,
 } from './types';
 
@@ -111,4 +115,39 @@ export function setActiveProvider(provider: string | null, model: string | null)
     method: 'PUT',
     body: JSON.stringify({ provider, model }),
   });
+}
+
+export function quickConnect(body: {
+  provider: string;
+  apiKey: string;
+  baseURL?: string;
+  model?: string;
+}): Promise<QuickConnectResult> {
+  return request<QuickConnectResult>('/api/llm/quick-connect', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export function getOAuthProviders(): Promise<OAuthProvidersPayload> {
+  return request<OAuthProvidersPayload>('/api/llm/oauth/providers');
+}
+
+export function startOAuth(body: {
+  provider: string;
+  method: string;
+  enterpriseDomain?: string;
+}): Promise<OAuthStartResult> {
+  return request<OAuthStartResult>('/api/llm/oauth/start', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export function pollOAuth(provider: string, pollId: string): Promise<OAuthPollResult> {
+  return request<OAuthPollResult>(`/api/llm/oauth/poll/${encodeURIComponent(provider)}/${encodeURIComponent(pollId)}`);
+}
+
+export function refreshOAuth(provider: string): Promise<{ ok: boolean }> {
+  return request(`/api/llm/oauth/refresh/${encodeURIComponent(provider)}`, { method: 'POST' });
 }

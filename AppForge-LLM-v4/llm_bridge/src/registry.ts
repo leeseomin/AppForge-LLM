@@ -6,6 +6,7 @@ import * as OpenRouter from "@opencode-ai/llm/providers/openrouter"
 import * as XAI from "@opencode-ai/llm/providers/xai"
 import * as OpenAICompatible from "@opencode-ai/llm/providers/openai-compatible"
 import type {
+  OAuthCredential,
   ProviderDescriptor,
   ProviderKind,
   ProviderModel,
@@ -13,6 +14,8 @@ import type {
   StoredProviderConfig,
 } from "./types"
 import * as catalog from "./catalog"
+import * as oauth from "./oauth"
+import * as store from "./config"
 
 export interface BuildOptions {
   apiKey: string
@@ -48,6 +51,7 @@ const SUPPORTED_NPM = new Set([
   "@openrouter/ai-sdk-provider",
   "@ai-sdk/xai",
   "@ai-sdk/openai-compatible",
+  "@ai-sdk/github-copilot",
 ])
 
 const COMPAT_PROFILE_IDS = new Set([
@@ -95,6 +99,7 @@ function buildForCatalog(p: catalog.CatalogProvider): BuildFn {
       return (id, o) => OpenRouter.configure({ apiKey: o.apiKey, baseURL: resolveBase(o.baseURL) }).model(id)
     case "@ai-sdk/xai":
       return (id, o) => XAI.configure({ apiKey: o.apiKey, baseURL: resolveBase(o.baseURL) }).model(id)
+    case "@ai-sdk/github-copilot":
     case "@ai-sdk/openai-compatible":
     default: {
       const profileBuilder = COMPAT_BUILDERS[p.id]
@@ -271,6 +276,24 @@ const STATIC_ENTRIES: RegistryEntry[] = [
     build: (id, options) => OpenAICompatible.deepinfra.configure({ apiKey: options.apiKey, baseURL: options.baseURL }).model(id),
   },
   {
+    id: "github-copilot",
+    name: "GitHub Copilot",
+    kind: "api-key",
+    base_url_default: "https://api.githubcopilot.com",
+    docs_url: "https://docs.github.com/en/copilot",
+    models: [
+      m("gpt-5.2", "GPT-5.2"),
+      m("gpt-4o", "GPT-4o"),
+      m("gpt-4o-mini", "GPT-4o mini"),
+    ],
+    build: (id, options) =>
+      OpenAICompatible.configure({
+        apiKey: options.apiKey,
+        baseURL: options.baseURL ?? "https://api.githubcopilot.com",
+        provider: "github-copilot",
+      }).model(id),
+  },
+  {
     id: "openai-compatible",
     name: "OpenAI 호환 (사용자 지정)",
     kind: "openai-compatible",
@@ -351,8 +374,11 @@ function envKey(entry: RegistryEntry): string | undefined {
 
 function resolveKey(entry: RegistryEntry, stored: StoredProviderConfig | undefined): {
   value: string
-  source: "stored" | "env" | "none"
+  source: "stored" | "env" | "oauth" | "none"
 } {
+  if (stored?.oauth?.access && stored.oauth.access.length > 0) {
+    return { value: stored.oauth.access, source: "oauth" }
+  }
   if (stored?.apiKey && stored.apiKey.length > 0) return { value: stored.apiKey, source: "stored" }
   const env = envKey(entry)
   if (env) {
@@ -397,6 +423,8 @@ export function statusOf(entry: RegistryEntry, stored: StoredProviderConfig | un
     default_model: defaultModelOf(entry, stored),
     configured,
     models: entry.models,
+    oauth: Boolean(stored?.oauth),
+    oauth_account_id: stored?.oauth?.accountId,
   }
 }
 
@@ -415,7 +443,25 @@ export async function resolveForGeneration(
 ): Promise<ResolvedModel> {
   const entry = await get(providerId)
   if (!entry) throw new BridgeRegistryError(`Unknown provider '${providerId}'`)
-  const key = resolveKey(entry, stored)
+
+  let effectiveStored = stored
+  if (stored?.oauth?.access) {
+    const cred = stored.oauth
+    const needsRefresh = cred.expires > 0 && cred.expires <= Date.now()
+    if (needsRefresh && oauth.isOAuthProvider(providerId)) {
+      try {
+        const refreshed = await oauth.refreshOAuthToken(providerId, cred.refresh)
+        await store.setOAuthCredential(providerId, refreshed)
+        effectiveStored = { ...stored, oauth: refreshed }
+      } catch (err) {
+        throw new BridgeRegistryError(
+          `OAuth token refresh failed for '${providerId}': ${err instanceof Error ? err.message : String(err)}`,
+        )
+      }
+    }
+  }
+
+  const key = resolveKey(entry, effectiveStored)
   if (!key.value) {
     throw new BridgeRegistryError(
       entry.env_key
@@ -423,17 +469,24 @@ export async function resolveForGeneration(
         : `No API key stored for '${providerId}'.`,
     )
   }
-  if (entry.base_url_required && !resolveBaseURL(entry, stored)) {
+  let baseURL = resolveBaseURL(entry, effectiveStored)
+  if (providerId === "github-copilot" && !baseURL) {
+    const enterpriseUrl = effectiveStored?.oauth?.metadata?.enterpriseUrl
+    baseURL = enterpriseUrl
+      ? `https://copilot-api.${enterpriseUrl}`
+      : "https://api.githubcopilot.com"
+  }
+  if (entry.base_url_required && !baseURL) {
     throw new BridgeRegistryError(`Provider '${providerId}' requires a base URL.`)
   }
-  const chosenModel = modelId || defaultModelOf(entry, stored) || entry.models[0]?.id
+  const chosenModel = modelId || defaultModelOf(entry, effectiveStored) || entry.models[0]?.id
   if (!chosenModel) throw new BridgeRegistryError(`No model specified for '${providerId}'.`)
   const model = entry.build(chosenModel, {
     apiKey: key.value,
-    baseURL: resolveBaseURL(entry, stored),
+    baseURL,
     providerLabel: providerId,
   })
-  return { model, providerId, modelId: chosenModel, apiKey: key.value, baseURL: resolveBaseURL(entry, stored) }
+  return { model, providerId, modelId: chosenModel, apiKey: key.value, baseURL }
 }
 
 export class BridgeRegistryError extends Error {

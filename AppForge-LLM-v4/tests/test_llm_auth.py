@@ -203,3 +203,69 @@ def test_cmd_models_refresh(monkeypatch):
     monkeypatch.setattr(llm_auth.llm_bridge, "list_providers", lambda *a, **k: {"providers": []})
     monkeypatch.setattr(llm_auth.llm_bridge, "get_active", lambda *a, **k: {"provider": None, "model": None})
     assert llm_auth.cmd_models("http://127.0.0.1:8788", refresh=True) == 0
+
+
+def test_cmd_login_oauth_success(monkeypatch):
+    monkeypatch.setattr(llm_auth.llm_bridge, "ping", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(
+        llm_auth.llm_bridge,
+        "oauth_providers",
+        lambda *a, **k: {
+            "providers": [
+                {
+                    "id": "openai",
+                    "name": "openai",
+                    "methods": [{"id": "browser", "label": "ChatGPT"}],
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        llm_auth.llm_bridge,
+        "oauth_start",
+        lambda *a, **k: {"pollId": "test-poll-id", "url": "https://auth.openai.com/...", "instructions": "Complete auth", "method": "browser"},
+    )
+    monkeypatch.setattr(
+        llm_auth.llm_bridge,
+        "oauth_poll",
+        lambda *a, **k: {"status": "success", "provider": "openai", "credential": {"type": "oauth", "refresh": "r", "access": "a", "expires": 0}},
+    )
+    monkeypatch.setattr(
+        llm_auth.llm_bridge,
+        "provider_models",
+        lambda *a, **k: {"models": [{"id": "gpt-5.2", "name": "GPT-5.2"}]},
+    )
+    activated: list = []
+    monkeypatch.setattr(llm_auth.llm_bridge, "set_active", lambda url, p, m, **k: activated.append((p, m)) or {})
+    monkeypatch.setattr(llm_auth.webbrowser, "open", lambda *a, **k: True)
+    monkeypatch.setattr(llm_auth.questionary, "autocomplete", lambda *a, **k: FakePrompt("gpt-5.2  ·  GPT-5.2"))
+    assert llm_auth.cmd_login_oauth("http://127.0.0.1:8788", provider_id="openai") == 0
+    assert activated == [("openai", "gpt-5.2")]
+
+
+def test_cmd_login_oauth_failed(monkeypatch):
+    monkeypatch.setattr(llm_auth.llm_bridge, "ping", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(
+        llm_auth.llm_bridge,
+        "oauth_providers",
+        lambda *a, **k: {
+            "providers": [
+                {
+                    "id": "xai",
+                    "name": "xai",
+                    "methods": [{"id": "device-code", "label": "xAI Headless"}],
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        llm_auth.llm_bridge,
+        "oauth_start",
+        lambda *a, **k: {"pollId": "test-poll-id", "url": "https://auth.x.ai/...", "instructions": "Enter code", "method": "device-code"},
+    )
+    monkeypatch.setattr(
+        llm_auth.llm_bridge,
+        "oauth_poll",
+        lambda *a, **k: {"status": "failed", "error": "authorization denied"},
+    )
+    assert llm_auth.cmd_login_oauth("http://127.0.0.1:8788", provider_id="xai") == 1

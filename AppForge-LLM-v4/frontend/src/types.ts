@@ -145,3 +145,47 @@ export interface TestResult {
   provider?: string;
   model?: string;
 }
+
+export interface QuickConnectResult {
+  ok: boolean;
+  step: 'save' | 'test' | 'activate' | 'done';
+  error?: string;
+  provider: string;
+  model?: string | null;
+  test?: TestResult;
+}
+
+export interface OAuthMethod {
+  id: 'browser' | 'device-code';
+  label: string;
+}
+
+export interface OAuthProvider {
+  id: string;
+  name: string;
+  methods: OAuthMethod[];
+}
+
+export interface OAuthProvidersPayload {
+  providers: OAuthProvider[];
+}
+
+export interface OAuthStartResult {
+  pollId: string;
+  method: string;
+  url: string;
+  instructions: string;
+}
+
+export interface OAuthPollResult {
+  status: 'pending' | 'success' | 'failed';
+  provider?: string;
+  error?: string;
+  credential?: {
+    type: 'oauth';
+    refresh: string;
+    access: string;
+    expires: number;
+    accountId?: string;
+  };
+}

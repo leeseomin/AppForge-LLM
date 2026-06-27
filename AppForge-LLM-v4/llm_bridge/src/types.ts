@@ -5,6 +5,15 @@ export interface ProviderModel {
   name?: string
 }
 
+export interface OAuthCredential {
+  type: "oauth"
+  refresh: string
+  access: string
+  expires: number
+  accountId?: string
+  metadata?: Record<string, string>
+}
+
 export interface ProviderDescriptor {
   id: string
   name: string
@@ -27,6 +36,7 @@ export interface StoredProviderConfig {
   apiKey?: string
   baseURL?: string
   defaultModel?: string
+  oauth?: OAuthCredential
 }
 
 export interface ProviderStatus {
@@ -39,10 +49,12 @@ export interface ProviderStatus {
   base_url_default?: string
   docs_url?: string
   has_key: boolean
-  key_source: "stored" | "env" | "none"
+  key_source: "stored" | "env" | "oauth" | "none"
   default_model?: string | null
   configured: boolean
   models: ProviderModel[]
+  oauth?: boolean
+  oauth_account_id?: string
 }
 
 export interface ActiveSelection {
