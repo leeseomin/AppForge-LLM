@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "summary",
+    "passed",
+    "threat_model",
+    "checks",
+    "findings",
+    "secrets_scan",
+    "dependency_audit",
+    "residual_risks"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "passed": {
+      "type": "boolean"
+    },
+    "threat_model": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "check",
+          "passed",
+          "evidence"
+        ],
+        "properties": {
+          "check": {
+            "type": "string",
+            "minLength": 1
+          },
+          "passed": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": true
+      },
+      "minItems": 1
+    },
+    "findings": {
+      "type": "array",
+      "items": {},
+      "minItems": 0
+    },
+    "secrets_scan": {
+      "type": "string",
+      "minLength": 1
+    },
+    "dependency_audit": {
+      "type": "string",
+      "minLength": 1
+    },
+    "residual_risks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 0
+    }
+  },
+  "additionalProperties": true,
+  "title": "OpenAppForge security_report"
+}

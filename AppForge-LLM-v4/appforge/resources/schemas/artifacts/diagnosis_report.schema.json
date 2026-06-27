@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "summary",
+    "root_cause",
+    "causal_chain",
+    "affected_code",
+    "why_tests_missed_it",
+    "candidate_fixes",
+    "selected_fix",
+    "regression_risk"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "root_cause": {
+      "type": "string",
+      "minLength": 1
+    },
+    "causal_chain": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "affected_code": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "why_tests_missed_it": {
+      "type": "string",
+      "minLength": 1
+    },
+    "candidate_fixes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "option",
+          "benefits",
+          "risks"
+        ],
+        "properties": {
+          "option": {
+            "type": "string",
+            "minLength": 1
+          },
+          "benefits": {
+            "type": "string",
+            "minLength": 1
+          },
+          "risks": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": true
+      },
+      "minItems": 1
+    },
+    "selected_fix": {
+      "type": "string",
+      "minLength": 1
+    },
+    "regression_risk": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 0
+    }
+  },
+  "additionalProperties": true,
+  "title": "OpenAppForge diagnosis_report"
+}

@@ -1,0 +1,139 @@
+# AppForge-LLM v4
+
+**A Vite + Vue web app for describing an application once, watching every production stage, and downloading the verified source ZIP.**
+
+[한국어 문서](README.ko.md) · [V4 engineering](docs/V4_ENGINEERING.md) · [Web app guide](docs/WEB_APP.md) · [Architecture](docs/ARCHITECTURE.md) · [Safety](docs/SAFETY.md) · [Agent Guide](AGENT_GUIDE.md)
+
+AppForge-LLM v4 builds on the v3 Vite + Vue web UX with a hardened **Specification → Workflow → Memory → Loop Engineering** spine. Automatic pipeline routing, isolated project setup, coding-agent invocation, artifact validation, test/build/security gates, release checks, safe archive creation, and verified ZIP download remain server-owned. The v4 change is that an app is no longer pushed directly from intent to implementation: specification, flow, state memory, and feedback loops are each captured as validated contracts before downstream code work.
+
+```text
+Describe the app → Build → Follow live stage status → Download the completed source ZIP
+```
+
+## What changed in v4
+
+- **Four-layer engineering spine:** major pipelines now enforce or strengthen `specification → workflow_design → memory_engineering → loop_engineering` before implementation.
+- **Stronger artifact contracts:** `requirements_spec` and `workflow_spec` are stricter, and new `memory_spec` and `loop_spec` schemas make state and feedback loops explicit.
+- **Persistent engineering memory:** the runner records stage outcomes, validation evidence, decisions, and failures in `.appforge/memory/stage-memory.jsonl` and summarizes them into later stage prompts.
+- **Retry-loop guard:** repeated failure signatures are detected as `REPEATED_FAILURE_LOOP` so the runner stops unproductive automatic retries and asks for a changed strategy.
+- **Web status updates:** the Korean timeline now names Memory/Loop engineering stages and explains repeated-loop failures.
+
+## Fastest start
+
+Prerequisites: Python 3.11+ and one of the following coding-agent executables:
+
+- Codex CLI
+- Claude Code CLI
+- a custom coding-agent command configured through `APPFORGE_AGENT_CMD`
+
+From a built wheel:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate              # Windows: .venv\Scripts\activate
+python -m pip install dist/openappforge-0.4.0-py3-none-any.whl
+
+appforge web
+```
+
+From source:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[dev]'
+npm --prefix frontend install
+npm --prefix frontend run build
+
+appforge web
+```
+
+The default browser opens `http://127.0.0.1:8787`. The browser stores only the current job ID; authoritative state remains under `.appforge-web/jobs/`.
+
+## Frontend development
+
+Run the Python API server and Vite dev server in two terminals:
+
+```bash
+appforge web --no-open-browser
+npm --prefix frontend run dev
+```
+
+Open `http://127.0.0.1:5173`. Vite proxies `/api` to the local FastAPI server at `http://127.0.0.1:8787`.
+
+Build the production frontend into the Python package resources:
+
+```bash
+npm --prefix frontend run build
+```
+
+This writes `appforge/resources/web/index.html`, `appforge/resources/web/assets/*`, `favicon.svg`, and `manifest.webmanifest`.
+
+## Coding-agent setup
+
+### Automatic selection
+
+The default `APPFORGE_DRIVER=auto` selects Codex CLI first and then Claude Code CLI. Readiness appears in the web app before the build action is enabled.
+
+### Custom agent command
+
+```bash
+APPFORGE_DRIVER=generic \
+APPFORGE_AGENT_CMD='my-agent --workspace {workspace} --prompt {prompt_file}' \
+appforge web
+```
+
+Available placeholders are `{workspace}`, `{prompt_file}`, `{result_file}`, `{stage}`, and `{attempt}`. When `{prompt_file}` is omitted, the full stage packet is sent on standard input.
+
+### Main environment variables
+
+```text
+APPFORGE_PROJECTS_DIR          generated project directory; default projects/
+APPFORGE_DATA_DIR              persisted web-job state; default .appforge-web/
+APPFORGE_DRIVER                auto | codex | claude | generic
+APPFORGE_AGENT_CMD             generic command template
+APPFORGE_MODEL                 model passed to the selected driver
+APPFORGE_ALLOW_NETWORK         default true for installs and remote audits
+APPFORGE_STAGE_TIMEOUT         per-stage timeout in seconds; default 3600
+APPFORGE_MAX_STAGE_ATTEMPTS    optional maximum automatic attempts per stage
+APPFORGE_MAX_TURNS             optional Claude Code turn limit
+APPFORGE_UNSAFE_AGENT          default false; isolated environments only
+APPFORGE_PROMPT_MAX_CHARS      request input limit; default 20000
+```
+
+## Existing CLI compatibility
+
+`appforge web` is the recommended v4 experience, while the full CLI and repository-native agent loop remain available:
+
+```bash
+appforge forge "Build a responsive personal budget app" --driver auto --allow-network
+appforge run <project>
+appforge status <project>
+appforge prompt <project>
+appforge complete <project>
+appforge doctor
+appforge tool list
+```
+
+Existing-repository changes remain available through the CLI:
+
+```bash
+cd existing-project
+appforge forge "Add passkey login while preserving password login" \
+  --target . --driver auto --allow-network
+```
+
+## Development and verification
+
+```bash
+python -m pip install -e '.[dev]'
+npm --prefix frontend install
+npm --prefix frontend run build
+python -m compileall -q appforge tests
+python -m pytest
+python -m pip wheel . --no-deps --no-build-isolation -w dist
+```
+
+## License and inspiration
+
+AppForge-LLM v4/OpenAppForge is original software released under the Apache License 2.0. Its repository-native combination of declarative pipelines, composable skills, auto-discovered tools, checkpoints, and review gates was inspired by OpenMontage. No OpenMontage source code is included. See [ATTRIBUTION.md](ATTRIBUTION.md).
