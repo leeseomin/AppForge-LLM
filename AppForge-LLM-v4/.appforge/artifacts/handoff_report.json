@@ -8,6 +8,7 @@
     "Lazy provider model loading with in-memory cache and failure hints",
     "Bounded advanced model chips with more/collapse controls",
     "CLI model summary now displays compact provider model_count",
+    "Session shutdown aborts in-flight LLM bridge generation requests",
     "Updated bridge tests and rebuilt web assets"
   ],
   "quickstart": [
@@ -24,16 +25,19 @@
     "bun test passed 8 bridge tests",
     "bun run typecheck passed",
     "npm run typecheck and npm run build passed",
-    ".venv/bin/python -m pytest -q passed 78 tests",
+    ".venv/bin/python -m pytest -q passed 81 tests",
     ".venv/bin/python -m pytest tests/test_llm_auth.py -q passed 14 tests",
+    ".venv/bin/python -m pytest tests/test_llm_bridge.py tests/test_runner.py::test_llm_bridge_driver_maps_cancelled_request_to_cancel_result -q passed 2 tests",
     ".venv/bin/ruff check appforge tests passed",
+    "OpenAppForge optional root typecheck was skipped because no root Python typecheck command is configured; llm_bridge TypeScript typecheck passed",
     "Payload probe: /providers 40552 bytes vs include_models 287573 bytes",
     "./build.sh --smoke passed for http://127.0.0.1:8787"
   ],
   "operations_reference": [
     "No deployment was performed",
     "No new runtime dependency or environment variable was added",
-    "Provider API keys remain stored by the local llm_bridge config flow"
+    "Provider API keys remain stored by the local llm_bridge config flow",
+    "Session shutdown stops only launcher/app-owned bridge processes; separately started bridges remain running while their current generation request is cancelled"
   ],
   "open_items": [
     "Live provider generation remains user-verifiable after entering credentials",

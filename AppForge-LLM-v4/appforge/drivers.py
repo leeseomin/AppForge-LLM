@@ -426,6 +426,17 @@ class LLMBridgeDriver(AgentDriver):
                 model=self.model,
                 max_tokens=self.max_tokens,
                 timeout=max(timeout, 60),
+                cancel_event=cancel_event,
+            )
+        except llm_bridge.BridgeCancelled:
+            return DriverResult(
+                success=False,
+                exit_code=130,
+                stdout="",
+                stderr="Cancelled by user.",
+                duration_seconds=duration(),
+                command=["llm-bridge", "/generate"],
+                final_message_path=str(final_path),
             )
         except llm_bridge.BridgeError as exc:
             return DriverResult(

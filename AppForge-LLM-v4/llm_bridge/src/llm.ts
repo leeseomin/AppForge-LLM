@@ -16,6 +16,17 @@ export class BridgeLLMError extends Error {
   }
 }
 
+export class BridgeLLMCancelled extends Error {
+  constructor(message = "LLM generation cancelled.") {
+    super(message)
+    this.name = "BridgeLLMCancelled"
+  }
+}
+
+interface ExecutionOptions {
+  signal?: AbortSignal
+}
+
 interface ResolvedRequest {
   providerId: string
   modelId: string
@@ -97,10 +108,18 @@ export async function runOnce(input: RunInput): Promise<{ text: string; finishRe
 
 export { resolveRequest, type ResolvedRequest }
 
-export async function generate(req: GenerateRequest): Promise<GenerateResponse> {
+export async function generate(req: GenerateRequest, options: ExecutionOptions = {}): Promise<GenerateResponse> {
+  if (options.signal?.aborted) {
+    throw new BridgeLLMCancelled()
+  }
   const resolved = await resolveRequest(req)
+  if (options.signal?.aborted) {
+    throw new BridgeLLMCancelled()
+  }
   try {
-    const response = await Effect.runPromise(LLM.generate(resolved.effect).pipe(Effect.provide(clientLayer)))
+    const response = await Effect.runPromise(LLM.generate(resolved.effect).pipe(Effect.provide(clientLayer)), {
+      signal: options.signal,
+    })
     const events = response.events as ReadonlyArray<unknown>
     return {
       provider: resolved.providerId,
@@ -110,6 +129,9 @@ export async function generate(req: GenerateRequest): Promise<GenerateResponse> 
       usage: plainUsage(response.usage),
     }
   } catch (error) {
+    if (options.signal?.aborted) {
+      throw new BridgeLLMCancelled()
+    }
     throw new BridgeLLMError(describeError(error), error)
   }
 }
@@ -125,8 +147,15 @@ export interface StreamEvent {
 export async function stream(
   req: GenerateRequest,
   onEvent: (event: StreamEvent) => Promise<void> | void,
+  options: ExecutionOptions = {},
 ): Promise<{ provider: string; model: string }> {
+  if (options.signal?.aborted) {
+    throw new BridgeLLMCancelled()
+  }
   const resolved = await resolveRequest(req)
+  if (options.signal?.aborted) {
+    throw new BridgeLLMCancelled()
+  }
   const program = LLM.stream(resolved.effect).pipe(
     Stream.runForEach((event) =>
       Effect.sync(() => {
@@ -137,8 +166,11 @@ export async function stream(
     Effect.provide(clientLayer),
   )
   try {
-    await Effect.runPromise(program)
+    await Effect.runPromise(program, { signal: options.signal })
   } catch (error) {
+    if (options.signal?.aborted) {
+      throw new BridgeLLMCancelled()
+    }
     throw new BridgeLLMError(describeError(error), error)
   }
   return { provider: resolved.providerId, model: resolved.modelId }

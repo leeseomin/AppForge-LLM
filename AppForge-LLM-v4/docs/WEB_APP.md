@@ -221,6 +221,15 @@ Boolean values accept `true/false`, `1/0`, `yes/no`, or `on/off`.
 
 The bridge process also accepts `APPFORGE_LLM_BRIDGE_HOST`, `APPFORGE_LLM_BRIDGE_PORT`, `APPFORGE_LLM_CONFIG_DIR`, and `APPFORGE_LLM_CONFIG`. Provider keys may be stored through the UI or supplied through provider-specific variables such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `OPENROUTER_API_KEY`, and `XAI_API_KEY`.
 
+## Session shutdown
+
+The **세션 종료** control cancels the active web job, aborts any in-flight
+`/generate` request from the Python server to the LLM bridge, schedules the
+FastAPI process to stop, and shuts down only a launcher/app-owned bridge process.
+If `APPFORGE_LLM_BRIDGE_URL` points at a bridge that was already running outside
+this app, that bridge process remains running; its current generation request is
+still cancelled through the dropped HTTP connection.
+
 ## Error contract
 
 API errors use:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -103,6 +104,36 @@ def test_llm_bridge_prompt_includes_stage_artifact_schema(tmp_path) -> None:
     assert "External LLM bridge execution contract" in prompt
     assert "product_brief" in prompt
     assert "original stage packet" in prompt
+
+
+def test_llm_bridge_driver_maps_cancelled_request_to_cancel_result(tmp_path, monkeypatch) -> None:
+    layout = initialize_project(
+        "Build a small web app",
+        projects_dir=tmp_path,
+        name="bridge-cancel",
+        pipeline_name="web-app",
+    )
+    cancel_event = threading.Event()
+
+    def fake_generate(*args, **kwargs):  # type: ignore[no-untyped-def]
+        assert kwargs["cancel_event"] is cancel_event
+        raise llm_bridge.BridgeCancelled()
+
+    monkeypatch.setattr(llm_bridge, "generate", fake_generate)
+    driver = LLMBridgeDriver(bridge_url="http://bridge.test")
+
+    result = driver.run(
+        "stage packet",
+        layout=layout,
+        stage="intake",
+        attempt=1,
+        timeout=120,
+        cancel_event=cancel_event,
+    )
+
+    assert result.success is False
+    assert result.exit_code == 130
+    assert result.stderr == "Cancelled by user."
 
 
 def test_llm_bridge_envelope_writes_artifacts_stage_result_and_files(tmp_path) -> None:

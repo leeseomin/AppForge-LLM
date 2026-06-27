@@ -14,20 +14,38 @@ Only the standard library is used to avoid adding a new runtime dependency.
 
 from __future__ import annotations
 
+import http.client
 import json
-import urllib.error
-import urllib.request
+import socket
+import threading
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 
 class BridgeError(RuntimeError):
     """Raised when the bridge is unreachable or returns an error payload."""
 
-    def __init__(self, message: str, *, status_code: int = 0, payload: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int = 0,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.payload = payload or {}
+
+
+class BridgeCancelled(BridgeError):
+    """Raised when an in-flight bridge request is cancelled by the caller."""
+
+    def __init__(self, message: str = "LLM bridge request cancelled.") -> None:
+        super().__init__(
+            message,
+            status_code=499,
+            payload={"error": {"code": "BRIDGE_REQUEST_CANCELLED", "message": message}},
+        )
 
 
 def _request(
@@ -37,32 +55,81 @@ def _request(
     *,
     body: Any | None = None,
     timeout: float = 30.0,
+    cancel_event: threading.Event | None = None,
 ) -> Any:
-    url = f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+    if cancel_event is not None and cancel_event.is_set():
+        raise BridgeCancelled()
+
+    parsed_url = urlsplit(base_url.rstrip("/"))
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+        raise BridgeError(f"Invalid LLM bridge URL: {base_url}")
+
+    root_path = parsed_url.path.rstrip("/")
+    request_path = f"{root_path}/{path.lstrip('/')}" or "/"
     data: bytes | None = None
     headers = {"Accept": "application/json"}
     if body is not None:
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"
-    request = urllib.request.Request(url, data=data, method=method, headers=headers)
+
+    connection_class = (
+        http.client.HTTPSConnection
+        if parsed_url.scheme == "https"
+        else http.client.HTTPConnection
+    )
+    connection = connection_class(parsed_url.hostname, parsed_url.port, timeout=timeout)
+    done = threading.Event()
+    cancelled = False
+
+    def abort_on_cancel() -> None:
+        nonlocal cancelled
+        if cancel_event is None:
+            return
+        while not done.is_set():
+            if not cancel_event.wait(0.05):
+                continue
+            cancelled = True
+            try:
+                sock = getattr(connection, "sock", None)
+                if sock is not None:
+                    sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            connection.close()
+            return
+
+    watcher: threading.Thread | None = None
+    if cancel_event is not None:
+        watcher = threading.Thread(target=abort_on_cancel, daemon=True)
+        watcher.start()
+
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - localhost bridge
-            raw = response.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        detail = ""
-        try:
-            detail = exc.read().decode("utf-8")
-        except Exception:  # pragma: no cover - best effort
-            pass
-        parsed: dict[str, Any] | None = None
-        try:
-            parsed = json.loads(detail) if detail else None
-        except json.JSONDecodeError:
-            parsed = None
-        message = (parsed or {}).get("error", {}).get("message") if parsed else detail
-        raise BridgeError(message or f"bridge returned HTTP {exc.code}", status_code=exc.code, payload=parsed) from exc
-    except urllib.error.URLError as exc:
-        raise BridgeError(f"LLM 브릿지에 연결할 수 없습니다: {exc.reason}") from exc
+        connection.request(method, request_path, body=data, headers=headers)
+        response = connection.getresponse()
+        raw = response.read().decode("utf-8")
+        if response.status >= 400:
+            parsed: dict[str, Any] | None = None
+            try:
+                parsed = json.loads(raw) if raw else None
+            except json.JSONDecodeError:
+                parsed = None
+            message = (parsed or {}).get("error", {}).get("message") if parsed else raw
+            raise BridgeError(
+                message or f"bridge returned HTTP {response.status}",
+                status_code=response.status,
+                payload=parsed,
+            )
+    except (OSError, TimeoutError, http.client.HTTPException) as exc:
+        if cancelled or (cancel_event is not None and cancel_event.is_set()):
+            raise BridgeCancelled() from exc
+        reason = getattr(exc, "reason", None) or str(exc)
+        raise BridgeError(f"LLM 브릿지에 연결할 수 없습니다: {reason}") from exc
+    finally:
+        done.set()
+        connection.close()
+        if watcher is not None:
+            watcher.join(timeout=0.2)
+
     if not raw:
         return None
     try:
@@ -148,6 +215,7 @@ def generate(
     max_tokens: int | None = None,
     temperature: float | None = None,
     timeout: float = 600.0,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {"prompt": prompt}
     if system is not None:
@@ -163,7 +231,14 @@ def generate(
         generation["temperature"] = temperature
     if generation:
         body["generation"] = generation
-    return _request(base_url, "POST", "/generate", body=body, timeout=timeout)
+    return _request(
+        base_url,
+        "POST",
+        "/generate",
+        body=body,
+        timeout=timeout,
+        cancel_event=cancel_event,
+    )
 
 
 def oauth_providers(base_url: str, *, timeout: float = 5.0) -> dict[str, Any]:
