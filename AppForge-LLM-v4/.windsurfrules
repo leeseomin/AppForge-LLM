@@ -1,1 +1,0 @@
-Read AGENT_GUIDE.md before acting. All software application work must use an OpenAppForge pipeline. Execute every stage, validate artifacts and gates with `appforge complete`, preserve unrelated work, and stop only for a genuine blocker or unauthorized external effect.

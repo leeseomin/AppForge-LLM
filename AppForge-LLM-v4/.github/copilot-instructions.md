@@ -1,1 +1,0 @@
-Read `AGENT_GUIDE.md` before implementing a software request. Route all product work through OpenAppForge pipeline manifests. For each stage, read the generated packet, perform the work, produce valid artifacts and `.appforge/stage-result.json`, run `appforge complete`, and continue until handoff.
