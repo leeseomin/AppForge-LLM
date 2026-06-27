@@ -26,6 +26,11 @@ const settingsOpen = ref(false);
 let pollTimer: number | undefined;
 let toastTimer: number | undefined;
 
+type LoadCurrentJobOptions = {
+  immediate?: boolean;
+  restoreTerminal?: boolean;
+};
+
 const promptMaxChars = computed(() => {
   const configured = Number(health.value?.prompt_max_chars);
   return Number.isFinite(configured) && configured > 0 ? configured : 20_000;
@@ -45,8 +50,10 @@ function setCurrentJob(jobId: string | null) {
 
 async function refreshHealth(options: { restoreBusyJob?: boolean } = {}) {
   const restoreBusyJob = options.restoreBusyJob ?? true;
+  if (endingSession.value) return;
   try {
     const payload = await getHealth();
+    if (endingSession.value) return;
     health.value = payload;
     serverError.value = '';
     if (
@@ -58,6 +65,10 @@ async function refreshHealth(options: { restoreBusyJob?: boolean } = {}) {
       await loadCurrentJob({ immediate: true });
     }
   } catch (error) {
+    if (endingSession.value) {
+      serverError.value = '세션 종료됨';
+      return;
+    }
     health.value = null;
     serverError.value = readableError(error, '웹 서버에 연결할 수 없습니다. 서버 실행 상태를 확인하세요.');
   }
@@ -117,10 +128,17 @@ function schedulePoll(delay = 1000) {
   pollTimer = window.setTimeout(() => loadCurrentJob({ immediate: false }), delay);
 }
 
-async function loadCurrentJob({ immediate = false } = {}) {
+async function loadCurrentJob({ immediate = false, restoreTerminal = true }: LoadCurrentJobOptions = {}) {
+  if (endingSession.value) return;
   if (!currentJobId.value) return;
   try {
     const payload = await getJob(currentJobId.value);
+    if (endingSession.value) return;
+    if (!restoreTerminal && payload.terminal) {
+      setCurrentJob(null);
+      job.value = null;
+      return;
+    }
     job.value = payload;
     if (!prompt.value && payload.prompt) {
       prompt.value = payload.prompt;
@@ -129,9 +147,14 @@ async function loadCurrentJob({ immediate = false } = {}) {
       schedulePoll(immediate ? 700 : 1100);
     } else {
       window.clearTimeout(pollTimer);
+      setCurrentJob(null);
       await refreshHealth({ restoreBusyJob: false });
     }
   } catch (error) {
+    if (endingSession.value) {
+      serverError.value = '세션 종료됨';
+      return;
+    }
     if (error instanceof ApiError && error.status === 404) {
       setCurrentJob(null);
       job.value = null;
@@ -150,6 +173,7 @@ async function cancelActiveJob() {
     const payload = await cancelJob(currentJobId.value);
     job.value = payload;
     window.clearTimeout(pollTimer);
+    setCurrentJob(null);
     await refreshHealth({ restoreBusyJob: false });
     showToast('현재 작업을 취소했습니다.');
   } catch (error) {
@@ -164,6 +188,11 @@ async function endCurrentSession() {
   if (endingSession.value) return;
   endingSession.value = true;
   window.clearTimeout(pollTimer);
+  setCurrentJob(null);
+  job.value = null;
+  prompt.value = '';
+  health.value = null;
+  serverError.value = '세션 종료됨';
   try {
     const payload = await endSession();
     showToast(payload.message || '세션을 종료합니다.');
@@ -260,7 +289,7 @@ onMounted(async () => {
   document.addEventListener('visibilitychange', handleVisibilityChange);
   await refreshHealth();
   if (currentJobId.value && !job.value) {
-    await loadCurrentJob({ immediate: true });
+    await loadCurrentJob({ immediate: true, restoreTerminal: false });
   }
 });
 

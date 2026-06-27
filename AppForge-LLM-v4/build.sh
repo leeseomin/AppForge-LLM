@@ -177,40 +177,69 @@ http_ok() {
 
 port_available() {
   local port="$1"
+  if have lsof; then
+    ! lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
+    return
+  fi
+  "$ROOT_DIR/.venv/bin/python" -c 'import socket, sys; host=sys.argv[1]; port=int(sys.argv[2]); family=socket.AF_INET6 if ":" in host else socket.AF_INET; sock=socket.socket(family, socket.SOCK_STREAM); sock.bind((host, port)); sock.close()' "$APPFORGE_WEB_HOST" "$port"
+}
+
+bridge_reserved_web_port() {
   "$ROOT_DIR/.venv/bin/python" -c '
-import socket
 import sys
+from urllib.parse import urlparse
 
-host = sys.argv[1]
-port = int(sys.argv[2])
-family = socket.AF_INET6 if ":" in host else socket.AF_INET
+parsed = urlparse(sys.argv[1])
+web_host = sys.argv[2]
+loopbacks = {"127.0.0.1", "localhost", "::1", "0.0.0.0", "::"}
 
-with socket.socket(family, socket.SOCK_STREAM) as sock:
-    try:
-        sock.bind((host, port))
-    except OSError:
-        sys.exit(1)
-' "$APPFORGE_WEB_HOST" "$port"
+try:
+    port = parsed.port
+except ValueError:
+    port = None
+
+if port is None and parsed.scheme in {"http", "https"}:
+    port = 443 if parsed.scheme == "https" else 80
+
+host = parsed.hostname or ""
+if port and (host == web_host or (host in loopbacks and web_host in loopbacks)):
+    print(port)
+' "$APPFORGE_LLM_BRIDGE_URL" "$APPFORGE_WEB_HOST"
 }
 
 select_web_port() {
   local requested_port=$((10#$APPFORGE_WEB_PORT))
   local fallback_limit=$((10#$APPFORGE_WEB_PORT_FALLBACK_LIMIT))
   local end_port=$((requested_port + fallback_limit))
+  local bridge_port
   local port
+  local requested_reason=""
 
   if (( end_port > 65535 )); then
     end_port=65535
   fi
 
+  bridge_port="$(bridge_reserved_web_port)"
+
   for (( port = requested_port; port <= end_port; port++ )); do
+    if [[ -n "$bridge_port" && "$port" == "$bridge_port" ]]; then
+      if (( port == requested_port )); then
+        requested_reason="reserved for llm_bridge"
+      fi
+      continue
+    fi
     if port_available "$port"; then
       if (( port != requested_port )); then
-        log "Web port $requested_port is already in use; using $port instead."
+        if [[ -z "$requested_reason" ]]; then
+          requested_reason="already in use"
+        fi
+        log "Web port $requested_port is $requested_reason; using $port instead."
       fi
       APPFORGE_WEB_PORT="$port"
       WEB_URL="http://${APPFORGE_WEB_HOST}:${APPFORGE_WEB_PORT}"
       return 0
+    elif (( port == requested_port )); then
+      requested_reason="already in use"
     fi
   done
 

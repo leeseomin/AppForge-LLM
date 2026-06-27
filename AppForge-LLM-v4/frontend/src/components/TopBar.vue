@@ -61,6 +61,7 @@ const emit = defineEmits<{
       >
         <span class="server-dot" aria-hidden="true"></span>
         <span v-if="props.health?.ready">{{ props.health.driver.label }} 준비됨</span>
+        <span v-else-if="props.serverError === '세션 종료됨'">세션 종료됨</span>
         <span v-else-if="props.serverError">서버 연결 오류</span>
         <span v-else-if="props.health">실행기 설정 필요</span>
         <span v-else>실행 환경 확인 중</span>
