@@ -8,6 +8,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   refresh: [];
+  openSettings: [];
 }>();
 </script>
 
@@ -22,6 +23,7 @@ const emit = defineEmits<{
     </a>
 
     <div class="topbar-actions">
+      <button class="ghost-button" type="button" @click="emit('openSettings')">LLM 연결</button>
       <button class="ghost-button" type="button" @click="emit('refresh')">
         상태 새로고침
       </button>

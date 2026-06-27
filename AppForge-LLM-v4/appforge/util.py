@@ -116,8 +116,10 @@ def iter_files(
     ignored = set(ignored_dirs)
     count = 0
     for current, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if d not in ignored)
+        dirnames[:] = sorted(d for d in dirnames if d not in ignored and not d.endswith(".egg-info"))
         for filename in sorted(filenames):
+            if filename == ".DS_Store":
+                continue
             path = Path(current) / filename
             if path.is_symlink():
                 continue

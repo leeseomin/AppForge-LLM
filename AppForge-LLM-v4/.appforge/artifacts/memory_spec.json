@@ -1,0 +1,212 @@
+{
+  "schema_version": "1.0",
+  "summary": "Memory contract for the LLM bridge feature: provider secrets and active selection live in the local bridge config, browser state stays transient, health/readiness is recomputed, and AppForge stage evidence remains in existing checkpoints/logs.",
+  "memory_surfaces": [
+    {
+      "id": "MEM-001",
+      "purpose": "Store provider credentials, base URL overrides, default models, and active provider/model selection for the local bridge.",
+      "scope": "Local machine and local user running llm_bridge.",
+      "lifetime": "Durable until the user deletes provider config or changes APPFORGE_LLM_CONFIG/APPFORGE_LLM_CONFIG_DIR/APPFORGE_DATA_DIR.",
+      "source_of_truth": "llm_bridge/src/config.ts JSON file at APPFORGE_LLM_CONFIG or providers.json under APPFORGE_LLM_CONFIG_DIR, APPFORGE_DATA_DIR, or ~/.appforge/llm.",
+      "invalidated_by": "DELETE /providers/{id}, PUT /providers/{id}, PUT /active, manual file deletion, unreadable/corrupt JSON, or environment path change.",
+      "privacy": "May contain API keys; file permissions are set to 0600 best-effort and the browser never receives raw keys.",
+      "format": "JSON object with providers keyed by provider id and active provider/model selection."
+    },
+    {
+      "id": "MEM-002",
+      "purpose": "Expose provider registry metadata, model suggestions, default base URLs, docs URLs, and environment key names.",
+      "scope": "Bridge process runtime.",
+      "lifetime": "Versioned with the llm_bridge source code.",
+      "source_of_truth": "llm_bridge/src/registry.ts ENTRIES array.",
+      "invalidated_by": "Source update or bridge process restart after code change.",
+      "privacy": "Does not contain secrets; env_key names are metadata only.",
+      "format": "TypeScript registry descriptors serialized by /providers and /providers/{id}/models."
+    },
+    {
+      "id": "MEM-003",
+      "purpose": "Track open/closed settings dialog, editable form values, loading state, and provider test result while the user configures the bridge.",
+      "scope": "Single browser tab session.",
+      "lifetime": "Transient until modal close, page refresh, or component unmount.",
+      "source_of_truth": "Vue component state in frontend/src/App.vue and frontend/src/components/ProviderSettings.vue.",
+      "invalidated_by": "Close dialog, refresh page, provider switch, successful save/delete/activate refresh, or failed API request.",
+      "privacy": "API key input exists only in local component state before submission and is cleared/replaced by placeholder state after bridge refresh.",
+      "format": "Vue refs/reactive objects."
+    },
+    {
+      "id": "MEM-004",
+      "purpose": "Represent llm-bridge driver readiness for the current web session.",
+      "scope": "FastAPI health response and frontend health banner.",
+      "lifetime": "Ephemeral per health request; frontend refreshes after provider changes and routine health polling.",
+      "source_of_truth": "appforge/web_jobs.py _llm_bridge_readiness recomputes bridge health, active selection, and provider configured status.",
+      "invalidated_by": "Bridge stop/start, provider config change, active provider change, APPFORGE_DRIVER change, or APPFORGE_LLM_BRIDGE_URL change.",
+      "privacy": "Readiness messages contain provider ids and setup guidance only, not API keys.",
+      "format": "JSON health payload returned by /api/health."
+    },
+    {
+      "id": "MEM-005",
+      "purpose": "Preserve stage-generation prompts, outputs, failures, and checkpoints for llm-bridge driver runs.",
+      "scope": "AppForge project .appforge control plane.",
+      "lifetime": "Durable for the project until AppForge reports/log cleanup or source archive exclusion.",
+      "source_of_truth": "Existing AppForge checkpoints, stage logs, and runner artifacts under .appforge.",
+      "invalidated_by": "New stage attempt, manual cleanup, or checkpoint lifecycle controlled by AppForge.",
+      "privacy": "May contain user prompt text and model output; provider credentials must not be written there.",
+      "format": "Existing AppForge JSON checkpoint and text log formats."
+    },
+    {
+      "id": "MEM-006",
+      "purpose": "Maintain frontend dependency reproducibility after registry-host repair.",
+      "scope": "Repository source and package manager state.",
+      "lifetime": "Durable until dependency versions change.",
+      "source_of_truth": "frontend/package-lock.json and frontend/.npmrc.",
+      "invalidated_by": "npm install/update that changes resolved URLs, integrity values, or dependency graph.",
+      "privacy": "No secrets; registry URLs and package hashes only.",
+      "format": "npm lockfile v3 JSON and .npmrc text."
+    }
+  ],
+  "state_ownership": [
+    {
+      "state": "provider_config",
+      "owner": "llm_bridge/src/config.ts",
+      "writers": [
+        "PUT /providers/{id}",
+        "DELETE /providers/{id}",
+        "environment variables for provider keys"
+      ],
+      "readers": [
+        "GET /providers",
+        "POST /providers/{id}/test",
+        "POST /generate",
+        "appforge/web_jobs.py readiness via /providers"
+      ]
+    },
+    {
+      "state": "active_selection",
+      "owner": "llm_bridge/src/config.ts",
+      "writers": [
+        "PUT /active",
+        "DELETE /providers/{id} when deleting active provider"
+      ],
+      "readers": [
+        "GET /active",
+        "POST /generate",
+        "appforge/web_jobs.py readiness"
+      ]
+    },
+    {
+      "state": "provider_registry",
+      "owner": "llm_bridge/src/registry.ts",
+      "writers": [
+        "source changes only"
+      ],
+      "readers": [
+        "GET /providers",
+        "GET /providers/{id}/models",
+        "POST /generate",
+        "POST /providers/{id}/test"
+      ]
+    },
+    {
+      "state": "settings_session_state",
+      "owner": "ProviderSettings.vue",
+      "writers": [
+        "User input",
+        "same-origin /api/llm responses"
+      ],
+      "readers": [
+        "ProviderSettings.vue template",
+        "ProviderSettings action handlers"
+      ]
+    },
+    {
+      "state": "driver_readiness",
+      "owner": "appforge/web_jobs.py",
+      "writers": [
+        "Health request computation"
+      ],
+      "readers": [
+        "/api/health",
+        "frontend health banner",
+        "job creation guardrails"
+      ]
+    },
+    {
+      "state": "stage_attempt_evidence",
+      "owner": "AppForge runner/checkpoint system",
+      "writers": [
+        "LLMBridgeDriver",
+        "AppForge runner"
+      ],
+      "readers": [
+        "AppForge status",
+        "handoff artifacts",
+        "developer/operator inspection"
+      ]
+    }
+  ],
+  "retention": "Bridge provider config is retained locally until explicit deletion or path change. Browser settings state is not retained across refresh. Health is recomputed and not persisted. AppForge stage evidence follows existing .appforge retention and is excluded from source archives by archive_workspace.",
+  "serialization": "Bridge config uses JSON with providers and active keys. API payloads use JSON through FastAPI Pydantic/request models and TypeScript interfaces. Vue state is in-memory refs. Static assets are Vite-built files under appforge/resources/web. AppForge artifacts remain JSON.",
+  "privacy": [
+    "Raw API keys must never be returned by /api/llm provider list, committed to source, written to frontend static assets, or logged by tests.",
+    "Provider key presence is represented by has_key/key_source only.",
+    ".env and .env.* remain ignored except .env.example.",
+    "Bridge config file permissions are best-effort 0600, with environment-variable credentials preferred when operators do not want local file secrets.",
+    "Test fixtures use fake placeholder key values only."
+  ],
+  "reconciliation": "On each health request the backend reconciles APPFORGE_DRIVER, bridge reachability, active selection, provider registry, and configured status. If bridge config JSON is missing or unreadable, llm_bridge/src/config.ts falls back to an empty provider/active state. Deleting an active provider clears active selection. Frontend refreshes providers, active state, and health after save/delete/activate operations.",
+  "observability": [
+    "ProviderSettings displays configured state, key source, active model, loading state, and latest test result.",
+    "FastAPI /api/health reports actionable llm-bridge readiness messages.",
+    "Bridge errors are surfaced through LLM_BRIDGE_ERROR responses without raw secrets.",
+    "Tests in tests/test_web.py assert readiness degradation and proxy delegation."
+  ],
+  "tests": [
+    {
+      "name": "configured-active-readiness",
+      "evidence": "tests/test_web.py test_llm_bridge_health_requires_configured_active_provider covers missing and configured active provider states."
+    },
+    {
+      "name": "same-origin-proxy-memory-boundary",
+      "evidence": "tests/test_web.py test_llm_provider_api_proxies_to_bridge verifies FastAPI passes provider data to appforge.llm_bridge without live provider calls."
+    },
+    {
+      "name": "frontend-contract-build",
+      "evidence": "npm run typecheck and npm run build validate TypeScript/Vue payload state and packaged static assets."
+    },
+    {
+      "name": "bridge-type-contract",
+      "evidence": "bun run typecheck validates bridge config, registry, server, and type surfaces."
+    }
+  ],
+  "traceability": [
+    {
+      "requirement": "FR-001",
+      "memory_surface": "MEM-003",
+      "workflow_steps": "WF-001"
+    },
+    {
+      "requirement": "FR-002",
+      "memory_surface": "MEM-001, MEM-002, MEM-003",
+      "workflow_steps": "WF-002, WF-003, WF-004, WF-005"
+    },
+    {
+      "requirement": "FR-003",
+      "memory_surface": "MEM-001, MEM-004",
+      "workflow_steps": "WF-002, WF-003, WF-004, WF-005"
+    },
+    {
+      "requirement": "FR-004",
+      "memory_surface": "MEM-001, MEM-004, MEM-005",
+      "workflow_steps": "WF-006, WF-007"
+    },
+    {
+      "requirement": "FR-005",
+      "memory_surface": "MEM-001, MEM-002",
+      "workflow_steps": "WF-002, WF-003, WF-004, WF-005, WF-007"
+    },
+    {
+      "requirement": "NFR-004",
+      "memory_surface": "MEM-006",
+      "workflow_steps": "verification dependency install/build"
+    }
+  ]
+}

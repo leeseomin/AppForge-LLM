@@ -1,0 +1,79 @@
+{
+  "version": "1.0",
+  "pipeline": "feature",
+  "pipeline_version": "1.1",
+  "stage": "loop_engineering",
+  "status": "completed",
+  "attempt": 1,
+  "timestamp": "2026-06-27T08:33:38+00:00",
+  "artifacts": {
+    "loop_spec": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/loop_spec.json"
+  },
+  "gates": [
+    {
+      "kind": "artifact",
+      "name": "loop_spec",
+      "required": true,
+      "passed": true,
+      "path": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/loop_spec.json"
+    }
+  ],
+  "review": {
+    "passed": true,
+    "critical_count": 0,
+    "finding_count": 0,
+    "review_focus": [
+      "Every loop has entry, exit, budget, backoff, progress signal, and failure policy",
+      "Consequential effects are guarded by idempotency and deduplication",
+      "Hot spins, infinite retries, and hidden recurrence are prevented"
+    ],
+    "findings": []
+  },
+  "driver": {},
+  "metadata": {
+    "stage_result": {
+      "stage": "loop_engineering",
+      "status": "completed",
+      "summary": "Defined bounded loops for settings refresh, provider save/test/activate, health reconciliation, llm-bridge generation, and verification.",
+      "files_changed": [
+        ".appforge/artifacts/loop_spec.json",
+        ".appforge/stage-result.json"
+      ],
+      "commands_run": [
+        {
+          "command": ".venv/bin/python -m appforge prompt . --output .appforge/current-stage.md",
+          "result": "passed; generated the loop_engineering stage packet"
+        },
+        {
+          "command": "sed -n ... .appforge/current-stage.md and appforge/resources/schemas/artifacts/loop_spec.schema.json",
+          "result": "passed; inspected loop stage packet and schema"
+        }
+      ],
+      "checks": [
+        {
+          "name": "loop-budgets-present",
+          "passed": true,
+          "evidence": "loop_spec.json defines max_iterations and failure_policy for LOOP-001 through LOOP-005."
+        },
+        {
+          "name": "no-hidden-infinite-retries",
+          "passed": true,
+          "evidence": "Provider writes require explicit user action and LLM generation has max_iterations 1 per stage attempt."
+        },
+        {
+          "name": "loop-traceability",
+          "passed": true,
+          "evidence": "loop_spec.traceability maps workflow steps WF-002 through WF-007 plus verification to loop IDs and memory surfaces."
+        }
+      ],
+      "decisions": [
+        {
+          "decision": "Bound LLM bridge generation to one driver call per AppForge stage attempt.",
+          "reason": "Automatic model retries can duplicate expensive or stateful external calls; the checkpointed stage attempt is the safer recovery boundary."
+        }
+      ],
+      "unresolved": []
+    },
+    "manual_completion": true
+  }
+}

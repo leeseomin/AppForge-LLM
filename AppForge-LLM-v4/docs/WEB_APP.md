@@ -18,6 +18,20 @@ npm --prefix frontend run build
 appforge web
 ```
 
+For the local LLM bridge provider path, start the bridge separately:
+
+```bash
+cd llm_bridge
+bun install
+bun run start
+```
+
+Then run the web app with:
+
+```bash
+APPFORGE_DRIVER=llm-bridge appforge web
+```
+
 Equivalent standalone entry point:
 
 ```bash
@@ -59,14 +73,15 @@ Vite serves the UI at `http://127.0.0.1:5173` and proxies `/api` to `http://127.
 ## User journey
 
 1. The page checks coding-agent readiness through `GET /api/health`.
-2. The user enters one natural-language application request.
-3. `POST /api/jobs` automatically selects the pipeline and starts one background job.
-4. The Vue app polls `GET /api/jobs/{id}` and renders every system and pipeline stage.
-5. The selected pipeline includes explicit Specification, Workflow, Memory, and Loop engineering stages before implementation-oriented work.
-6. Failed attempts appear as `retrying` while attempts remain.
-7. A terminal failure includes a stable code, action, stage, attempt, agent result, failed checks, and critical review findings.
-8. On success, the server validates the ZIP and sets `download.available=true`.
-9. `GET /api/jobs/{id}/download` serves only that job's verified archive.
+2. When `APPFORGE_DRIVER=llm-bridge`, the user can open Provider Settings, save a provider key, test it, choose a default model, and activate it through the same-origin `/api/llm` proxy.
+3. The user enters one natural-language application request.
+4. `POST /api/jobs` automatically selects the pipeline and starts one background job.
+5. The Vue app polls `GET /api/jobs/{id}` and renders every system and pipeline stage.
+6. The selected pipeline includes explicit Specification, Workflow, Memory, and Loop engineering stages before implementation-oriented work.
+7. Failed attempts appear as `retrying` while attempts remain.
+8. A terminal failure includes a stable code, action, stage, attempt, agent result, failed checks, and critical review findings.
+9. On success, the server validates the ZIP and sets `download.available=true`.
+10. `GET /api/jobs/{id}/download` serves only that job's verified archive.
 
 The UI stores only the active job ID in browser local storage. Authoritative job state is persisted in `.appforge-web/jobs/<job-id>.json`.
 
@@ -90,6 +105,21 @@ The overall percentage is derived from all visible system and pipeline stages. I
 ### `GET /api/health`
 
 Returns server version, driver readiness, active-job ID, network policy, prompt limit, and safety policy. The UI disables the start action until a supported coding-agent executable is available.
+
+With `APPFORGE_DRIVER=llm-bridge`, readiness requires the bridge to be reachable and the active provider/model selection to be configured.
+
+### `/api/llm`
+
+The web server proxies provider operations to the local bridge so the browser stays on the FastAPI origin:
+
+- `GET /api/llm/health`
+- `GET /api/llm/providers`
+- `GET /api/llm/providers/{provider_id}/models`
+- `PUT /api/llm/providers/{provider_id}`
+- `DELETE /api/llm/providers/{provider_id}`
+- `POST /api/llm/providers/{provider_id}/test`
+- `GET /api/llm/active`
+- `PUT /api/llm/active`
 
 ### `POST /api/jobs`
 
@@ -132,9 +162,11 @@ Returns HTTP 409 until the job completes. The path is resolved from server-owned
 |---|---:|---|
 | `APPFORGE_PROJECTS_DIR` | `projects` | Generated workspaces |
 | `APPFORGE_DATA_DIR` | `.appforge-web` | Persisted web-job state |
-| `APPFORGE_DRIVER` | `auto` | `auto`, `codex`, `claude`, or `generic` |
+| `APPFORGE_DRIVER` | `auto` | `auto`, `codex`, `claude`, `generic`, or `llm-bridge` |
 | `APPFORGE_AGENT_CMD` | unset | Generic command template |
-| `APPFORGE_MODEL` | unset | Model passed to Codex/Claude driver |
+| `APPFORGE_MODEL` | unset | Model passed to Codex/Claude/llm-bridge driver |
+| `APPFORGE_LLM_BRIDGE_URL` | `http://127.0.0.1:8788` | FastAPI-to-bridge URL |
+| `APPFORGE_LLM_PROVIDER` | unset | Optional provider override for the llm-bridge driver |
 | `APPFORGE_ALLOW_NETWORK` | `true` | Dependency downloads and remote audits |
 | `APPFORGE_ALLOW_DESTRUCTIVE` | `false` | Destructive AppForge tools; keep disabled for normal web use |
 | `APPFORGE_UNSAFE_AGENT` | `false` | Agent sandbox bypass; isolated environments only |
@@ -144,6 +176,8 @@ Returns HTTP 409 until the job completes. The path is resolved from server-owned
 | `APPFORGE_PROMPT_MAX_CHARS` | `20000` | Request input limit |
 
 Boolean values accept `true/false`, `1/0`, `yes/no`, or `on/off`.
+
+The bridge process also accepts `APPFORGE_LLM_BRIDGE_HOST`, `APPFORGE_LLM_BRIDGE_PORT`, `APPFORGE_LLM_CONFIG_DIR`, and `APPFORGE_LLM_CONFIG`. Provider keys may be stored through the UI or supplied through provider-specific variables such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `OPENROUTER_API_KEY`, and `XAI_API_KEY`.
 
 ## Error contract
 
@@ -179,12 +213,15 @@ Completed jobs remain downloadable while their archive exists. If the archive is
 
 - Default binding is `127.0.0.1`.
 - No CORS policy is enabled.
+- The browser uses FastAPI `/api/llm` routes for provider settings; direct browser-to-bridge CORS access is not required.
+- The bridge defaults to loopback `127.0.0.1:8788`; exposing it on a shared interface requires external host and network controls.
 - API and page responses use `Cache-Control: no-store`.
 - Responses include restrictive CSP, frame, referrer, MIME, and permissions headers.
 - The Vue client renders dynamic text through normal template escaping, not HTML injection.
 - Download paths are never accepted from clients.
 - The archive tool excludes secrets, VCS state, dependencies, caches, and `.appforge/` runtime files.
+- Provider API keys are never echoed back by the bridge provider-save response. The provider list reports only key presence and source.
 - The web workflow never enables deployment.
 - One active job avoids ambiguous state and local resource contention.
 
-The application does not provide multi-user authentication. Keep it loopback-only unless an external authenticated reverse proxy and operating-system isolation are in place.
+The application and bridge do not provide multi-user authentication. Keep them loopback-only unless an external authenticated reverse proxy and operating-system isolation are in place.

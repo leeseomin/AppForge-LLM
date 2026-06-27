@@ -3,6 +3,7 @@
 ## 0.4.0 — 2026-06-27
 
 - Added the v4 engineering spine: Specification → Workflow → Memory → Loop Engineering.
+- Added a local `llm-bridge` provider path with web Provider Settings, FastAPI `/api/llm` proxy routes, a Bun bridge service, and an `APPFORGE_DRIVER=llm-bridge` driver.
 - Updated all built-in pipeline manifests to version 1.1 with strengthened or inserted `workflow_design`, `memory_engineering`, and `loop_engineering` stages before implementation-oriented work.
 - Strengthened `requirements_spec` and `workflow_spec` schemas with assumptions, risks, quality gates, state model, compensation, concurrency, timeout, and traceability requirements.
 - Added `memory_spec` and `loop_spec` artifact schemas plus dedicated stage skills.

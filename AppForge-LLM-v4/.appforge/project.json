@@ -1,0 +1,17 @@
+{
+  "version": "1.0",
+  "name": "AppForge-LLM-v4",
+  "root": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4",
+  "prompt": "Implement local LLM bridge provider settings and llm-bridge driver in AppForge-LLM v4 so the current web app can configure and use external LLM providers.",
+  "pipeline": "feature",
+  "pipeline_version": "1.1",
+  "mode": "autonomous",
+  "created_at": "2026-06-27T08:24:12+00:00",
+  "existing_repository": true,
+  "selection_scores": {},
+  "safety": {
+    "allow_network": false,
+    "allow_deploy": false,
+    "allow_destructive": false
+  }
+}

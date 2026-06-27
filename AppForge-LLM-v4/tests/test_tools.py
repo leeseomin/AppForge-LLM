@@ -49,11 +49,18 @@ def test_archive_excludes_secret_material_and_internal_state(tmp_path) -> None:
     (tmp_path / ".appforge" / "reports").mkdir(parents=True)
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "app.py").write_text("print('ok')\n", encoding="utf-8")
+    (tmp_path / "src" / ".DS_Store").write_text("mac metadata\n", encoding="utf-8")
     (tmp_path / ".env").write_text("TOKEN=secret\n", encoding="utf-8")
     (tmp_path / ".env.local").write_text("TOKEN=secret\n", encoding="utf-8")
     (tmp_path / ".env.example").write_text("TOKEN=your-api-key\n", encoding="utf-8")
     (tmp_path / "server.pem").write_text("private\n", encoding="utf-8")
     (tmp_path / ".appforge" / "project.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / ".appforge-web" / "jobs").mkdir(parents=True)
+    (tmp_path / ".appforge-web" / "jobs" / "job.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "projects" / "generated").mkdir(parents=True)
+    (tmp_path / "projects" / "generated" / "app.py").write_text("print('generated')\n", encoding="utf-8")
+    (tmp_path / "package.egg-info").mkdir()
+    (tmp_path / "package.egg-info" / "PKG-INFO").write_text("metadata\n", encoding="utf-8")
 
     result = ToolRegistry().get("archive_workspace").run(tmp_path, {})
     assert result.success
@@ -61,11 +68,15 @@ def test_archive_excludes_secret_material_and_internal_state(tmp_path) -> None:
     with zipfile.ZipFile(archive_path) as archive:
         names = set(archive.namelist())
     assert "src/app.py" in names
+    assert "src/.DS_Store" not in names
     assert ".env.example" in names
     assert ".env" not in names
     assert ".env.local" not in names
     assert "server.pem" not in names
     assert not any(name.startswith(".appforge/") for name in names)
+    assert not any(name.startswith(".appforge-web/") for name in names)
+    assert not any(name.startswith("projects/") for name in names)
+    assert not any(name.startswith("package.egg-info/") for name in names)
 
 
 def test_command_policy_blocks_network_and_destructive_patterns(tmp_path) -> None:

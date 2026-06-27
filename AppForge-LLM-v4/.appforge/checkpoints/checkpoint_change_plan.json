@@ -1,0 +1,83 @@
+{
+  "version": "1.0",
+  "pipeline": "feature",
+  "pipeline_version": "1.1",
+  "stage": "change_plan",
+  "status": "completed",
+  "attempt": 1,
+  "timestamp": "2026-06-27T08:35:03+00:00",
+  "artifacts": {
+    "change_plan": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/change_plan.json"
+  },
+  "gates": [
+    {
+      "kind": "artifact",
+      "name": "change_plan",
+      "required": true,
+      "passed": true,
+      "path": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/change_plan.json"
+    }
+  ],
+  "review": {
+    "passed": true,
+    "critical_count": 0,
+    "finding_count": 0,
+    "review_focus": [
+      "Every change maps to a requirement",
+      "Compatibility and migration are addressed",
+      "Verification and rollback are concrete"
+    ],
+    "findings": []
+  },
+  "driver": {},
+  "metadata": {
+    "stage_result": {
+      "stage": "change_plan",
+      "status": "completed",
+      "summary": "Mapped the implemented LLM bridge feature to specific files, requirements, compatibility notes, risks, rollback steps, and executable definition of done.",
+      "files_changed": [
+        ".appforge/artifacts/change_plan.json",
+        ".appforge/stage-result.json"
+      ],
+      "commands_run": [
+        {
+          "command": ".venv/bin/python -m appforge prompt . --output .appforge/current-stage.md",
+          "result": "passed; generated the change_plan stage packet"
+        },
+        {
+          "command": "git diff --stat -- AppForge-LLM-v4",
+          "result": "passed; reviewed tracked diff stat for target app"
+        },
+        {
+          "command": "git status --short -- AppForge-LLM-v4",
+          "result": "passed; reviewed tracked and untracked target app changes"
+        }
+      ],
+      "checks": [
+        {
+          "name": "requirements-mapped",
+          "passed": true,
+          "evidence": "change_plan.affected_requirements includes FR-001 through FR-005 and NFR-001 through NFR-004."
+        },
+        {
+          "name": "rollback-defined",
+          "passed": true,
+          "evidence": "change_plan.rollback includes runtime bypass, config cleanup, feature revert, static asset restore, and lockfile restore paths."
+        },
+        {
+          "name": "definition-of-done-executable",
+          "passed": true,
+          "evidence": "change_plan.definition_of_done lists exact pytest, npm, bun, secret scan, and OpenAppForge stage completion gates."
+        }
+      ],
+      "decisions": [
+        {
+          "decision": "Keep bridge startup as a separate local process in this slice.",
+          "reason": "The accepted requirements need provider configuration and driver usage, while launcher consolidation was explicitly out of scope in the product brief."
+        }
+      ],
+      "unresolved": []
+    },
+    "manual_completion": true
+  }
+}

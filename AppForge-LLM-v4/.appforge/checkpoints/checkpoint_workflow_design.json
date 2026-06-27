@@ -1,0 +1,80 @@
+{
+  "version": "1.0",
+  "pipeline": "feature",
+  "pipeline_version": "1.1",
+  "stage": "workflow_design",
+  "status": "completed",
+  "attempt": 1,
+  "timestamp": "2026-06-27T08:31:16+00:00",
+  "artifacts": {
+    "workflow_spec": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/workflow_spec.json"
+  },
+  "gates": [
+    {
+      "kind": "artifact",
+      "name": "workflow_spec",
+      "required": true,
+      "passed": true,
+      "path": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/workflow_spec.json"
+    }
+  ],
+  "review": {
+    "passed": true,
+    "critical_count": 0,
+    "finding_count": 0,
+    "review_focus": [
+      "Workflow states and transitions are explicit",
+      "Retries and duplicate inputs do not repeat consequential effects",
+      "Timeouts, compensation, observability, and manual override are concrete",
+      "State model, compensation, concurrency, timeout, and traceability are explicit"
+    ],
+    "findings": []
+  },
+  "driver": {},
+  "metadata": {
+    "stage_result": {
+      "stage": "workflow_design",
+      "status": "completed",
+      "summary": "Defined the LLM bridge configuration and usage workflow as restartable UI, proxy, readiness, and driver states with failure behavior and traceability.",
+      "files_changed": [
+        ".appforge/artifacts/workflow_spec.json",
+        ".appforge/stage-result.json"
+      ],
+      "commands_run": [
+        {
+          "command": ".venv/bin/python -m appforge prompt . --output .appforge/current-stage.md",
+          "result": "passed; generated the workflow_design stage packet"
+        },
+        {
+          "command": "sed -n ... .appforge/current-stage.md",
+          "result": "passed; inspected the workflow_design stage packet and workflow_spec schema"
+        }
+      ],
+      "checks": [
+        {
+          "name": "state-model-present",
+          "passed": true,
+          "evidence": "workflow_spec.json defines ui_closed, settings_loading, provider_configured, active_ready, and stage_generating states."
+        },
+        {
+          "name": "step-failures-covered",
+          "passed": true,
+          "evidence": "Each workflow step WF-001 through WF-007 declares success and failure behavior."
+        },
+        {
+          "name": "traceability-covered",
+          "passed": true,
+          "evidence": "FR-001 through FR-005 map to workflow steps in workflow_spec.traceability."
+        }
+      ],
+      "decisions": [
+        {
+          "decision": "Treat bridge generation retries as AppForge stage attempts instead of automatic transport retries.",
+          "reason": "Model calls are consequential and should remain inspectable through the existing checkpoint/stage attempt model."
+        }
+      ],
+      "unresolved": []
+    },
+    "manual_completion": true
+  }
+}

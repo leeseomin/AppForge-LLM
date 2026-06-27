@@ -1,0 +1,83 @@
+{
+  "schema_version": "1.0",
+  "summary": "The LLM bridge provider-settings feature is implemented, verified, security-reviewed, release-documented, and archived for source handoff. The current web app can configure provider keys through FastAPI /api/llm proxy routes, activate a provider/model, report truthful llm-bridge readiness, and run pipeline stages through the local bridge driver.",
+  "delivered": [
+    "Local Bun/TypeScript llm_bridge service with provider registry, persisted provider config, active provider/model selection, health, provider test, generate, stream, typecheck, and regression test coverage.",
+    "Python appforge.llm_bridge standard-library HTTP client plus FastAPI /api/llm proxy routes so the browser remains same-origin.",
+    "LLMBridgeDriver and driver aliases llm-bridge, llm_bridge, and llm wired through appforge.drivers.create_driver.",
+    "JobManager readiness checks that require bridge reachability, active provider selection, and configured provider state before APPFORGE_DRIVER=llm-bridge is marked ready.",
+    "Vue ProviderSettings modal integrated into TopBar/App, with API helpers, shared TypeScript types, styling, provider save/delete/test/activate flows, and packaged production web assets.",
+    "Security hardening: bridge provider upsert no longer echoes raw saved provider config or API keys, and bridge responses no longer advertise wildcard CORS.",
+    "Archive hardening: source archiver now ignores .appforge-web, projects, *.egg-info directories, and .DS_Store files; tests cover these exclusions.",
+    "Documentation updates in README.md, docs/WEB_APP.md, and CHANGELOG.md for bridge startup, configuration variables, wheel/source behavior, rollback, and known limitations.",
+    "Release artifacts: dist/openappforge-0.4.0-py3-none-any.whl and dist/openappforge-0.4.0.tar.gz rebuilt from final source.",
+    "Source archive: .appforge/reports/AppForge-LLM-v4-source.zip with manifest .appforge/reports/AppForge-LLM-v4-source.zip.manifest.json."
+  ],
+  "quickstart": [
+    "From source: uv sync --extra dev",
+    "Start the bridge: cd llm_bridge && bun install && bun run start",
+    "Start the web app with the bridge driver from the repository root: APPFORGE_DRIVER=llm-bridge .venv/bin/appforge web",
+    "Open http://127.0.0.1:8787, open Provider Settings, save or rely on a provider key, choose/test a model, and activate the provider.",
+    "Alternative CLI compatibility remains: APPFORGE_DRIVER=auto .venv/bin/appforge web, or APPFORGE_DRIVER=generic APPFORGE_AGENT_CMD='my-agent --workspace {workspace} --prompt {prompt_file}' .venv/bin/appforge web.",
+    "Rebuild frontend assets after UI changes: npm --prefix frontend install && npm --prefix frontend run build",
+    "Bridge development checks: cd llm_bridge && bun run typecheck && bun run test",
+    "Backend checks: .venv/bin/python -m pytest -q",
+    "Production package build: env PATH=.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin .venv/bin/python -m appforge tool run run_build --project . --input '{}'"
+  ],
+  "architecture_reference": [
+    ".appforge/artifacts/requirements_spec.json maps feature requirements REQ-1 through REQ-7 to provider configuration, backend proxy, llm-bridge driver, readiness, tests, security, and docs.",
+    ".appforge/artifacts/workflow_spec.json defines provider setup, readiness, and stage-generation flows including failure/recovery paths.",
+    ".appforge/artifacts/memory_spec.json defines bridge config retention, browser state, and AppForge checkpoint/artifact retention boundaries.",
+    ".appforge/artifacts/loop_spec.json documents health polling, provider test retry, stage execution, and archive/source handoff loops.",
+    ".appforge/artifacts/change_plan.json records the accepted implementation plan and verification scope.",
+    "Core code references: llm_bridge/src/server.ts, llm_bridge/src/registry.ts, appforge/llm_bridge.py, appforge/web.py, appforge/web_jobs.py, appforge/drivers.py, frontend/src/components/ProviderSettings.vue, frontend/src/api.ts, frontend/src/types.ts.",
+    "Archive hygiene references: appforge/constants.py, appforge/util.py, tests/test_tools.py."
+  ],
+  "verification_reference": [
+    ".appforge/artifacts/verification_report.json contains the main verification record.",
+    ".appforge/artifacts/security_report.json contains threat model, secret scan, SBOM, dependency-audit limitation, and fixed security findings.",
+    ".appforge/artifacts/release_report.json contains final build artifacts, hashes, install smoke, configuration, known issues, and rollback.",
+    ".venv/bin/python -m pytest -q passed with 23 tests and one existing Starlette TestClient deprecation warning.",
+    "npm run typecheck and npm run build passed in frontend/ during verification; packaged assets are present under appforge/resources/web/.",
+    "bun run typecheck passed in llm_bridge/; bun run test passed the no-key-echo/no-wildcard-CORS regression.",
+    "run_build passed after final source changes and rebuilt dist/openappforge-0.4.0-py3-none-any.whl plus dist/openappforge-0.4.0.tar.gz.",
+    "Wheel smoke passed: uv pip install --no-deps --target /private/tmp/appforge-v4-release-install-20260627-1754 dist/openappforge-0.4.0-py3-none-any.whl; PYTHONPATH import check printed 0.4.0, 0.4.0, True.",
+    "archive_workspace passed and wrote .appforge/reports/AppForge-LLM-v4-source.zip with 266 files and 454337 bytes.",
+    "ZIP assertion passed: required bridge/UI files were present and .DS_Store, .appforge, .appforge-web, projects, node_modules, and egg-info paths were absent."
+  ],
+  "operations_reference": [
+    "APPFORGE_DRIVER=llm-bridge enables the bridge driver; auto, codex, claude, and generic remain supported.",
+    "APPFORGE_LLM_BRIDGE_URL defaults to http://127.0.0.1:8788 for FastAPI-to-bridge calls.",
+    "APPFORGE_LLM_PROVIDER optionally overrides the active provider; APPFORGE_MODEL optionally overrides the model.",
+    "Bridge process defaults: APPFORGE_LLM_BRIDGE_HOST=127.0.0.1 and APPFORGE_LLM_BRIDGE_PORT=8788.",
+    "Bridge config defaults to ~/.appforge/llm/providers.json unless APPFORGE_LLM_CONFIG_DIR or APPFORGE_LLM_CONFIG is set.",
+    "Provider keys may come from the UI or provider environment variables such as OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY, OPENROUTER_API_KEY, and XAI_API_KEY.",
+    "Keep the web server and bridge loopback-only unless an authenticated reverse proxy, host firewall, and OS isolation are in place.",
+    "Runtime rollback: stop the bridge and set APPFORGE_DRIVER back to auto/codex/claude/generic. Provider rollback: delete provider settings in UI or remove the local bridge config file."
+  ],
+  "open_items": [
+    "Live provider connectivity and provider-side authorization were not verified because no API credentials were supplied.",
+    "Online dependency audit is deferred because network downloads are disabled in this AppForge project; the local secret scan and SBOM passed.",
+    "The llm-bridge driver is single-shot per stage and does not perform CLI-agent file editing; use Codex, Claude Code, or generic command driver for fully agentic file edits.",
+    "The Python wheel includes the FastAPI proxy and packaged web UI, but the Bun llm_bridge service is a source-tree component; use the source checkout/source archive or an already-running bridge.",
+    "Setuptools license metadata deprecation warnings remain and should be cleaned up before 2027-Feb-18."
+  ],
+  "next_steps": [
+    "Run a live provider smoke with user-owned credentials: start llm_bridge, save/test a provider in the UI, activate a model, and launch a tiny feature request with APPFORGE_DRIVER=llm-bridge.",
+    "Consider packaging or installing the Bun llm_bridge service more ergonomically if wheel-only installation becomes a supported distribution target.",
+    "Modernize pyproject.toml license metadata to remove setuptools deprecation warnings.",
+    "Run an online dependency audit in an environment where network access is approved.",
+    "Decide whether to expose a one-command launcher that starts both FastAPI and the bridge for local-only use."
+  ],
+  "source_archive": {
+    "path": ".appforge/reports/AppForge-LLM-v4-source.zip",
+    "manifest": ".appforge/reports/AppForge-LLM-v4-source.zip.manifest.json",
+    "files": 266,
+    "bytes": 454337,
+    "exclusion_evidence": "ZIP assertion found bad=[] and missing=[] for required bridge/UI files and excluded runtime/build paths."
+  },
+  "build_artifacts": [
+    "dist/openappforge-0.4.0-py3-none-any.whl (216163 bytes, sha256 986c084f71aff449e1d61ee5404f566b166722e8159b2f1cfdd9082127abe6cd)",
+    "dist/openappforge-0.4.0.tar.gz (155218 bytes, sha256 a332f7e6f2c0abd24db9fb372b43c97cff2750f91c0c0cace50cd173d5c94a43)"
+  ]
+}

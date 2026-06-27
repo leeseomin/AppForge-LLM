@@ -17,6 +17,7 @@ Describe the app → Build → Follow live stage status → Download the complet
 - **Persistent engineering memory:** the runner records stage outcomes, validation evidence, decisions, and failures in `.appforge/memory/stage-memory.jsonl` and summarizes them into later stage prompts.
 - **Retry-loop guard:** repeated failure signatures are detected as `REPEATED_FAILURE_LOOP` so the runner stops unproductive automatic retries and asks for a changed strategy.
 - **Web status updates:** the Korean timeline now names Memory/Loop engineering stages and explains repeated-loop failures.
+- **Local LLM bridge:** the web app can proxy provider settings through FastAPI to a local Bun bridge and run `APPFORGE_DRIVER=llm-bridge` against a configured external LLM provider.
 
 ## Fastest start
 
@@ -25,6 +26,7 @@ Prerequisites: Python 3.11+ and one of the following coding-agent executables:
 - Codex CLI
 - Claude Code CLI
 - a custom coding-agent command configured through `APPFORGE_AGENT_CMD`
+- Bun, when using the local `llm-bridge` provider path
 
 From a built wheel:
 
@@ -75,6 +77,26 @@ This writes `appforge/resources/web/index.html`, `appforge/resources/web/assets/
 
 The default `APPFORGE_DRIVER=auto` selects Codex CLI first and then Claude Code CLI. Readiness appears in the web app before the build action is enabled.
 
+### Local LLM bridge
+
+Start the bridge in a separate terminal, then start the web app with the bridge driver:
+
+```bash
+cd llm_bridge
+bun install
+bun run start
+```
+
+```bash
+APPFORGE_DRIVER=llm-bridge appforge web
+```
+
+Open Provider Settings in the web UI to save an API key, choose a default model, test the provider, and activate it for AppForge. The browser talks only to the FastAPI `/api/llm` proxy; the bridge listens on `http://127.0.0.1:8788` by default. Provider keys are stored in the local bridge config path, or read from provider environment variables such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `OPENROUTER_API_KEY`, and `XAI_API_KEY`.
+
+The `llm-bridge` driver is a single-shot stage driver. It is useful for provider-backed stage generation, while fully agentic file-editing workflows should continue to use Codex, Claude Code, or a custom command driver.
+
+The bridge service is included in the source checkout and AppForge source archive. A Python wheel installation serves the built web UI and bridge proxy, but still needs access to the `llm_bridge/` service source or an already-running bridge at `APPFORGE_LLM_BRIDGE_URL`.
+
 ### Custom agent command
 
 ```bash
@@ -90,15 +112,26 @@ Available placeholders are `{workspace}`, `{prompt_file}`, `{result_file}`, `{st
 ```text
 APPFORGE_PROJECTS_DIR          generated project directory; default projects/
 APPFORGE_DATA_DIR              persisted web-job state; default .appforge-web/
-APPFORGE_DRIVER                auto | codex | claude | generic
+APPFORGE_DRIVER                auto | codex | claude | generic | llm-bridge
 APPFORGE_AGENT_CMD             generic command template
 APPFORGE_MODEL                 model passed to the selected driver
+APPFORGE_LLM_BRIDGE_URL        llm-bridge URL; default http://127.0.0.1:8788
+APPFORGE_LLM_PROVIDER          optional provider override for llm-bridge driver
 APPFORGE_ALLOW_NETWORK         default true for installs and remote audits
 APPFORGE_STAGE_TIMEOUT         per-stage timeout in seconds; default 3600
 APPFORGE_MAX_STAGE_ATTEMPTS    optional maximum automatic attempts per stage
 APPFORGE_MAX_TURNS             optional Claude Code turn limit
 APPFORGE_UNSAFE_AGENT          default false; isolated environments only
 APPFORGE_PROMPT_MAX_CHARS      request input limit; default 20000
+```
+
+Bridge-specific runtime variables:
+
+```text
+APPFORGE_LLM_BRIDGE_HOST       bridge bind host; default 127.0.0.1
+APPFORGE_LLM_BRIDGE_PORT       bridge port; default 8788
+APPFORGE_LLM_CONFIG_DIR        provider config directory; default ~/.appforge/llm
+APPFORGE_LLM_CONFIG            provider config file path; default providers.json in config dir
 ```
 
 ## Existing CLI compatibility
@@ -129,6 +162,7 @@ appforge forge "Add passkey login while preserving password login" \
 python -m pip install -e '.[dev]'
 npm --prefix frontend install
 npm --prefix frontend run build
+cd llm_bridge && bun install && bun run typecheck && cd ..
 python -m compileall -q appforge tests
 python -m pytest
 python -m pip wheel . --no-deps --no-build-isolation -w dist
