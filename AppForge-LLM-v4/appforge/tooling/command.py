@@ -7,7 +7,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Sequence
 
 from appforge.constants import DEFAULT_COMMAND_TIMEOUT, MAX_CAPTURE_CHARS
 from appforge.models import ToolResult

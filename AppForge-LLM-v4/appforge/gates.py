@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
 import jsonschema
 
 from .artifacts import ArtifactValidationError, validate_artifact_file
 from .constants import SCHEMAS_DIR, STAGE_RESULT_FILE_NAME
-from .models import PipelineSpec, ProjectLayout, StageSpec
+from .models import ProjectLayout, StageSpec
 from .tooling.registry import ToolRegistry
 from .util import read_json
 

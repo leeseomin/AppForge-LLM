@@ -346,7 +346,10 @@ class LLMBridgeDriver(AgentDriver):
 
         final_path = layout.logs / f"{stage}-attempt-{attempt}-llm-bridge-final.txt"
         started = time.monotonic()
-        duration = lambda: round(time.monotonic() - started, 4)
+
+        def duration() -> float:
+            return round(time.monotonic() - started, 4)
+
         if cancel_event is not None and cancel_event.is_set():
             return DriverResult(
                 success=False,
