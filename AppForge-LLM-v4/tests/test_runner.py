@@ -125,7 +125,11 @@ def test_llm_bridge_envelope_writes_artifacts_stage_result_and_files(tmp_path) -
                 "decisions": [],
                 "unresolved": [],
             },
-            "files": {"README.md": "# Bridge fixture\n"},
+            "files": {
+                "README.md": "# Bridge fixture\n",
+                ".appforge/artifacts/product_brief.json": "{}",
+                ".appforge/stage-result.json": "{}",
+            },
         }
     )
     changed = _apply_bridge_envelope(
@@ -145,6 +149,28 @@ def test_llm_bridge_envelope_writes_artifacts_stage_result_and_files(tmp_path) -
     assert "README.md" in stage_result["files_changed"]
 
 
+def test_llm_bridge_envelope_rejects_unmanaged_appforge_file_paths(tmp_path) -> None:
+    layout = initialize_project(
+        "Build a small web app",
+        projects_dir=tmp_path,
+        name="bridge-managed-path",
+        pipeline_name="web-app",
+    )
+    response = json.dumps(
+        {
+            "artifacts": {"product_brief": _valid_product_brief()},
+            "files": {".appforge/current-stage.md": "nope"},
+        }
+    )
+    with pytest.raises(DriverError, match="managed path"):
+        _apply_bridge_envelope(
+            layout,
+            stage="intake",
+            produces=("product_brief",),
+            response_text=response,
+        )
+
+
 def test_llm_bridge_envelope_rejects_unsafe_file_paths(tmp_path) -> None:
     layout = initialize_project(
         "Build a small web app",
@@ -159,6 +185,75 @@ def test_llm_bridge_envelope_rejects_unsafe_file_paths(tmp_path) -> None:
         }
     )
     with pytest.raises(DriverError, match="Unsafe file path"):
+        _apply_bridge_envelope(
+            layout,
+            stage="intake",
+            produces=("product_brief",),
+            response_text=response,
+        )
+
+
+def test_llm_bridge_envelope_unwraps_wrapper_key(tmp_path) -> None:
+    layout = initialize_project(
+        "Build a small web app",
+        projects_dir=tmp_path,
+        name="bridge-unwrap",
+        pipeline_name="web-app",
+    )
+    # Models sometimes echo the contract shape and nest the real envelope under
+    # a wrapper key. The extractor must descend into it instead of treating the
+    # wrapper as the artifact (which previously crashed the job thread).
+    response = json.dumps(
+        {
+            "required_response_shape": {
+                "artifacts": {"product_brief": _valid_product_brief()},
+                "stage_result": _valid_stage_result(),
+                "files": {},
+            }
+        }
+    )
+    changed = _apply_bridge_envelope(
+        layout,
+        stage="intake",
+        produces=("product_brief",),
+        response_text=response,
+    )
+    assert ".appforge/artifacts/product_brief.json" in changed
+    artifact = json.loads((layout.artifacts / "product_brief.json").read_text(encoding="utf-8"))
+    assert artifact["schema_version"] == "1.0"
+
+
+def test_llm_bridge_envelope_accepts_bare_artifact(tmp_path) -> None:
+    layout = initialize_project(
+        "Build a small web app",
+        projects_dir=tmp_path,
+        name="bridge-bare",
+        pipeline_name="web-app",
+    )
+    # A model may return the artifact object directly without any envelope.
+    response = json.dumps(_valid_product_brief())
+    changed = _apply_bridge_envelope(
+        layout,
+        stage="intake",
+        produces=("product_brief",),
+        response_text=response,
+    )
+    assert ".appforge/artifacts/product_brief.json" in changed
+
+
+def test_llm_bridge_envelope_surfaces_validation_error_as_driver_error(tmp_path) -> None:
+    layout = initialize_project(
+        "Build a small web app",
+        projects_dir=tmp_path,
+        name="bridge-validation",
+        pipeline_name="web-app",
+    )
+    invalid_brief = _valid_product_brief()
+    del invalid_brief["schema_version"]
+    response = json.dumps({"artifacts": {"product_brief": invalid_brief}})
+    # Schema failures must become a retryable DriverError, never an uncaught
+    # ArtifactValidationError that kills the job thread with UNEXPECTED_ERROR.
+    with pytest.raises(DriverError, match="schema validation"):
         _apply_bridge_envelope(
             layout,
             stage="intake",
