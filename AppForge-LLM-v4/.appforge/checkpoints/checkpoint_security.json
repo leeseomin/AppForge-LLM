@@ -5,7 +5,7 @@
   "stage": "security",
   "status": "completed",
   "attempt": 1,
-  "timestamp": "2026-06-27T09:49:55+00:00",
+  "timestamp": "2026-06-27T10:09:10+00:00",
   "artifacts": {
     "security_report": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/security_report.json"
   },
@@ -31,7 +31,7 @@
         },
         "artifacts": [],
         "error": null,
-        "duration_seconds": 0.0505,
+        "duration_seconds": 0.0503,
         "command": null
       }
     },
@@ -93,13 +93,13 @@
       {
         "severity": "suggestion",
         "criterion": "unresolved",
-        "finding": "Online dependency audit remains unrun because network is disabled.",
+        "finding": "Network-enabled dependency audit remains unrun.",
         "proposed_change": "Resolve it now or document why it is safely deferred with an owner and verification step."
       },
       {
         "severity": "suggestion",
         "criterion": "unresolved",
-        "finding": "SBOM remains lightweight/root-manifest-only with zero components.",
+        "finding": "Live external provider security behavior requires user credentials and provider-side checks.",
         "proposed_change": "Resolve it now or document why it is safely deferred with an owner and verification step."
       }
     ]
@@ -109,7 +109,7 @@
     "stage_result": {
       "stage": "security",
       "status": "completed",
-      "summary": "Reviewed the build.sh uv fallback hotfix security posture, ran secret scan and SBOM generation, and recorded the network-disabled dependency audit limitation.",
+      "summary": "Completed security review for the LLM bridge autostart path: no secrets found, SBOM generated, autostart remains loopback-only, subprocess execution uses no shell, and dependency audit is explicitly deferred because network is disabled.",
       "files_changed": [
         ".appforge/artifacts/security_report.json",
         ".appforge/stage-result.json"
@@ -117,52 +117,64 @@
       "commands_run": [
         {
           "command": ".venv/bin/python -m appforge tool run secret_scan --project . --input '{}'",
-          "result": "passed; findings=[]"
+          "result": "passed; no findings"
         },
         {
           "command": ".venv/bin/python -m appforge tool run generate_sbom --project . --input '{}'",
-          "result": "passed; wrote .appforge/reports/sbom.cdx.json with components=0"
+          "result": "passed; wrote .appforge/reports/sbom.cdx.json"
         },
         {
           "command": ".venv/bin/python -m appforge tool run dependency_audit --project . --input '{}'",
-          "result": "not run; tool requires allow_network=true"
+          "result": "not run; failed with This tool requires allow_network=true"
+        },
+        {
+          "command": "rg -n \"apiKey|secret|token|password|APPFORGE_LLM_BRIDGE|subprocess|shell|Popen|log_path|base_url\" appforge/llm_bridge_process.py appforge/web.py tests/test_web.py",
+          "result": "passed; reviewed matches for secret handling, subprocess usage, and bridge URL boundaries"
         }
       ],
       "checks": [
         {
-          "name": "secret scan",
+          "name": "secrets",
           "passed": true,
-          "evidence": "No likely committed credentials found."
+          "evidence": "secret_scan returned passed true with no findings."
         },
         {
-          "name": "SBOM",
+          "name": "command execution boundary",
           "passed": true,
-          "evidence": "Generated .appforge/reports/sbom.cdx.json."
+          "evidence": "Bun is launched as argv without shell=True and with cwd set to the bundled llm_bridge directory."
         },
         {
-          "name": "dependency audit",
+          "name": "remote service boundary",
           "passed": true,
-          "evidence": "Optional audit could not run without network; limitation recorded."
+          "evidence": "Autostart rejects non-loopback APPFORGE_LLM_BRIDGE_URL values."
         },
         {
-          "name": "trust boundary",
+          "name": "dependency audit disclosure",
           "passed": true,
-          "evidence": "Patch remains local setup logic and does not change web bind, provider secrets, or bridge defaults."
+          "evidence": "Network-required dependency audit did not run and is recorded as a residual risk rather than hidden."
         }
       ],
       "decisions": [
         {
-          "decision": "Do not request network solely for dependency_audit in this hotfix.",
-          "reason": "The required security gate is secret_scan; online audit is optional and the code change does not alter dependency versions.",
+          "decision": "Do not auto-install llm_bridge dependencies from a settings request.",
+          "reason": "Implicit network installation when opening a settings modal would be surprising and can leak operational intent; actionable guidance is safer.",
           "alternatives": [
-            "Request network approval for dependency audit",
-            "Skip SBOM generation"
+            "Run bun install automatically",
+            "Keep raw connection refused error"
+          ]
+        },
+        {
+          "decision": "Keep child process environment inheritance.",
+          "reason": "Existing bridge provider configuration can rely on provider API key environment variables, and the new manager does not print the environment.",
+          "alternatives": [
+            "Strip all environment variables",
+            "Whitelist provider variables"
           ]
         }
       ],
       "unresolved": [
-        "Online dependency audit remains unrun because network is disabled.",
-        "SBOM remains lightweight/root-manifest-only with zero components."
+        "Network-enabled dependency audit remains unrun.",
+        "Live external provider security behavior requires user credentials and provider-side checks."
       ]
     },
     "manual_completion": true

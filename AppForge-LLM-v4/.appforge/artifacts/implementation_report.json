@@ -1,53 +1,54 @@
 {
   "schema_version": "1.0",
-  "summary": "Hardened the build.sh Python dependency setup path so the web launcher no longer fails when the installed uv lacks the sync subcommand or when uv sync is unusable in the local environment.",
+  "summary": "Made the LLM connection settings resilient when the bundled local llm_bridge is down by adding a FastAPI-side lazy autostart path, one-shot retry behavior, and clearer setup guidance for users connecting external models.",
   "features_completed": [
-    "build.sh now probes whether uv supports sync before using it.",
-    "If uv sync is unsupported or fails, build.sh falls back to the existing .venv or creates one with python3.",
-    "The pip fallback bootstraps pip with ensurepip when needed and uses no-build-isolation when setuptools and wheel are already present, preserving prepared/offline-friendly workspaces.",
-    "README.md, docs/WEB_APP.md, and CHANGELOG.md now document the uv-or-pip fallback behavior."
+    "Added appforge/llm_bridge_process.py to start the bundled Bun llm_bridge on demand for local loopback bridge URLs.",
+    "Updated /api/llm/* routes to retry once after a network-level BridgeError by invoking the local bridge manager.",
+    "Kept HTTP bridge errors such as unknown provider responses out of the autostart path so real bridge validation errors remain visible.",
+    "Updated the LLM bridge error handler to surface action guidance supplied by the autostart manager, including Bun missing, node_modules missing, non-loopback URL, and startup timeout cases.",
+    "Added focused web tests for connection-refused retry, autostart failure guidance, and non-autostart HTTP errors.",
+    "Verified that a real local autostart returns provider IDs including openai, anthropic, google, openrouter, xai, deepseek, groq, and cerebras when run outside the network sandbox."
   ],
   "files_changed": [
-    "build.sh",
-    "README.md",
-    "docs/WEB_APP.md",
-    "CHANGELOG.md",
+    "appforge/llm_bridge_process.py",
+    "appforge/web.py",
+    "tests/test_web.py",
     ".appforge/artifacts/implementation_report.json",
     ".appforge/stage-result.json"
   ],
   "commands_run": [
-    "uv --version -> passed; local uv is 0.7.2",
-    "APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check -> reproduced pre-fix uv sync failure against sandboxed uv cache",
-    "bash -n build.sh -> passed after patch",
-    "APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check -> passed after patch by falling back from uv sync to pip editable install",
-    "bash -c 'uv() { printf \"error: unrecognized subcommand '\\''sync'\\''\\n\" >&2; return 2; }; export -f uv; APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check' -> passed after patch by using the unsupported-uv fallback",
-    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check -> passed",
-    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke -> passed",
-    ".venv/bin/python -m pytest -q -> passed, 24 tests",
-    "npm --prefix frontend run typecheck -> passed",
-    "npm --prefix frontend run build -> passed"
+    ".venv/bin/python -m pytest tests/test_web.py -q -> passed, 9 tests",
+    ".venv/bin/python -m pytest -q -> passed, 27 tests",
+    ".venv/bin/python TestClient runtime probe for /api/llm/providers in sandbox -> failed with sandbox localhost Operation not permitted / Bun listen EADDRINUSE evidence",
+    ".venv/bin/python TestClient runtime probe for /api/llm/providers outside sandbox -> passed with HTTP 200 and provider list",
+    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke --no-open in sandbox -> failed because localhost bind was denied",
+    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke --no-open outside sandbox -> passed for /api/health and /"
   ],
   "decisions": [
-    "Kept uv sync as the preferred fast path when it is supported and succeeds.",
-    "Used a pip editable fallback instead of requiring users to upgrade uv, because the launcher should remain the easy source-start path.",
-    "Bootstrapped pip only inside .venv and only when missing, avoiding global Python changes.",
-    "Used --no-build-isolation only when setuptools and wheel are already available, so prepared environments avoid network-only build dependency resolution while fresh environments can still use pip's normal isolation path."
+    "Autostart is limited to http loopback bridge URLs to avoid trying to manage remote bridge services.",
+    "The manager uses subprocess argv with no shell interpolation and passes host/port through APPFORGE_LLM_BRIDGE_HOST and APPFORGE_LLM_BRIDGE_PORT.",
+    "Network-level BridgeError status_code 0 triggers autostart and one retry; bridge HTTP errors are returned as-is.",
+    "Bun dependency installation is not run implicitly from a settings-panel request; missing node_modules returns an actionable message instead of surprising network work.",
+    "The FastAPI lifespan shuts down only the bridge process it started, preserving already-running external bridge processes."
   ],
   "known_gaps": [
-    "A completely fresh pip fallback still needs either network access for missing Python dependencies or a pre-populated package cache.",
-    "The first failed ensurepip attempt observed during validation came from two concurrent fallback checks touching the same .venv; final validation was rerun sequentially."
+    "A live third-party provider test still requires the user's real API key and was not attempted.",
+    "If llm_bridge/node_modules is missing, the settings panel now gives guidance but does not auto-run bun install.",
+    "Local bind/runtime checks require running outside the restricted command sandbox; sandboxed checks still cannot prove localhost server behavior."
   ],
   "requirements_covered": [
-    "FR-002",
+    "FR-004",
+    "NFR-001",
     "NFR-002",
-    "NFR-004",
-    "WF-002",
-    "MEM-002",
-    "LOOP-002"
+    "NFR-003",
+    "WF-004",
+    "MEM-004",
+    "LOOP-003",
+    "LOOP-006"
   ],
   "reproduction": {
-    "reported_failure": "[build.sh] Syncing Python dependencies with uv. error: unrecognized subcommand 'sync'",
-    "local_failure": "APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check failed before the patch because uv sync could not access the local uv cache under sandbox restrictions.",
-    "simulated_old_uv": "A shell-exported uv function returning the same unrecognized-subcommand failure reproduced the user's uv compatibility case."
+    "reported_failure": "LLM 연결 설정 showed LLM 브릿지에 연결할 수 없습니다: [Errno 61] Connection refused.",
+    "local_failure": "A TestClient call to /api/llm/providers with an unreachable bridge URL returned LLM_BRIDGE_ERROR before the patch.",
+    "post_fix": "The same bridge-down class now calls the bridge manager, retries the provider request, and succeeds when the local bundled bridge can start."
   }
 }

@@ -1,77 +1,52 @@
 {
   "schema_version": "1.0",
-  "summary": "Handoff for the build.sh uv compatibility hotfix. The launcher now keeps uv sync as the preferred path but falls back to .venv/pip editable install when uv sync is unsupported or unusable, so the web UI startup path is no longer blocked by older uv versions.",
+  "summary": "Final handoff for the LLM connection settings fix: the web app now lazy-starts the bundled local llm_bridge for loopback settings/API calls, retries provider loading once, and presents actionable setup errors instead of the previous connection-refused dead end.",
   "delivered": [
-    "build.sh probes uv sync support before using it.",
-    "build.sh falls back when uv sync fails at runtime, including the local sandboxed uv-cache failure class.",
-    "build.sh bootstraps pip into .venv when a uv-created environment lacks pip.",
-    "build.sh uses --no-build-isolation for pip fallback when setuptools and wheel are already present, avoiding unnecessary network-only build dependency resolution in prepared workspaces.",
-    "README.md, docs/WEB_APP.md, and CHANGELOG.md document uv-or-pip fallback behavior.",
-    "Verification, security, release, and handoff AppForge artifacts were refreshed after the hotfix.",
-    "Source archive created at .appforge/reports/AppForge-LLM-v4-source.zip with 267 files and 459539 bytes before final handoff completion."
+    "appforge/llm_bridge_process.py: bounded local Bun bridge process manager for loopback bridge URLs.",
+    "appforge/web.py: /api/llm/* bridge calls now autostart on network-level BridgeError and retry once; BridgeError action guidance is surfaced to the UI.",
+    "tests/test_web.py: regression coverage for autostart retry, autostart guidance, and preserving bridge HTTP errors.",
+    "Verification/security/release AppForge artifacts updated with current evidence.",
+    "Source archive: .appforge/reports/AppForge-LLM-v4-source.zip with 268 source files."
   ],
   "quickstart": [
-    "Run ./build.sh from the repository root to prepare dependencies, build packaged web assets, start appforge web, and open the browser.",
-    "Run APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check to verify a prepared workspace without starting the server.",
-    "Run APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke to start the web server without opening a browser, probe /api/health and /, then stop it.",
-    "If the installed uv lacks sync, the launcher prints that it is falling back and continues with pip editable install.",
-    "If uv sync exists but fails locally, the launcher attempts the same pip fallback before failing."
+    "Run ./build.sh to start the local AppForge web UI.",
+    "Open the web UI and click LLM 연결.",
+    "If the bundled local bridge is down, /api/llm/providers will start llm_bridge automatically for http://127.0.0.1:8788-style loopback URLs.",
+    "Save a provider API key or provide that provider's environment variable, choose a model, and apply it as the active provider/model.",
+    "For headless verification, run APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke --no-open."
   ],
   "architecture_reference": [
-    ".appforge/artifacts/requirements_spec.json: FR-002 covers Python dependency preparation.",
-    ".appforge/artifacts/workflow_spec.json: WF-002 covers uv or venv/pip fallback creating an executable .venv/bin/appforge.",
-    ".appforge/artifacts/memory_spec.json: MEM-002 covers .venv dependency readiness and invalidation.",
-    ".appforge/artifacts/loop_spec.json: LOOP-002 covers bounded dependency reconciliation.",
-    "build.sh: install_python_with_pip, uv_supports_sync, and ensure_python_env implement the hotfix."
+    ".appforge/artifacts/implementation_report.json records the concrete changed files and decisions.",
+    ".appforge/artifacts/release_report.json records configuration variables, install/run instructions, build artifacts, and rollback.",
+    "appforge/llm_bridge_process.py owns the local process lifecycle and is intentionally separate from the HTTP client in appforge/llm_bridge.py.",
+    "appforge/web.py remains the same-origin FastAPI proxy between the Vue settings panel and the Bun bridge."
   ],
   "verification_reference": [
-    "bash -n build.sh passed.",
-    "APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check passed after uv sync failed locally and pip fallback completed.",
-    "Simulated old uv without sync support passed through pip fallback: bash -c 'uv() { printf \"error: unrecognized subcommand '\\''sync'\\''\\n\" >&2; return 2; }; export -f uv; APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check'.",
-    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check passed.",
-    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke passed and stopped its web server pid.",
-    ".venv/bin/python -m pytest -q passed with 24 tests.",
-    "npm --prefix frontend run typecheck passed.",
-    "npm --prefix frontend run build passed.",
-    "AppForge run_tests, run_build, secret_scan, release_readiness, and archive_workspace gates passed.",
-    "Archive assertion verified build.sh fallback content is included and .appforge, .appforge-web, dist, .git, node_modules, and .venv are excluded."
+    ".appforge/artifacts/verification_report.json lists all executed checks and sandbox limitations.",
+    ".venv/bin/python -m pytest tests/test_web.py -q passed 9 tests.",
+    ".venv/bin/python -m pytest -q and AppForge run_tests passed 27 tests.",
+    "Outside the restricted sandbox, /api/llm/providers returned HTTP 200 with provider IDs after local bridge autostart.",
+    "Outside the restricted sandbox, build.sh --smoke --no-open reached /api/health and /.",
+    "bun run typecheck and bun test passed in llm_bridge.",
+    "Archive assertion confirmed appforge/llm_bridge_process.py, appforge/web.py, tests/test_web.py, and README.md are included and .git/.venv/node_modules/dist/.appforge are excluded."
   ],
   "operations_reference": [
-    "Default web URL remains http://127.0.0.1:8787.",
-    "APPFORGE_WEB_HOST and APPFORGE_WEB_PORT override the bind endpoint.",
-    "APPFORGE_SKIP_INSTALL=1 skips Python dependency reconciliation.",
-    "APPFORGE_SKIP_FRONTEND_BUILD=1 skips frontend build and requires packaged web assets to exist.",
-    "APPFORGE_NO_OPEN=1 or --no-open suppresses browser opening.",
-    "APPFORGE_DRIVER=llm-bridge or APPFORGE_START_LLM_BRIDGE=1 requests optional bridge startup; APPFORGE_SKIP_LLM_BRIDGE=1 disables launcher-owned bridge startup.",
-    "No deployment, publishing, push, or external provider call was performed."
+    "APPFORGE_LLM_BRIDGE_URL defaults to http://127.0.0.1:8788.",
+    "APPFORGE_LLM_BRIDGE_AUTOSTART can disable/enable lazy bridge startup; default is enabled unless APPFORGE_SKIP_LLM_BRIDGE is set.",
+    "APPFORGE_BRIDGE_TIMEOUT bounds bridge startup polling; default is 15 seconds.",
+    "If llm_bridge/node_modules is missing, run bun install in llm_bridge before opening settings again.",
+    "Remote bridge URLs must be started by the operator; AppForge will not auto-manage non-loopback bridge services."
   ],
   "open_items": [
-    "A completely fresh pip fallback still requires network access or a local package cache for missing dependencies.",
-    "Online dependency audit remains unrun because network is disabled.",
-    "SBOM generation remains lightweight/root-manifest-only and reported zero components.",
-    "Setuptools emits non-blocking pyproject license metadata deprecation warnings during build."
+    "Network-enabled dependency audit remains unrun in this environment.",
+    "Live external provider generation/test requires user credentials and provider network access.",
+    "Setuptools license metadata deprecation warnings remain pre-existing package metadata cleanup work."
   ],
   "next_steps": [
-    "Run ./build.sh in the user's normal shell to confirm the browser opens with their installed uv version.",
-    "Optionally run dependency_audit with --allow-network in a network-approved environment.",
-    "Consider updating pyproject.toml license metadata before the Setuptools 2027 deprecation deadline.",
-    "If full offline first-run is required, provide a local wheelhouse or documented package cache workflow."
+    "With a real API key, open LLM 연결 설정, save a provider, run 연결 테스트, and set the active model.",
+    "When network is available, rerun dependency audit with AppForge allow-network or the ecosystem audit tools.",
+    "Consider documenting APPFORGE_LLM_BRIDGE_AUTOSTART in README/docs if this behavior should be promoted beyond the settings flow."
   ],
-  "source_archive": {
-    "path": ".appforge/reports/AppForge-LLM-v4-source.zip",
-    "files": 267,
-    "bytes": 459539,
-    "verified_exclusions": [
-      ".appforge",
-      ".appforge-web",
-      "dist",
-      ".git",
-      "node_modules",
-      ".venv"
-    ],
-    "verified_inclusions": [
-      "build.sh",
-      "build.sh uv_supports_sync fallback logic"
-    ]
-  }
+  "source_archive": ".appforge/reports/AppForge-LLM-v4-source.zip",
+  "source_archive_evidence": "archive_workspace wrote 268 files and 463350 bytes; zip assertion confirmed required changed files are included and dependency/cache/control-plane directories are excluded."
 }

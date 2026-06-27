@@ -5,7 +5,7 @@
   "stage": "handoff",
   "status": "completed",
   "attempt": 1,
-  "timestamp": "2026-06-27T09:53:34+00:00",
+  "timestamp": "2026-06-27T10:12:23+00:00",
   "artifacts": {
     "handoff_report": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/handoff_report.json"
   },
@@ -31,7 +31,7 @@
             {
               "name": "source_present",
               "passed": true,
-              "detail": "267 source/project files",
+              "detail": "268 source/project files",
               "required": true
             },
             {
@@ -82,15 +82,15 @@
         "success": true,
         "data": {
           "archive": ".appforge/reports/AppForge-LLM-v4-source.zip",
-          "files": 267,
-          "bytes": 459539
+          "files": 268,
+          "bytes": 463350
         },
         "artifacts": [
           "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/reports/AppForge-LLM-v4-source.zip",
           "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/reports/AppForge-LLM-v4-source.zip.manifest.json"
         ],
         "error": null,
-        "duration_seconds": 0.0619,
+        "duration_seconds": 0.0621,
         "command": null
       }
     },
@@ -138,7 +138,7 @@
         },
         "artifacts": [],
         "error": null,
-        "duration_seconds": 0.0007,
+        "duration_seconds": 0.0006,
         "command": null
       }
     }
@@ -146,7 +146,7 @@
   "review": {
     "passed": true,
     "critical_count": 0,
-    "finding_count": 3,
+    "finding_count": 2,
     "review_focus": [
       "Quickstart is executable",
       "Deliverables and open items are unambiguous",
@@ -156,19 +156,13 @@
       {
         "severity": "suggestion",
         "criterion": "unresolved",
-        "finding": "Fresh pip fallback without preinstalled dependencies needs network or package cache.",
+        "finding": "Network dependency audit remains unrun.",
         "proposed_change": "Resolve it now or document why it is safely deferred with an owner and verification step."
       },
       {
         "severity": "suggestion",
         "criterion": "unresolved",
-        "finding": "Online dependency audit remains unrun because network is disabled.",
-        "proposed_change": "Resolve it now or document why it is safely deferred with an owner and verification step."
-      },
-      {
-        "severity": "suggestion",
-        "criterion": "unresolved",
-        "finding": "SBOM remains lightweight/root-manifest-only with zero components.",
+        "finding": "Credentialed provider connection test remains a user-side next step after entering API keys.",
         "proposed_change": "Resolve it now or document why it is safely deferred with an owner and verification step."
       }
     ]
@@ -178,7 +172,7 @@
     "stage_result": {
       "stage": "handoff",
       "status": "completed",
-      "summary": "Prepared final handoff for the build.sh uv compatibility hotfix, including quickstart, verification evidence, release/security limitations, and source archive details.",
+      "summary": "Prepared final handoff for the LLM connection settings fix, including quickstart, verification evidence, operations notes, known open items, and a source archive with required changed files included.",
       "files_changed": [
         ".appforge/artifacts/handoff_report.json",
         ".appforge/stage-result.json"
@@ -186,49 +180,51 @@
       "commands_run": [
         {
           "command": ".venv/bin/python -m appforge tool run archive_workspace --project . --input '{}'",
-          "result": "passed; wrote .appforge/reports/AppForge-LLM-v4-source.zip with 267 files and 459539 bytes"
+          "result": "passed; wrote .appforge/reports/AppForge-LLM-v4-source.zip with 268 files and 463350 bytes"
+        },
+        {
+          "command": ".venv/bin/python -m appforge tool run release_readiness --project . --input '{}'",
+          "result": "passed; source, README, gitignore, verification artifact, and security artifact present"
+        },
+        {
+          "command": ".venv/bin/python -m appforge tool run artifact_inventory --project . --input '{}'",
+          "result": "passed; found dist, README.md, LICENSE, CHANGELOG.md"
         },
         {
           "command": ".venv/bin/python zip assertion for .appforge/reports/AppForge-LLM-v4-source.zip",
-          "result": "passed; build.sh fallback content included and .appforge/.appforge-web/dist/.git/node_modules/.venv excluded"
+          "result": "passed; required changed files included and .git/.venv/node_modules/dist/.appforge excluded"
         }
       ],
       "checks": [
         {
-          "name": "quickstart",
-          "passed": true,
-          "evidence": "./build.sh, --check, and --smoke paths are documented and verified."
-        },
-        {
           "name": "source archive",
           "passed": true,
-          "evidence": "archive_workspace produced .appforge/reports/AppForge-LLM-v4-source.zip and zip assertions passed."
+          "evidence": "archive_workspace produced .appforge/reports/AppForge-LLM-v4-source.zip and manifest."
         },
         {
-          "name": "verification evidence",
+          "name": "handoff reproducibility",
           "passed": true,
-          "evidence": "handoff_report references fallback checks, smoke, pytest, npm typecheck/build, AppForge gates, and archive assertions."
+          "evidence": "handoff_report includes quickstart, configuration, verification references, operations notes, open items, and next steps."
         },
         {
-          "name": "open items",
+          "name": "archive exclusions",
           "passed": true,
-          "evidence": "Network audit, SBOM scope, fresh pip fallback, and license metadata warnings are explicitly listed."
+          "evidence": "zip assertion found blocked_count 0 for .git/.venv/node_modules/dist/.appforge prefixes."
         }
       ],
       "decisions": [
         {
-          "decision": "Keep final handoff source-archive focused and exclude generated dependency/build/runtime directories.",
-          "reason": "The archive is intended as a rebuildable source handoff, not a deployment bundle.",
+          "decision": "Provide handoff as source archive plus local commands, not deployment.",
+          "reason": "The requested outcome is local LLM connection setup repair, and deployment/publication was not authorized.",
           "alternatives": [
-            "Include dist artifacts",
-            "Include .venv or node_modules"
+            "Publish a release",
+            "Deploy the web app"
           ]
         }
       ],
       "unresolved": [
-        "Fresh pip fallback without preinstalled dependencies needs network or package cache.",
-        "Online dependency audit remains unrun because network is disabled.",
-        "SBOM remains lightweight/root-manifest-only with zero components."
+        "Network dependency audit remains unrun.",
+        "Credentialed provider connection test remains a user-side next step after entering API keys."
       ]
     },
     "manual_completion": true

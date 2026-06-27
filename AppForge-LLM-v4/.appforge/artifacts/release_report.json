@@ -1,73 +1,82 @@
 {
   "schema_version": "1.0",
-  "summary": "Release candidate refreshed after the build.sh uv fallback hotfix. Python build, secret scan, release readiness, launcher smoke, and documentation checks passed; no deployment or publishing was performed.",
+  "summary": "Release candidate for the LLM settings bridge autostart fix is ready as source and Python package artifacts. The release preserves local-only defaults, avoids deployment, and includes verification/security evidence for the previous LLM bridge connection-refused failure.",
   "release_version": "0.4.0",
   "build_artifacts": [
     "dist/openappforge-0.4.0-py3-none-any.whl",
-    "dist/openappforge-0.4.0.tar.gz"
+    "dist/openappforge-0.4.0.tar.gz",
+    ".appforge/reports/sbom.cdx.json"
   ],
   "install_and_run": [
-    "Preferred source UI path: ./build.sh",
-    "Prepared workspace check: APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check",
-    "No-browser smoke: APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke",
-    "Manual source path remains: python -m venv .venv; source .venv/bin/activate; python -m pip install -e '.[dev]'; npm --prefix frontend install; npm --prefix frontend run build; appforge web",
-    "Wheel install path remains: python -m pip install dist/openappforge-0.4.0-py3-none-any.whl; appforge web"
+    "From a prepared source checkout, run ./build.sh to launch the local web UI.",
+    "For deterministic smoke verification, run APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke --no-open.",
+    "Open the web UI and click LLM 연결; /api/llm/providers now lazy-starts the bundled local bridge when it is down and then returns provider choices.",
+    "To use a real external model, save a provider API key in the LLM 연결 설정 dialog or provide the provider's documented environment variable, then set/confirm the active provider and model."
   ],
   "configuration": [
-    "APPFORGE_WEB_HOST defaults to 127.0.0.1.",
-    "APPFORGE_WEB_PORT defaults to 8787.",
-    "APPFORGE_SKIP_INSTALL=1 reuses the existing .venv.",
-    "APPFORGE_SKIP_FRONTEND_BUILD=1 reuses packaged web assets.",
-    "APPFORGE_DRIVER=llm-bridge or APPFORGE_START_LLM_BRIDGE=1 requests optional bridge startup; APPFORGE_SKIP_LLM_BRIDGE=1 disables launcher-owned bridge startup.",
-    "APPFORGE_LLM_BRIDGE_URL defaults to http://127.0.0.1:8788."
+    "APPFORGE_LLM_BRIDGE_URL defaults to http://127.0.0.1:8788.",
+    "APPFORGE_LLM_BRIDGE_AUTOSTART defaults to true for local loopback bridge URLs and can be set to 0/false/no/off to disable lazy start.",
+    "APPFORGE_SKIP_LLM_BRIDGE=1 disables bridge autostart.",
+    "APPFORGE_BRIDGE_TIMEOUT controls the bounded bridge startup wait, default 15 seconds.",
+    "Remote bridge URLs are not managed automatically; start those services separately and point APPFORGE_LLM_BRIDGE_URL at them."
   ],
   "migrations": [
-    "No data migration is required.",
-    "Existing .appforge-web runtime state remains compatible.",
-    "Existing appforge CLI commands remain available."
+    "No database, config-file, or provider-secret migration is required.",
+    "Existing llm_bridge config and environment-based provider keys remain compatible.",
+    "Existing build.sh bridge startup behavior remains available for APPFORGE_DRIVER=llm-bridge or APPFORGE_START_LLM_BRIDGE=1."
   ],
   "release_checks": [
     {
-      "check": "run_build",
+      "check": "focused LLM settings API tests",
       "passed": "true",
-      "evidence": "appforge tool run run_build executed .venv/bin/python -m build --no-isolation and produced wheel/sdist."
+      "evidence": ".venv/bin/python -m pytest tests/test_web.py -q passed 9 tests."
     },
     {
-      "check": "secret_scan",
+      "check": "full Python regression suite",
       "passed": "true",
-      "evidence": "security stage and release gate secret_scan returned no findings."
+      "evidence": ".venv/bin/python -m pytest -q and AppForge run_tests both passed 27 tests."
     },
     {
-      "check": "release_readiness",
+      "check": "runtime LLM provider listing",
       "passed": "true",
-      "evidence": "release_readiness reported source_present, README, gitignore, verification artifact, and security artifact all present."
+      "evidence": "Outside the restricted sandbox, /api/llm/providers returned HTTP 200 and provider IDs after local bridge autostart."
     },
     {
-      "check": "artifact_inventory",
+      "check": "web smoke",
       "passed": "true",
-      "evidence": "artifact_inventory found dist, README.md, LICENSE, CHANGELOG.md, pyproject.toml, Python/FastAPI stack."
+      "evidence": "Outside the restricted sandbox, build.sh --smoke --no-open reached /api/health and /."
     },
     {
-      "check": "launcher fallback and smoke",
+      "check": "package build",
       "passed": "true",
-      "evidence": "Unsupported uv sync simulation, local uv sync failure fallback, prepared --check, and web --smoke all passed."
+      "evidence": "AppForge run_build produced dist/openappforge-0.4.0.tar.gz and dist/openappforge-0.4.0-py3-none-any.whl."
     },
     {
-      "check": "frontend packaged assets",
+      "check": "release readiness",
       "passed": "true",
-      "evidence": "npm --prefix frontend run build completed and emitted appforge/resources/web assets."
+      "evidence": "release_readiness passed with source_present, README.md, .gitignore, verification artifact, and security artifact checks."
+    },
+    {
+      "check": "secret scan",
+      "passed": "true",
+      "evidence": "secret_scan found no likely committed credentials."
+    },
+    {
+      "check": "llm_bridge typecheck/test",
+      "passed": "true",
+      "evidence": "bun run typecheck and bun test passed in llm_bridge."
     }
   ],
   "known_issues": [
-    "Online dependency audit was not run because network is disabled.",
-    "SBOM generation remains lightweight/root-manifest-only and reported zero components.",
-    "Fresh pip fallback without preinstalled dependencies still requires network access or a local package cache.",
-    "Setuptools emits non-blocking deprecation warnings for pyproject license metadata."
+    "Network-enabled dependency audit was not run because network is disabled in this environment.",
+    "Setuptools emitted pre-existing license metadata deprecation warnings during package build.",
+    "Live external provider calls require real user API keys and were not attempted.",
+    "If llm_bridge/node_modules is absent, users must run bun install in llm_bridge; the settings request does not auto-install dependencies."
   ],
   "rollback": [
-    "Revert build.sh to the previous uv-sync-only dependency setup if needed.",
-    "Revert README.md, docs/WEB_APP.md, and CHANGELOG.md fallback wording.",
-    "Use the previous dist artifacts from Git or rebuild from the prior commit.",
-    "Manual appforge web startup remains available if the launcher is bypassed."
+    "Revert appforge/llm_bridge_process.py, appforge/web.py, and tests/test_web.py to remove lazy bridge autostart.",
+    "Keep manual bridge startup path by running cd llm_bridge && bun run start before opening LLM 연결 설정.",
+    "Delete regenerated dist artifacts if a clean rebuild is desired, then rerun .venv/bin/python -m appforge tool run run_build --project . --input '{}'.",
+    "No runtime data migration rollback is required."
   ]
 }
