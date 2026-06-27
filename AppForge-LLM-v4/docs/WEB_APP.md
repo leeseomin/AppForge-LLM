@@ -195,7 +195,7 @@ Returns HTTP 409 until the job completes. The path is resolved from server-owned
 |---|---:|---|
 | `APPFORGE_PROJECTS_DIR` | `projects` | Generated workspaces |
 | `APPFORGE_DATA_DIR` | `.appforge-web` | Persisted web-job state |
-| `APPFORGE_DRIVER` | `auto` | `auto`, `codex`, `claude`, `generic`, or `llm-bridge` |
+| `APPFORGE_DRIVER` | `auto` | `auto` or `llm-bridge` (same external-LLM path); `codex`/`claude`/`generic` are rejected |
 | `APPFORGE_WEB_HOST` | `127.0.0.1` | `build.sh`/`appforge web` bind host |
 | `APPFORGE_WEB_PORT` | `8787` | `build.sh`/`appforge web` bind port |
 | `APPFORGE_NO_OPEN` | `false` | Suppress browser opening in `build.sh` normal mode |
@@ -205,8 +205,8 @@ Returns HTTP 409 until the job completes. The path is resolved from server-owned
 | `APPFORGE_SKIP_LLM_BRIDGE` | `false` | Disable launcher-owned bridge startup |
 | `APPFORGE_SMOKE_TIMEOUT` | `30` | Seconds for `./build.sh --smoke` health/UI probes |
 | `APPFORGE_BRIDGE_TIMEOUT` | `15` | Seconds for launcher-owned bridge health checks |
-| `APPFORGE_AGENT_CMD` | unset | Generic command template |
-| `APPFORGE_MODEL` | unset | Model passed to Codex/Claude/llm-bridge driver |
+| `APPFORGE_AGENT_CMD` | unset | Removed (generic command driver is no longer supported) |
+| `APPFORGE_MODEL` | unset | Model passed to the llm-bridge driver |
 | `APPFORGE_LLM_BRIDGE_URL` | `http://127.0.0.1:8788` | FastAPI-to-bridge URL |
 | `APPFORGE_LLM_PROVIDER` | unset | Optional provider override for the llm-bridge driver |
 | `APPFORGE_ALLOW_NETWORK` | `true` | Dependency downloads and remote audits |
@@ -214,7 +214,7 @@ Returns HTTP 409 until the job completes. The path is resolved from server-owned
 | `APPFORGE_UNSAFE_AGENT` | `false` | Agent sandbox bypass; isolated environments only |
 | `APPFORGE_STAGE_TIMEOUT` | `3600` | Per-stage timeout in seconds |
 | `APPFORGE_MAX_STAGE_ATTEMPTS` | pipeline default | Override automatic attempts |
-| `APPFORGE_MAX_TURNS` | unset | Claude Code turn limit |
+| `APPFORGE_MAX_TURNS` | unset | Removed (Claude Code CLI driver is no longer supported) |
 | `APPFORGE_PROMPT_MAX_CHARS` | `20000` | Request input limit |
 
 Boolean values accept `true/false`, `1/0`, `yes/no`, or `on/off`.

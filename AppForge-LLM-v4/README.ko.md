@@ -20,11 +20,7 @@ AppForge-LLM v4는 v3의 Vite + Vue 웹 UX 위에 **Specification → Workflow �
 
 ## 가장 쉬운 실행 방법
 
-필수 조건은 Python 3.11 이상과 다음 실행기 중 하나입니다.
-
-- Codex CLI
-- Claude Code CLI
-- `APPFORGE_AGENT_CMD`로 연결한 사용자 정의 코딩 에이전트
+필수 조건은 Python 3.11 이상, 로컬 LLM 브릿지용 [Bun](https://bun.sh), 그리고 외부 LLM 프로바이더(OpenAI · Anthropic · Google · OpenRouter · DeepSeek · Groq 등)의 API 키입니다. 코딩 에이전트 CLI(Codex/Claude)는 더 이상 사용하지 않습니다.
 
 빌드된 wheel에서 실행:
 
@@ -69,37 +65,32 @@ npm --prefix frontend run build
 
 빌드 결과는 `appforge/resources/web/index.html`, `appforge/resources/web/assets/*`, `favicon.svg`, `manifest.webmanifest`에 기록됩니다.
 
-## 코딩 에이전트 설정
+## 외부 LLM 연결 설정
 
-### 자동 선택
+AppForge-LLM v4는 파이프라인의 모든 단계를 로컬 LLM 브릿지(`llm_bridge/`)를 거쳐 **외부 LLM API**로만 실행합니다. Codex CLI / Claude Code CLI / 사용자 정의 명령(`APPFORGE_AGENT_CMD`) 드라이버는 제거되었습니다.
 
-기본값 `APPFORGE_DRIVER=auto`는 Codex CLI를 먼저 찾고, 없으면 Claude Code CLI를 사용합니다. 웹앱 상단에서 준비 상태를 확인할 수 있습니다.
-
-### 사용자 정의 에이전트
-
-```bash
-APPFORGE_DRIVER=generic \
-APPFORGE_AGENT_CMD='my-agent --workspace {workspace} --prompt {prompt_file}' \
-appforge web
-```
-
-사용 가능한 치환자는 `{workspace}`, `{prompt_file}`, `{result_file}`, `{stage}`, `{attempt}`입니다. `{prompt_file}`을 사용하지 않으면 단계 작업 패킷이 표준입력으로 전달됩니다.
+1. 브릿지 의존성 설치: `cd llm_bridge && bun install`
+2. `appforge web` 실행 — 웹앱이 loopback 브릿지를 자동으로 시작합니다(또는 `bun run dev`로 직접 실행).
+3. 웹앱 상단의 LLM 연결 설정 패널에서 프로바이더·API 키·모델을 선택합니다.
+4. 선택한 프로바이더/모델이 활성화되면 준비 완료 상태가 되고 파이프라인을 시작할 수 있습니다.
 
 ### 주요 환경 변수
 
 ```text
 APPFORGE_PROJECTS_DIR          생성 프로젝트 경로, 기본값 projects/
 APPFORGE_DATA_DIR              웹 작업 상태 경로, 기본값 .appforge-web/
-APPFORGE_DRIVER                auto | codex | claude | generic
-APPFORGE_AGENT_CMD             generic 실행 명령 템플릿
-APPFORGE_MODEL                 드라이버에 전달할 모델 이름
+APPFORGE_DRIVER                auto | llm-bridge (모두 동일한 외부 LLM 경로, 기본값 auto)
+APPFORGE_MODEL                 브릿지에 전달할 모델 이름 (선택)
+APPFORGE_LLM_BRIDGE_URL        FastAPI→브릿지 URL, 기본값 http://127.0.0.1:8788
+APPFORGE_LLM_PROVIDER          활성 프로바이더 덮어쓰기 (선택)
+APPFORGE_LLM_BRIDGE_AUTOSTART  브릿지 자동 시작, 기본값 true
 APPFORGE_ALLOW_NETWORK         기본값 true, 패키지 설치·원격 감사 허용
 APPFORGE_STAGE_TIMEOUT         단계별 제한 시간(초), 기본값 3600
 APPFORGE_MAX_STAGE_ATTEMPTS    단계별 최대 자동 시도 횟수
-APPFORGE_MAX_TURNS             Claude Code 최대 턴 수
-APPFORGE_UNSAFE_AGENT          기본값 false, 격리 환경 외 사용 금지
 APPFORGE_PROMPT_MAX_CHARS      요청 입력 제한, 기본값 20000
 ```
+
+> 참고: `codex`, `claude`, `generic`을 `APPFORGE_DRIVER`에 지정하면 거부됩니다. 외부 LLM 프로바이더 API 키만 지원합니다.
 
 ## 기존 CLI 호환성
 

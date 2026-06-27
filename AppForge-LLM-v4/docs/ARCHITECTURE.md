@@ -24,7 +24,7 @@ The control plane consists of six layers:
 1. **Router** — scores the natural-language request against pipeline keywords and hard routing rules. Existing repositories receive feature/bugfix preference.
 2. **Pipeline manifest** — a versioned YAML document that orders stages and declares required artifacts, candidate tools, review criteria, approvals, attempts, and executable gates.
 3. **Stage packet compiler** — combines the stage skill, meta-skills, user request, prior validated artifacts, repository tree, detected stack/domain guidance, artifact schemas, tool contracts, and prior failure findings into one bounded prompt.
-4. **Agent driver** — invokes Codex, Claude Code, or a generic local command in the selected workspace. The driver is not trusted to declare its own success.
+4. **LLM bridge driver** — sends each stage packet to the local Bun bridge, which calls the configured external LLM provider and returns a JSON envelope the runner applies to the workspace. The driver is not trusted to declare its own success.
 5. **Engineering memory layer** — records compact stage outcomes, decisions, validation summaries, and repeated-failure signatures for later packets.
 6. **Gate/checkpoint engine** — validates the completion record and artifact schemas, executes declared tools, performs deterministic review, and atomically records the result.
 

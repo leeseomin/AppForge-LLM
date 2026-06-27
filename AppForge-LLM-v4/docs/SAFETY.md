@@ -9,11 +9,11 @@ OpenAppForge treats the coding agent as a powerful but fallible worker. Agent ou
 - Tools marked destructive require `allow_destructive=true`.
 - Command execution uses argument vectors with `shell=False`, bounded timeouts, and captured/redacted output.
 - Known destructive system, disk, force-push, and pipe-to-shell patterns are blocked by the command policy.
-- Codex is launched in workspace-write sandbox mode by default.
-- Claude Code is launched in automatic permission mode by default.
-- Permission-bypass modes require the explicit `--unsafe-agent` option.
+- Codex/Claude/generic local coding-agent CLI drivers were removed; each pipeline stage runs through the local LLM bridge against a configured external provider API key.
+- The bridge binds to the loopback interface only; provider API keys are persisted in a `0600`-permission config file and are never sent to the browser.
+- `--unsafe-agent` is retained only for isolated environments and never bypasses artifact or gate validation.
 
-The external coding assistant may have capabilities outside AppForge's Python tool layer. Its own sandbox and permission system remain part of the security boundary. Run untrusted application requests in a disposable workspace or container.
+The external LLM provider may produce incorrect or unsafe code. Its output is treated as untrusted text until AppForge's schema, gate, and review layers validate it. AppForge never lets the model execute commands or edit files directly; the bridge only returns a JSON envelope that the runner applies. Run untrusted application requests in a disposable workspace or container.
 
 `--allow-network` governs AppForge's declared network tools; it is not an operating-system firewall. Repository test and build commands execute project code and can create subprocesses or network connections permitted by the host. Use a container, VM, or host firewall when the repository or generated code is untrusted.
 
@@ -22,7 +22,7 @@ The external coding assistant may have capabilities outside AppForge's Python to
 
 The v4 web server binds to `127.0.0.1` by default and has no built-in multi-user authentication. Do not bind it to a public or shared network interface unless an authenticated reverse proxy, host firewall, and operating-system isolation are in place.
 
-The web workflow enables AppForge network-dependent tools by default to make dependency installation and release checks achievable through the single-click path. Set `APPFORGE_ALLOW_NETWORK=false` to restore an offline tool policy. This setting is still not an operating-system firewall and does not constrain arbitrary network activity performed by repository build scripts or the external coding-agent process.
+The web workflow enables AppForge network-dependent tools by default to make dependency installation and release checks achievable through the single-click path. Set `APPFORGE_ALLOW_NETWORK=false` to restore an offline tool policy. This setting is still not an operating-system firewall and does not constrain arbitrary network activity performed by repository build scripts or the LLM bridge process.
 
 The web layer accepts only the natural-language request from the browser. Pipeline selection, project paths, driver configuration, safety flags, and archive paths are server-owned. Downloads are limited to the completed job's `.appforge/reports/` directory and remain unavailable until ZIP integrity verification succeeds.
 
