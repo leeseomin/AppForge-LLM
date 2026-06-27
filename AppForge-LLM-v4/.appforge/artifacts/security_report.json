@@ -1,58 +1,40 @@
 {
   "schema_version": "1.0",
-  "summary": "Security review passed for the LLM bridge autostart change. The new process manager is restricted to local loopback bridge URLs, starts Bun without shell interpolation, avoids secret logging, and preserves existing provider-secret handling in the bridge.",
+  "summary": "Phase4 does not introduce new credential storage or external execution paths; provider secrets remain handled by existing bridge save/test flows and model catalog requests are credential-free.",
   "passed": true,
   "threat_model": [
-    "Assets: provider API keys, active provider/model selection, local bridge config, AppForge runtime state, and localhost bridge/web ports.",
-    "Actors: local user running the source checkout, browser UI user on the same machine, external LLM provider endpoints, and a misconfigured or unavailable local bridge.",
-    "Entry points: /api/llm/* FastAPI routes, APPFORGE_LLM_BRIDGE_URL, APPFORGE_LLM_BRIDGE_AUTOSTART, APPFORGE_SKIP_LLM_BRIDGE, and the Bun llm_bridge process.",
-    "Trust boundaries: browser to FastAPI same-origin API, FastAPI to local Bun bridge HTTP, local process environment to child Bun process, and bridge to external provider APIs.",
-    "Abuse cases reviewed: command injection through bridge URL, auto-starting arbitrary remote services, leaking API keys in logs/errors, infinite startup polling, killing unrelated bridge processes, and masking real bridge HTTP validation errors."
+    "Browser user can type API keys and model IDs in the LLM settings modal",
+    "Bridge provider status crosses from local bridge to FastAPI proxy to browser",
+    "Model catalog payloads are untrusted display data from local registry/models.dev cache",
+    "A malicious or oversized model name should not execute code because Vue escapes interpolated text"
   ],
   "checks": [
     {
-      "check": "secret_scan",
-      "passed": "true",
-      "evidence": "appforge tool run secret_scan returned passed true with no findings."
+      "check": "Secret echo regression",
+      "passed": "passed",
+      "evidence": "server.test provider upsert response does not contain fake key or apiKey"
     },
     {
-      "check": "dependency_audit",
-      "passed": "not_run",
-      "evidence": "appforge tool run dependency_audit returned This tool requires allow_network=true; network audit was not run in this restricted environment."
+      "check": "Credential-free model catalog loading",
+      "passed": "passed",
+      "evidence": "getProviderModels performs GET /providers/{id}/models without API key payload"
     },
     {
-      "check": "generate_sbom",
-      "passed": "true",
-      "evidence": "appforge tool run generate_sbom wrote .appforge/reports/sbom.cdx.json with 0 lightweight components."
+      "check": "No persistent browser cache",
+      "passed": "passed",
+      "evidence": "Model cache uses component-local Map/Set state; no localStorage cache added"
     },
     {
-      "check": "subprocess command injection review",
-      "passed": "true",
-      "evidence": "appforge/llm_bridge_process.py calls subprocess.Popen with argv [\"bun\", \"run\", \"start\"], cwd fixed to the bundled llm_bridge directory, and no shell=True."
-    },
-    {
-      "check": "loopback boundary review",
-      "passed": "true",
-      "evidence": "_bridge_bind allows only http URLs with hostname 127.0.0.1, localhost, or ::1 before autostarting a process."
-    },
-    {
-      "check": "secret handling review",
-      "passed": "true",
-      "evidence": "The new manager does not inspect API keys; web.py continues passing apiKey only to the existing llm_bridge client and does not add key logging."
-    },
-    {
-      "check": "bounded loop and process ownership",
-      "passed": "true",
-      "evidence": "ensure_running uses an RLock, one managed process reference, APPFORGE_BRIDGE_TIMEOUT polling, and shutdown only terminates the Popen it created."
+      "check": "Security headers unchanged",
+      "passed": "passed",
+      "evidence": "appforge/web.py CSP and same-origin proxy path were not weakened"
     }
   ],
   "findings": [],
-  "secrets_scan": "Passed: no likely committed credentials or private keys were found by appforge secret_scan.",
-  "dependency_audit": "Not run: the AppForge dependency_audit tool requires allow_network=true. No network audit was performed in this environment; package build and SBOM generation still passed.",
+  "secrets_scan": "No committed provider secret was introduced by Phase4 changes; fake test key remains constructed as test data and existing test asserts it is not echoed.",
+  "dependency_audit": "No new dependency was added. ModelSelect uses Vue and TypeScript only.",
   "residual_risks": [
-    "Live external provider calls depend on user-supplied API keys and provider-side security; this change did not perform credentialed provider calls.",
-    "The child Bun process inherits the process environment, matching existing bridge behavior so provider environment keys can work; operators should avoid launching with unnecessary secrets in the environment.",
-    "If llm_bridge dependencies are missing, the app returns guidance instead of auto-installing, avoiding implicit network work from a settings request.",
-    "Dependency vulnerability status remains unknown until a network-enabled audit is run."
+    "Live provider calls still depend on user-supplied credentials and provider-side access controls.",
+    "Large provider catalogs can still be loaded on demand, so users with very constrained browsers may see heavy advanced-mode interactions after choosing to expand."
   ]
 }

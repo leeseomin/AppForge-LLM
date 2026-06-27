@@ -5,7 +5,7 @@
   "stage": "intake",
   "status": "completed",
   "attempt": 1,
-  "timestamp": "2026-06-27T09:02:35+00:00",
+  "timestamp": "2026-06-27T15:51:22+00:00",
   "artifacts": {
     "product_brief": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/product_brief.json"
   },
@@ -34,49 +34,24 @@
     "stage_result": {
       "stage": "intake",
       "status": "completed",
-      "summary": "Bounded the request to a one-command source launcher for the existing local web UI, with deterministic smoke verification and documentation updates.",
+      "summary": "Captured the Phase4 LLM connection UX request and safe defaults.",
       "files_changed": [
-        ".appforge/project.json",
-        ".appforge/request.md",
         ".appforge/artifacts/product_brief.json",
-        ".appforge/stage-result.json"
+        ".appforge/request.md",
+        ".appforge/project.json"
       ],
-      "commands_run": [
-        {
-          "command": ".venv/bin/python -m appforge prompt . --stage intake --output .appforge/current-stage.md",
-          "result": "passed; rendered and read the intake stage packet"
-        },
-        {
-          "command": "rg -n \"appforge-web|appforge web|def main|open_browser|no-open-browser|web\" pyproject.toml appforge frontend README.md docs tests",
-          "result": "passed; confirmed existing web entry points and documentation surface"
-        }
-      ],
+      "commands_run": [],
       "checks": [
         {
-          "name": "problem and users explicit",
+          "name": "Product brief schema",
           "passed": true,
-          "evidence": "product_brief.problem and target_users define the CLI-friction problem and local source users."
-        },
-        {
-          "name": "constraints and assumptions separated",
-          "passed": true,
-          "evidence": "product_brief.constraints records hard boundaries; assumptions records reversible runtime defaults."
-        },
-        {
-          "name": "scope bounded by non-goals",
-          "passed": true,
-          "evidence": "product_brief.non_goals excludes UI redesign, deployment, daemon management, and CLI removal."
+          "evidence": "product_brief.json includes schema_version and required fields"
         }
       ],
       "decisions": [
         {
-          "decision": "Treat build.sh as a source launcher for the existing appforge web command.",
-          "reason": "The current repository already owns the production web UI through appforge.web and packaged Vite assets, so the smallest coherent change is orchestration around that entry point.",
-          "alternatives": [
-            "Create a separate web server",
-            "Redesign the frontend",
-            "Force llm-bridge as the only driver"
-          ]
+          "decision": "Use Phase4 recommended F-1 A and F-2 A defaults.",
+          "reason": "The user asked to continue an interrupted Phase4 implementation and Phase4.md marks those as recommended."
         }
       ],
       "unresolved": []

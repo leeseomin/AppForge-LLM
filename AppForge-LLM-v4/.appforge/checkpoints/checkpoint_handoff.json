@@ -5,7 +5,7 @@
   "stage": "handoff",
   "status": "completed",
   "attempt": 1,
-  "timestamp": "2026-06-27T10:12:23+00:00",
+  "timestamp": "2026-06-27T15:54:04+00:00",
   "artifacts": {
     "handoff_report": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/handoff_report.json"
   },
@@ -31,7 +31,7 @@
             {
               "name": "source_present",
               "passed": true,
-              "detail": "268 source/project files",
+              "detail": "280 source/project files",
               "required": true
             },
             {
@@ -68,7 +68,7 @@
         },
         "artifacts": [],
         "error": null,
-        "duration_seconds": 0.0056,
+        "duration_seconds": 0.0058,
         "command": null
       }
     },
@@ -82,15 +82,15 @@
         "success": true,
         "data": {
           "archive": ".appforge/reports/AppForge-LLM-v4-source.zip",
-          "files": 268,
-          "bytes": 463350
+          "files": 280,
+          "bytes": 507138
         },
         "artifacts": [
           "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/reports/AppForge-LLM-v4-source.zip",
           "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/reports/AppForge-LLM-v4-source.zip.manifest.json"
         ],
         "error": null,
-        "duration_seconds": 0.0621,
+        "duration_seconds": 0.0689,
         "command": null
       }
     },
@@ -138,7 +138,7 @@
         },
         "artifacts": [],
         "error": null,
-        "duration_seconds": 0.0006,
+        "duration_seconds": 0.0008,
         "command": null
       }
     }
@@ -146,86 +146,71 @@
   "review": {
     "passed": true,
     "critical_count": 0,
-    "finding_count": 2,
+    "finding_count": 0,
     "review_focus": [
       "Quickstart is executable",
       "Deliverables and open items are unambiguous",
       "Verification evidence is easy to find"
     ],
-    "findings": [
-      {
-        "severity": "suggestion",
-        "criterion": "unresolved",
-        "finding": "Network dependency audit remains unrun.",
-        "proposed_change": "Resolve it now or document why it is safely deferred with an owner and verification step."
-      },
-      {
-        "severity": "suggestion",
-        "criterion": "unresolved",
-        "finding": "Credentialed provider connection test remains a user-side next step after entering API keys.",
-        "proposed_change": "Resolve it now or document why it is safely deferred with an owner and verification step."
-      }
-    ]
+    "findings": []
   },
   "driver": {},
   "metadata": {
     "stage_result": {
       "stage": "handoff",
       "status": "completed",
-      "summary": "Prepared final handoff for the LLM connection settings fix, including quickstart, verification evidence, operations notes, known open items, and a source archive with required changed files included.",
+      "summary": "Prepared Phase4 handoff with delivered changes, quickstart, architecture pointers, verification references, operations notes, and open items.",
       "files_changed": [
-        ".appforge/artifacts/handoff_report.json",
-        ".appforge/stage-result.json"
+        ".appforge/artifacts/handoff_report.json"
       ],
       "commands_run": [
         {
-          "command": ".venv/bin/python -m appforge tool run archive_workspace --project . --input '{}'",
-          "result": "passed; wrote .appforge/reports/AppForge-LLM-v4-source.zip with 268 files and 463350 bytes"
+          "command": "bun run typecheck in llm_bridge",
+          "result": "passed"
         },
         {
-          "command": ".venv/bin/python -m appforge tool run release_readiness --project . --input '{}'",
-          "result": "passed; source, README, gitignore, verification artifact, and security artifact present"
+          "command": "bun test in llm_bridge",
+          "result": "passed; 8 tests"
         },
         {
-          "command": ".venv/bin/python -m appforge tool run artifact_inventory --project . --input '{}'",
-          "result": "passed; found dist, README.md, LICENSE, CHANGELOG.md"
+          "command": "npm run typecheck in frontend",
+          "result": "passed"
         },
         {
-          "command": ".venv/bin/python zip assertion for .appforge/reports/AppForge-LLM-v4-source.zip",
-          "result": "passed; required changed files included and .git/.venv/node_modules/dist/.appforge excluded"
+          "command": "npm run build in frontend",
+          "result": "passed; rebuilt packaged assets"
+        },
+        {
+          "command": ".venv/bin/python -m pytest -q",
+          "result": "passed; 78 tests"
+        },
+        {
+          "command": ".venv/bin/ruff check appforge tests",
+          "result": "passed"
+        },
+        {
+          "command": "APPFORGE_MODELS_DEV_URL=http://127.0.0.1:1 bun -e payload probe",
+          "result": "passed; compact /providers 40552 bytes vs include_models 287573 bytes"
+        },
+        {
+          "command": "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_SKIP_LLM_BRIDGE=1 ./build.sh --smoke",
+          "result": "passed"
         }
       ],
       "checks": [
         {
-          "name": "source archive",
+          "name": "Handoff report schema",
           "passed": true,
-          "evidence": "archive_workspace produced .appforge/reports/AppForge-LLM-v4-source.zip and manifest."
-        },
-        {
-          "name": "handoff reproducibility",
-          "passed": true,
-          "evidence": "handoff_report includes quickstart, configuration, verification references, operations notes, open items, and next steps."
-        },
-        {
-          "name": "archive exclusions",
-          "passed": true,
-          "evidence": "zip assertion found blocked_count 0 for .git/.venv/node_modules/dist/.appforge prefixes."
+          "evidence": "handoff_report.json records delivered scope, quickstart, architecture, verification, operations, open items, and next steps"
         }
       ],
       "decisions": [
         {
-          "decision": "Provide handoff as source archive plus local commands, not deployment.",
-          "reason": "The requested outcome is local LLM connection setup repair, and deployment/publication was not authorized.",
-          "alternatives": [
-            "Publish a release",
-            "Deploy the web app"
-          ]
+          "decision": "Keep live provider generation as an explicit user-verifiable open item.",
+          "reason": "A real generation request requires the user's provider credentials."
         }
       ],
-      "unresolved": [
-        "Network dependency audit remains unrun.",
-        "Credentialed provider connection test remains a user-side next step after entering API keys."
-      ]
+      "unresolved": []
     },
     "manual_completion": true
   }

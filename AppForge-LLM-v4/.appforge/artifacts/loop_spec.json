@@ -1,254 +1,155 @@
 {
   "schema_version": "1.0",
-  "summary": "Bounded loop design for the build.sh launcher: dependency reconciliation runs once per invocation, bridge health checks are finite, smoke polling has a strict timeout, and cleanup handles only launcher-owned processes.",
+  "summary": "Phase4 loops are bounded: provider status loads once per modal reload, model fetches are one-shot per provider cache entry, fuzzy filtering is local, and chip expansion is user-controlled.",
   "loops": [
     {
       "id": "LOOP-001",
-      "purpose": "Parse and validate launcher arguments without recurrence.",
+      "purpose": "Initial compact provider load",
       "entry_conditions": [
-        "build.sh process starts"
+        "ProviderSettings mounted or reloaded"
       ],
       "exit_conditions": [
-        "All arguments are recognized and mode is selected",
-        "Unknown argument triggers usage output and exit"
+        "Provider status is rendered",
+        "Settings load error is rendered"
       ],
       "guardrails": [
-        "No side effects before argument validation succeeds.",
-        "Help exits immediately.",
-        "Only one mode branch is selected."
+        "Do not request include_models by default",
+        "Do not attempt credential actions on load failure"
       ],
       "max_iterations": 1,
-      "feedback_signal": "Usage text or normal step logging.",
-      "state_updates": "Writes MEM-001 process-local mode/flag variables.",
-      "failure_policy": "Print usage, exit non-zero, and start no child processes.",
-      "workflow_steps": [
-        "WF-001"
-      ],
-      "memory_surfaces": [
-        "MEM-001"
-      ]
+      "feedback_signal": "settings loading or error state",
+      "state_updates": "Writes providers, active selection, oauth provider options",
+      "failure_policy": "Show readable load error"
     },
     {
       "id": "LOOP-002",
-      "purpose": "Reconcile Python and frontend readiness for a launcher run.",
+      "purpose": "Lazy fetch one provider model list",
       "entry_conditions": [
-        "Arguments parsed",
-        "Install/build steps are not explicitly skipped"
+        "A provider is selected or expanded",
+        "Provider is not already cached or loading"
       ],
       "exit_conditions": [
-        ".venv/bin/appforge is executable",
-        "Packaged frontend assets are built",
-        "A dependency or build command fails"
+        "Models are cached",
+        "An empty list and warning are cached",
+        "Provider was already cached or loading"
       ],
       "guardrails": [
-        "Run each setup command at most once per launcher invocation.",
-        "Frontend dependency install runs only when frontend/node_modules is missing.",
-        "A failed setup step exits before starting the web server."
+        "modelLoading prevents duplicate fetches",
+        "No retry timer is created",
+        "Manual input remains enabled"
       ],
-      "max_iterations": 2,
-      "feedback_signal": "Step-prefixed terminal messages and command exit status.",
-      "state_updates": "Reads MEM-002/MEM-003 and updates .venv, frontend/node_modules, and appforge/resources/web when not skipped.",
-      "failure_policy": "Exit non-zero with the failing command visible; user can fix dependencies and rerun.",
-      "workflow_steps": [
-        "WF-002",
-        "WF-003"
-      ],
-      "memory_surfaces": [
-        "MEM-002",
-        "MEM-003"
-      ]
+      "max_iterations": 1,
+      "feedback_signal": "ModelSelect loading state and field warning",
+      "state_updates": "Writes MEM-002 and MEM-003",
+      "failure_policy": "Cache empty list, display warning, allow manual model ID"
     },
     {
       "id": "LOOP-003",
-      "purpose": "Probe or start llm_bridge only when bridge mode is requested.",
+      "purpose": "Local fuzzy filtering",
       "entry_conditions": [
-        "APPFORGE_DRIVER indicates llm-bridge or APPFORGE_START_LLM_BRIDGE=1",
-        "APPFORGE_SKIP_LLM_BRIDGE is not set"
+        "User types in ModelSelect"
       ],
       "exit_conditions": [
-        "Existing bridge health returns success",
-        "Launcher-started bridge health returns success",
-        "Bun is missing or bridge health timeout expires",
-        "Bridge startup is intentionally skipped"
+        "Top 50 matching models are rendered",
+        "No results message is rendered"
       ],
       "guardrails": [
-        "Do not start bridge for default auto/codex/claude/generic drivers.",
-        "Do not kill existing bridge processes not owned by this launcher.",
-        "Bound health attempts by APPFORGE_BRIDGE_TIMEOUT.",
-        "Write bridge output only to ignored runtime log path."
+        "No remote search calls",
+        "Sort by deterministic score and id",
+        "Keyboard selection remains bounded by filtered length"
       ],
-      "max_iterations": 20,
-      "feedback_signal": "Bridge health step messages and .appforge-web/llm-bridge.log for launcher-owned starts.",
-      "state_updates": "Reads MEM-001/MEM-004; may write MEM-004 log and launcher-owned bridge PID.",
-      "failure_policy": "If bridge was required, exit before web launch; if explicitly skipped, continue with existing AppForge readiness behavior.",
-      "workflow_steps": [
-        "WF-004"
-      ],
-      "memory_surfaces": [
-        "MEM-001",
-        "MEM-004"
-      ]
+      "max_iterations": 50,
+      "feedback_signal": "Dropdown option list and highlight index",
+      "state_updates": "Updates local query and highlightedIndex",
+      "failure_policy": "Keep the typed text as the emitted model value"
     },
     {
       "id": "LOOP-004",
-      "purpose": "Run the normal foreground web server until user cancellation.",
+      "purpose": "Advanced model chip expansion",
       "entry_conditions": [
-        "Setup is ready",
-        "Mode is normal or --no-open"
+        "User clicks more or collapse"
       ],
       "exit_conditions": [
-        "User stops appforge web",
-        "appforge web exits with success or failure"
+        "Provider id is added to or removed from expandedChips"
       ],
       "guardrails": [
-        "Use exec for the foreground web server so signal handling is natural.",
-        "Default to browser opening unless APPFORGE_NO_OPEN=1 or --no-open.",
-        "Do not supervise or restart the server endlessly."
+        "Initial list is capped at 10",
+        "Expanded list has max-height and scroll",
+        "Expansion is per provider"
       ],
       "max_iterations": 1,
-      "feedback_signal": "appforge web terminal output and visible browser UI.",
-      "state_updates": "Reads MEM-001/MEM-003/MEM-005; existing web app may update .appforge-web after user jobs.",
-      "failure_policy": "Surface appforge/uvicorn exit code; cleanup launcher-owned bridge process if needed.",
-      "workflow_steps": [
-        "WF-005"
-      ],
-      "memory_surfaces": [
-        "MEM-001",
-        "MEM-003",
-        "MEM-005"
-      ]
+      "feedback_signal": "More or collapse button visibility",
+      "state_updates": "Writes MEM-004 and may trigger LOOP-002",
+      "failure_policy": "No persistent side effect; user can collapse or close modal"
     },
     {
       "id": "LOOP-005",
-      "purpose": "Smoke-test web startup without opening a browser.",
+      "purpose": "Verification loop",
       "entry_conditions": [
-        "--smoke mode selected",
-        "Setup is ready"
+        "Implementation is complete"
       ],
       "exit_conditions": [
-        "/api/health and / return HTTP 200",
-        "APPFORGE_SMOKE_TIMEOUT expires",
-        "The web process exits before probes pass"
+        "All required checks pass",
+        "A concrete blocker is recorded"
       ],
       "guardrails": [
-        "Force no-browser startup.",
-        "Sleep between probes to avoid hot spinning.",
-        "Use a bounded timeout and finite attempts.",
-        "Kill only launcher-owned web and bridge PIDs in the EXIT trap."
-      ],
-      "max_iterations": 120,
-      "feedback_signal": "Probe progress, HTTP status, success/failure line, and process cleanup messages.",
-      "state_updates": "Reads MEM-005/MEM-006 and writes only process-local probe status plus existing .appforge-web runtime files.",
-      "failure_policy": "Print failure guidance, cleanup launcher-owned processes, and exit non-zero.",
-      "workflow_steps": [
-        "WF-006"
-      ],
-      "memory_surfaces": [
-        "MEM-005",
-        "MEM-006"
-      ]
-    },
-    {
-      "id": "LOOP-006",
-      "purpose": "Validate implementation and release evidence after code edits.",
-      "entry_conditions": [
-        "Implementation files changed"
-      ],
-      "exit_conditions": [
-        "All required quality gates pass",
-        "A gate fails and is fixed within the current work cycle",
-        "A true blocker is documented"
-      ],
-      "guardrails": [
-        "Do not claim a gate passed unless the exact command ran successfully.",
-        "Keep failed command output distinct from new fixes.",
-        "Do not rerun indefinitely; stop and investigate repeated identical failures."
+        "No fabricated evidence",
+        "Failed checks must be fixed and rerun",
+        "Generated assets must match frontend build"
       ],
       "max_iterations": 3,
-      "feedback_signal": "Command exit status and AppForge verification/release reports.",
-      "state_updates": "Writes verification/release artifacts and may refresh packaged web assets through npm build.",
-      "failure_policy": "Fix actionable failures, otherwise mark the relevant stage blocked with evidence.",
-      "workflow_steps": [
-        "verification",
-        "release",
-        "handoff"
-      ],
-      "memory_surfaces": [
-        "MEM-003",
-        "MEM-006",
-        "MEM-007"
-      ]
+      "feedback_signal": "Command exit codes and payload probe output",
+      "state_updates": "Writes verification, release, and handoff evidence",
+      "failure_policy": "Record blocker rather than claiming success"
     }
   ],
-  "retry_budget": "Argument parsing runs once. Python/frontend setup commands run at most once per invocation. Bridge health checks use APPFORGE_BRIDGE_TIMEOUT with finite polling. Smoke probes use APPFORGE_SMOKE_TIMEOUT with bounded one-second sleeps. Verification may repeat fix/check cycles up to three times before recording a blocker.",
-  "convergence": "The launcher converges when normal mode execs the existing appforge web server or smoke mode receives HTTP 200 from both /api/health and /. It exits safely on argument errors, dependency/build failures, required bridge failure, web process exit, or smoke timeout.",
+  "retry_budget": "Provider load and each provider model fetch run once per relevant user action/cache state. There is no polling or background retry for catalog search. Verification may rerun affected checks after fixes.",
+  "convergence": "The UX converges when provider status renders compactly, selected provider models are either cached or manually typed, and chip lists remain bounded unless explicitly expanded.",
   "human_escape_hatches": [
-    "Run ./build.sh --help to inspect options.",
-    "Use Ctrl-C to stop normal foreground web mode.",
-    "Use APPFORGE_SKIP_INSTALL=1 and APPFORGE_SKIP_FRONTEND_BUILD=1 to bypass setup loops in prepared workspaces.",
-    "Use APPFORGE_NO_OPEN=1 or --no-open to suppress browser opening.",
-    "Use APPFORGE_SKIP_LLM_BRIDGE=1 to avoid launcher-owned bridge startup.",
-    "Use APPFORGE_WEB_HOST and APPFORGE_WEB_PORT to choose a different loopback endpoint."
+    "Type any model ID manually",
+    "Close and reopen settings to clear the in-memory cache",
+    "Use /providers?include_models=true for compatibility diagnostics",
+    "Use /providers/{id}/models to inspect a provider catalog directly"
   ],
   "observability": [
-    "Every major loop prints a prefixed status line.",
-    "Smoke mode prints success or timeout and the tested URL.",
-    "Bridge startup logs are written to .appforge-web/llm-bridge.log when launcher-owned.",
-    "Verification reports capture exact commands and pass/fail evidence."
+    "model_count is visible in API payloads",
+    "Loading and failure states are visible in ModelSelect fields",
+    "Tests and payload probe capture loop outcomes"
   ],
   "tests": [
     {
-      "name": "shell-syntax-loop",
-      "evidence": "bash -n build.sh validates argument/control-flow syntax."
+      "name": "lazy-load-loop",
+      "evidence": "ProviderSettings ensureModels has cache and loading guards"
     },
     {
-      "name": "smoke-convergence-loop",
-      "evidence": "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke proves bounded web probes and cleanup."
+      "name": "fuzzy-loop",
+      "evidence": "ModelSelect filters local models and caps visible results at 50"
     },
     {
-      "name": "regression-loop",
-      "evidence": ".venv/bin/python -m pytest -q, npm --prefix frontend run typecheck, and npm --prefix frontend run build pass."
-    },
-    {
-      "name": "docs-loop",
-      "evidence": "README.md, docs/WEB_APP.md, and CHANGELOG.md document the launcher behavior and escape hatches."
+      "name": "verification-loop",
+      "evidence": "bun test, typechecks, frontend build, pytest, ruff, and payload probe passed"
     }
   ],
   "traceability": [
     {
       "workflow_step": "WF-001",
-      "loop": "LOOP-001",
-      "memory_surface": "MEM-001"
+      "loop": "LOOP-001"
     },
     {
       "workflow_step": "WF-002",
-      "loop": "LOOP-002",
-      "memory_surface": "MEM-002"
+      "loop": "LOOP-002"
     },
     {
       "workflow_step": "WF-003",
-      "loop": "LOOP-002",
-      "memory_surface": "MEM-003"
+      "loop": "LOOP-002,LOOP-004"
     },
     {
       "workflow_step": "WF-004",
-      "loop": "LOOP-003",
-      "memory_surface": "MEM-001, MEM-004"
-    },
-    {
-      "workflow_step": "WF-005",
-      "loop": "LOOP-004",
-      "memory_surface": "MEM-001, MEM-003, MEM-005"
-    },
-    {
-      "workflow_step": "WF-006",
-      "loop": "LOOP-005",
-      "memory_surface": "MEM-005, MEM-006"
+      "loop": "LOOP-003"
     },
     {
       "workflow_step": "verification",
-      "loop": "LOOP-006",
-      "memory_surface": "MEM-003, MEM-006, MEM-007"
+      "loop": "LOOP-005"
     }
   ]
 }

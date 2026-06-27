@@ -5,7 +5,7 @@
   "stage": "security",
   "status": "completed",
   "attempt": 1,
-  "timestamp": "2026-06-27T10:09:10+00:00",
+  "timestamp": "2026-06-27T15:53:37+00:00",
   "artifacts": {
     "security_report": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/security_report.json"
   },
@@ -31,7 +31,7 @@
         },
         "artifacts": [],
         "error": null,
-        "duration_seconds": 0.0503,
+        "duration_seconds": 0.0598,
         "command": null
       }
     },
@@ -69,7 +69,7 @@
           "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/reports/sbom.cdx.json"
         ],
         "error": null,
-        "duration_seconds": 0.0013,
+        "duration_seconds": 0.0017,
         "command": null
       }
     }
@@ -77,7 +77,7 @@
   "review": {
     "passed": true,
     "critical_count": 0,
-    "finding_count": 3,
+    "finding_count": 1,
     "review_focus": [
       "Trust boundaries and abuse cases are reviewed",
       "Secrets and dependencies are checked",
@@ -89,18 +89,6 @@
         "criterion": "dependency_audit",
         "finding": "Optional gate was skipped because no compatible command or dependency was available.",
         "proposed_change": "Document the missing check in the verification or handoff report."
-      },
-      {
-        "severity": "suggestion",
-        "criterion": "unresolved",
-        "finding": "Network-enabled dependency audit remains unrun.",
-        "proposed_change": "Resolve it now or document why it is safely deferred with an owner and verification step."
-      },
-      {
-        "severity": "suggestion",
-        "criterion": "unresolved",
-        "finding": "Live external provider security behavior requires user credentials and provider-side checks.",
-        "proposed_change": "Resolve it now or document why it is safely deferred with an owner and verification step."
       }
     ]
   },
@@ -109,73 +97,58 @@
     "stage_result": {
       "stage": "security",
       "status": "completed",
-      "summary": "Completed security review for the LLM bridge autostart path: no secrets found, SBOM generated, autostart remains loopback-only, subprocess execution uses no shell, and dependency audit is explicitly deferred because network is disabled.",
+      "summary": "Reviewed Phase4 credential and catalog-loading security boundaries; no new dependency or persistent browser cache was introduced.",
       "files_changed": [
-        ".appforge/artifacts/security_report.json",
-        ".appforge/stage-result.json"
+        ".appforge/artifacts/security_report.json"
       ],
       "commands_run": [
         {
-          "command": ".venv/bin/python -m appforge tool run secret_scan --project . --input '{}'",
-          "result": "passed; no findings"
+          "command": "bun run typecheck in llm_bridge",
+          "result": "passed"
         },
         {
-          "command": ".venv/bin/python -m appforge tool run generate_sbom --project . --input '{}'",
-          "result": "passed; wrote .appforge/reports/sbom.cdx.json"
+          "command": "bun test in llm_bridge",
+          "result": "passed; 8 tests"
         },
         {
-          "command": ".venv/bin/python -m appforge tool run dependency_audit --project . --input '{}'",
-          "result": "not run; failed with This tool requires allow_network=true"
+          "command": "npm run typecheck in frontend",
+          "result": "passed"
         },
         {
-          "command": "rg -n \"apiKey|secret|token|password|APPFORGE_LLM_BRIDGE|subprocess|shell|Popen|log_path|base_url\" appforge/llm_bridge_process.py appforge/web.py tests/test_web.py",
-          "result": "passed; reviewed matches for secret handling, subprocess usage, and bridge URL boundaries"
+          "command": "npm run build in frontend",
+          "result": "passed; rebuilt packaged assets"
+        },
+        {
+          "command": ".venv/bin/python -m pytest -q",
+          "result": "passed; 78 tests"
+        },
+        {
+          "command": ".venv/bin/ruff check appforge tests",
+          "result": "passed"
+        },
+        {
+          "command": "APPFORGE_MODELS_DEV_URL=http://127.0.0.1:1 bun -e payload probe",
+          "result": "passed; compact /providers 40552 bytes vs include_models 287573 bytes"
+        },
+        {
+          "command": "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_SKIP_LLM_BRIDGE=1 ./build.sh --smoke",
+          "result": "passed"
         }
       ],
       "checks": [
         {
-          "name": "secrets",
+          "name": "Security report schema",
           "passed": true,
-          "evidence": "secret_scan returned passed true with no findings."
-        },
-        {
-          "name": "command execution boundary",
-          "passed": true,
-          "evidence": "Bun is launched as argv without shell=True and with cwd set to the bundled llm_bridge directory."
-        },
-        {
-          "name": "remote service boundary",
-          "passed": true,
-          "evidence": "Autostart rejects non-loopback APPFORGE_LLM_BRIDGE_URL values."
-        },
-        {
-          "name": "dependency audit disclosure",
-          "passed": true,
-          "evidence": "Network-required dependency audit did not run and is recorded as a residual risk rather than hidden."
+          "evidence": "security_report.json records threat model, checks, findings, secrets scan notes, dependency audit notes, and residual risk"
         }
       ],
       "decisions": [
         {
-          "decision": "Do not auto-install llm_bridge dependencies from a settings request.",
-          "reason": "Implicit network installation when opening a settings modal would be surprising and can leak operational intent; actionable guidance is safer.",
-          "alternatives": [
-            "Run bun install automatically",
-            "Keep raw connection refused error"
-          ]
-        },
-        {
-          "decision": "Keep child process environment inheritance.",
-          "reason": "Existing bridge provider configuration can rely on provider API key environment variables, and the new manager does not print the environment.",
-          "alternatives": [
-            "Strip all environment variables",
-            "Whitelist provider variables"
-          ]
+          "decision": "Keep model catalog loading credential-free.",
+          "reason": "The model list endpoint is public local metadata and should not carry API keys."
         }
       ],
-      "unresolved": [
-        "Network-enabled dependency audit remains unrun.",
-        "Live external provider security behavior requires user credentials and provider-side checks."
-      ]
+      "unresolved": []
     },
     "manual_completion": true
   }

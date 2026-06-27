@@ -1,62 +1,57 @@
 {
   "schema_version": "1.0",
-  "summary": "AppForge-LLM v4 is a Python/FastAPI package with packaged Vite/Vue assets and an existing appforge web entry point. The launcher change should add a root shell script around the existing source setup, frontend build, optional llm_bridge startup, and appforge web server rather than altering the web application architecture.",
+  "summary": "The change spans the Bun-based llm_bridge provider API, the FastAPI same-origin proxy, and the Vue provider settings modal.",
   "stack": [
-    "Python package managed by pyproject.toml with console scripts appforge and appforge-web.",
-    "FastAPI/uvicorn web server in appforge/web.py serving packaged Vite assets from appforge/resources/web/.",
-    "Vue 3 + Vite + TypeScript frontend under frontend/ with npm scripts dev, typecheck, build, and preview.",
-    "Optional Bun/TypeScript llm_bridge service under llm_bridge/ for APPFORGE_DRIVER=llm-bridge.",
-    "Pytest backend/control-plane tests under tests/."
+    "Python 3 / FastAPI web control plane",
+    "Vue 3 / Vite / TypeScript frontend",
+    "Bun / TypeScript llm_bridge service",
+    "Pytest, ruff, vue-tsc, vite, bun test"
   ],
   "entry_points": [
-    "pyproject.toml [project.scripts] exposes appforge = appforge.cli:app and appforge-web = appforge.web:main.",
-    "appforge/cli.py web command calls appforge.web.serve with --host, --port, --open-browser/--no-open-browser, and --log-level.",
-    "appforge/web.py serve constructs the FastAPI app and opens http://{host}:{port} via webbrowser when open_browser is true.",
-    "frontend/vite.config.ts builds production assets into appforge/resources/web/ for the FastAPI server to serve.",
-    "README.md and docs/WEB_APP.md currently document source startup as manual venv/pip/npm/appforge web commands."
+    "llm_bridge/src/server.ts handles /providers and /providers/{id}/models",
+    "llm_bridge/src/registry.ts builds ProviderStatus payloads",
+    "frontend/src/components/ProviderSettings.vue renders the LLM settings modal",
+    "frontend/src/api.ts already exposes getProviderModels(providerId)",
+    "appforge/web.py proxies /api/llm/providers and /api/llm/providers/{id}/models"
   ],
   "architecture": [
-    "The browser UI is a packaged SPA served by FastAPI; unknown non-API routes fall back to index.html.",
-    "The web API owns job state through appforge/web_jobs.py and persists runtime snapshots under .appforge-web/.",
-    "The control plane and quality gates remain in the Python appforge package; the web layer starts pipeline jobs but does not redefine pipeline completion.",
-    "The optional llm_bridge service is separate from the FastAPI process and is contacted through APPFORGE_LLM_BRIDGE_URL when the llm-bridge driver path is selected.",
-    "A launcher can stay outside the Python package because it is developer/operator convenience, while tests can exercise it through shell syntax and smoke mode."
+    "Provider catalog source of truth remains the bridge registry and per-provider model endpoint",
+    "The browser receives compact provider status first and fetches model catalogs on demand",
+    "The UI stores model lists in component-local memory for the modal lifetime",
+    "Packaged frontend assets are generated into appforge/resources/web"
   ],
   "conventions": [
-    "Keep source changes narrow and documented in README.md, docs/WEB_APP.md, and CHANGELOG.md when user-facing startup behavior changes.",
-    "Prefer existing commands instead of new dependencies: .venv/bin/appforge web, npm --prefix frontend run build, and bun run start for bridge startup.",
-    "Default local web binding should remain 127.0.0.1 and browser opening should be opt-out for smoke/CI paths.",
-    "Generated/runtime directories .venv, frontend/node_modules, llm_bridge/node_modules, .appforge-web, dist, and reports are ignored or treated as runtime artifacts.",
-    "Shell launcher should be POSIX-oriented bash with explicit failure handling and environment-variable overrides."
+    "Keep bridge API responses JSON-only and same-origin proxied through FastAPI",
+    "Use script setup Vue components with typed props and emits",
+    "Keep tests behavior-focused at API and registry boundaries"
   ],
   "test_strategy": [
-    "Run bash -n build.sh for syntax after adding the launcher.",
-    "Run a no-browser launcher smoke mode that starts appforge web, probes /api/health and /, then terminates the server.",
-    "Run .venv/bin/python -m pytest -q to protect backend/control-plane behavior.",
-    "Run npm --prefix frontend run typecheck and npm --prefix frontend run build to protect the packaged UI.",
-    "Run llm_bridge typecheck/tests if the launcher changes bridge-facing assumptions."
+    "Bun registry/server tests cover compact providers and removed all-models route",
+    "vue-tsc and Vite build cover frontend type and packaged asset integrity",
+    "Pytest covers Python web/control-plane regressions",
+    "Payload probe measures compact vs include_models response sizes using the local models.dev cache"
   ],
   "risk_areas": [
-    "A launcher that installs dependencies on every run could slow the preferred UX; skip flags and node_modules checks should support fast repeat runs.",
-    "Opening a browser during automated checks is noisy; smoke mode must force no-browser behavior.",
-    "Starting llm_bridge unconditionally could require Bun or provider configuration for users who only need Codex/Claude/generic drivers; bridge startup should be opt-in or tied to APPFORGE_DRIVER=llm-bridge.",
-    "Background processes started during smoke checks must be cleaned up to avoid leaving occupied ports.",
-    "Port/host defaults must remain loopback-safe and configurable."
+    "Frontend code that assumes provider.models is always populated",
+    "Manual model input during lazy loading failures",
+    "OpenRouter-sized chip lists overwhelming the advanced settings row",
+    "Downstream clients depending on the removed /providers/models endpoint"
   ],
   "files_likely_to_change": [
-    "build.sh",
-    "README.md",
-    "docs/WEB_APP.md",
-    "CHANGELOG.md",
-    ".appforge/artifacts/*.json",
-    ".appforge/checkpoints/checkpoint_*.json",
-    ".appforge/stage-result.json"
+    "llm_bridge/src/types.ts",
+    "llm_bridge/src/registry.ts",
+    "llm_bridge/src/server.ts",
+    "llm_bridge/test/registry.test.ts",
+    "llm_bridge/test/server.test.ts",
+    "frontend/src/components/ModelSelect.vue",
+    "frontend/src/components/ProviderSettings.vue",
+    "frontend/src/types.ts",
+    "frontend/src/styles.css",
+    "appforge/resources/web/index.html",
+    "appforge/resources/web/assets/*"
   ],
   "baseline_status": [
-    "git status before product-code edits showed only AppForge control-plane changes for this new run: product_brief, checkpoint_intake, project metadata, request, and state.",
-    ".venv/bin/python -m appforge tool run detect_stack --project . passed and identified Python/FastAPI/pyproject.toml; it does not inspect nested frontend package.json.",
-    ".venv/bin/python -m pytest -q passed: 23 tests, 1 Starlette TestClient deprecation warning.",
-    "npm --prefix frontend run typecheck passed.",
-    "No root build.sh/dev.sh/web.sh existed before this feature."
+    "The pre-existing dirty worktree already contained partial Phase4 edits before continuation",
+    "Initial quick checks after inspection passed: bun run typecheck, bun test, npm run typecheck"
   ]
 }

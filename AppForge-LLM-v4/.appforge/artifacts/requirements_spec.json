@@ -1,180 +1,155 @@
 {
   "schema_version": "1.0",
-  "summary": "Requirements for a one-command build.sh source launcher that prepares and opens the existing AppForge-LLM v4 local web app UI.",
+  "summary": "Phase4 requirements define compact provider status, lazy per-provider model loading, fuzzy model search, and bounded chip rendering.",
   "scope": {
     "in_scope": [
-      "Repository-root build.sh launcher for source checkout users.",
-      "Python environment preparation using existing project metadata.",
-      "Frontend dependency/build preparation for packaged FastAPI static assets.",
-      "Delegation to the existing appforge web loopback server with automatic browser opening by default.",
-      "No-browser smoke mode for deterministic verification.",
-      "Optional llm_bridge process startup only when requested by driver/configuration.",
-      "README, web guide, and changelog documentation."
+      "Bridge provider list payload changes",
+      "Per-provider lazy model loading in the web UI",
+      "Reusable fuzzy ModelSelect component",
+      "Advanced settings chip limit and expand/collapse behavior",
+      "Automated tests and packaged frontend assets"
     ],
     "out_of_scope": [
-      "Changing AppForge pipeline semantics, job APIs, or Vue UI layout.",
-      "Adding deployment, native desktop packaging, Docker, launch agents, or production process supervision.",
-      "Requiring live third-party LLM credentials.",
-      "Removing or deprecating the existing appforge CLI entry points."
+      "Stage-specific LLM model assignment",
+      "Persistent browser model cache",
+      "Remote deployment or publication"
     ]
   },
   "functional_requirements": [
     {
       "id": "FR-001",
-      "statement": "A repository-root build.sh must launch the existing local web app UI as the default source-start path.",
+      "statement": "/providers must omit full model catalogs by default while retaining provider status and model_count.",
       "priority": "must",
       "acceptance_criteria": [
-        "build.sh exists at repository root and is executable.",
-        "Normal mode delegates to .venv/bin/appforge web or an equivalent local appforge module entry point.",
-        "Default host is 127.0.0.1 and default port is 8787 unless overridden by environment variables.",
-        "Normal mode leaves browser opening enabled through the existing appforge web behavior."
+        "GET /providers returns models as an empty list by default",
+        "GET /providers?include_models=true returns provider model arrays",
+        "ProviderStatus models is optional-compatible in TypeScript contracts"
       ]
     },
     {
       "id": "FR-002",
-      "statement": "The launcher must prepare source dependencies enough for the packaged web app to run.",
+      "statement": "The browser must load provider models through /providers/{id}/models only when needed.",
       "priority": "must",
       "acceptance_criteria": [
-        "If installation is not skipped, the launcher uses uv sync --extra dev when uv is available.",
-        "If uv is unavailable, the launcher creates .venv with python3 and installs -e '.[dev]' through pip.",
-        "If frontend installation/build is not skipped, the launcher installs frontend dependencies when node_modules is missing and runs npm --prefix frontend run build.",
-        "Clear error messages are emitted for missing python3, npm, or required commands."
+        "Quick connect loads models when a provider is selected",
+        "Active model selection loads models when activeProviderId changes",
+        "Advanced provider expansion loads that provider's models",
+        "Failures show a message and keep manual model ID input available"
       ]
     },
     {
       "id": "FR-003",
-      "statement": "The launcher must support fast, repeatable, non-interactive verification without opening a browser.",
+      "statement": "Model inputs must use a reusable fuzzy search component instead of datalist.",
       "priority": "must",
       "acceptance_criteria": [
-        "--smoke starts the web server with browser opening disabled.",
-        "--smoke polls /api/health and / until both return HTTP 200 or a bounded timeout expires.",
-        "--smoke terminates the server it started before exiting.",
-        "APPFORGE_SKIP_INSTALL=1 and APPFORGE_SKIP_FRONTEND_BUILD=1 allow smoke checks to reuse already-prepared local dependencies."
+        "Quick connect, active model, and advanced default model inputs use ModelSelect",
+        "Search matches model id and name by case-insensitive substring with prefix priority",
+        "Keyboard ArrowUp, ArrowDown, Enter, and Escape are supported"
       ]
     },
     {
       "id": "FR-004",
-      "statement": "The launcher must respect existing runtime configuration and make llm_bridge startup optional.",
+      "statement": "Advanced model chips must render a bounded initial list with an explicit more/collapse control.",
       "priority": "must",
       "acceptance_criteria": [
-        "APPFORGE_DRIVER and other existing AppForge environment variables pass through to appforge web.",
-        "The launcher does not force APPFORGE_DRIVER=llm-bridge.",
-        "When APPFORGE_DRIVER is llm-bridge or APPFORGE_START_LLM_BRIDGE=1 is set, the launcher starts llm_bridge only if Bun is available and no bridge health endpoint is already reachable.",
-        "Bridge startup is skipped when APPFORGE_SKIP_LLM_BRIDGE=1 is set."
+        "Only the first 10 models appear initially",
+        "A more button shows the remaining count",
+        "Expanded chips scroll inside a bounded area and can be collapsed"
       ]
     },
     {
       "id": "FR-005",
-      "statement": "Documentation must present build.sh as the easiest source UI path while preserving CLI compatibility.",
-      "priority": "must",
+      "statement": "The unused all-provider /providers/models endpoint must be removed in favor of the per-provider endpoint.",
+      "priority": "should",
       "acceptance_criteria": [
-        "README.md fastest-start source instructions show ./build.sh before manual setup commands.",
-        "docs/WEB_APP.md start instructions mention ./build.sh and the smoke/no-open options.",
-        "CHANGELOG.md records the launcher and smoke verification behavior.",
-        "Docs state that existing appforge web and frontend dev commands remain available."
+        "GET /providers/models returns 404",
+        "GET /providers/{id}/models remains the single model catalog endpoint"
       ]
     }
   ],
   "non_functional_requirements": [
     {
       "id": "NFR-001",
-      "statement": "The launcher must remain local-first and safe by default.",
-      "measure": "Default host remains 127.0.0.1; no deployment, public bind, destructive operation, or credential collection is added."
+      "statement": "Initial provider settings load must avoid transferring the full model catalog.",
+      "measure": "Payload probe shows /providers substantially smaller than /providers?include_models=true"
     },
     {
       "id": "NFR-002",
-      "statement": "The launcher must be deterministic enough for CI-style local smoke checks.",
-      "measure": "bash -n build.sh and APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke both pass in the prepared workspace."
+      "statement": "No new third-party frontend dependency is introduced.",
+      "measure": "ModelSelect is implemented with Vue and TypeScript only"
     },
     {
       "id": "NFR-003",
-      "statement": "The change must preserve existing backend and frontend behavior.",
-      "measure": ".venv/bin/python -m pytest -q, npm --prefix frontend run typecheck, and npm --prefix frontend run build pass after implementation."
-    },
-    {
-      "id": "NFR-004",
-      "statement": "Repeat runs should not force slow dependency work when the workspace is already prepared.",
-      "measure": "Environment flags allow install and frontend build steps to be skipped, and frontend install only runs automatically when node_modules is absent."
+      "statement": "Secrets must not be exposed by changed provider status or tests.",
+      "measure": "Existing upsert test still asserts no apiKey or fake key in response"
     }
   ],
   "user_flows": [
-    "A source user runs ./build.sh, waits for dependency/build preparation, and the default browser opens http://127.0.0.1:8787 with the existing AppForge web UI.",
-    "A developer runs APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke to verify the packaged UI and health endpoint without browser interaction.",
-    "A provider-backed user runs APPFORGE_DRIVER=llm-bridge ./build.sh and, when Bun is available, the launcher starts or reuses the local bridge before opening the UI."
+    "User opens LLM settings, provider statuses load quickly, then selects a provider and searches for a model.",
+    "User expands OpenRouter advanced settings and sees 10 chips plus a more button instead of hundreds of buttons.",
+    "User types a model ID manually when model catalog loading fails."
   ],
   "open_questions": [],
   "assumptions": [
-    "Prepared workspaces may use skip flags for faster verification; first-run source setup may require local package-manager access.",
-    "The existing web app remains the authoritative UX; the launcher is only an ergonomic entry point.",
-    "Bridge provider credentials and active model configuration remain managed by existing environment variables and web provider settings."
+    "Use F-1 A from Phase4.md: remove /providers/models",
+    "Use F-2 A from Phase4.md: in-memory cache only"
   ],
   "risks": [
     {
       "id": "R-001",
-      "risk": "A smoke run could leave a server running on the configured port.",
-      "impact": "Subsequent runs fail due to port contention.",
-      "mitigation": "Track the started server PID and kill it in an EXIT trap."
+      "risk": "A downstream client could still call /providers/models.",
+      "impact": "That client receives 404.",
+      "mitigation": "Keep /providers?include_models=true and /providers/{id}/models as supported paths; add a server test for 404."
     },
     {
       "id": "R-002",
-      "risk": "Dependency installation could fail in a network-restricted environment.",
-      "impact": "First-run launcher cannot prepare from scratch.",
-      "mitigation": "Support skip flags for already-prepared workspaces and keep verification explicit about local dependency state."
-    },
-    {
-      "id": "R-003",
-      "risk": "Forcing bridge startup could block non-bridge users.",
-      "impact": "The default web UI path becomes harder than the CLI.",
-      "mitigation": "Start bridge only when llm-bridge driver or explicit APPFORGE_START_LLM_BRIDGE is selected."
+      "risk": "Lazy load failure could block model entry.",
+      "impact": "Users cannot activate a model.",
+      "mitigation": "ModelSelect keeps text input enabled and displays a failure hint."
     }
   ],
   "quality_gates": [
     {
       "id": "QG-001",
-      "gate": "bash -n build.sh",
-      "evidence": "Shell syntax validates."
+      "gate": "bun run typecheck in llm_bridge",
+      "evidence": "TypeScript bridge contracts compile."
     },
     {
       "id": "QG-002",
-      "gate": "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke",
-      "evidence": "Launcher starts web server, probes /api/health and /, and exits cleanly."
+      "gate": "bun test in llm_bridge",
+      "evidence": "Registry and server behavior tests pass."
     },
     {
       "id": "QG-003",
-      "gate": ".venv/bin/python -m pytest -q",
-      "evidence": "Backend/control-plane regression suite passes."
+      "gate": "npm run typecheck and npm run build in frontend",
+      "evidence": "Vue TypeScript and packaged frontend assets are valid."
     },
     {
       "id": "QG-004",
-      "gate": "npm --prefix frontend run typecheck && npm --prefix frontend run build",
-      "evidence": "Frontend TypeScript contract and packaged assets remain valid."
+      "gate": ".venv/bin/python -m pytest -q and .venv/bin/ruff check appforge tests",
+      "evidence": "Python control-plane regressions and lint pass."
     }
   ],
   "traceability": [
     {
       "from": "product_brief.desired_outcomes[0]",
-      "to": "FR-001",
-      "relationship": "Launcher existence and web server start"
+      "to": "FR-001,NFR-001",
+      "relationship": "Compact provider payload"
     },
     {
       "from": "product_brief.desired_outcomes[1]",
-      "to": "FR-002, NFR-004",
-      "relationship": "Environment and frontend preparation"
+      "to": "FR-003,NFR-002",
+      "relationship": "Fuzzy model search"
     },
     {
       "from": "product_brief.desired_outcomes[2]",
-      "to": "FR-001",
-      "relationship": "Browser-opening default UI path"
+      "to": "FR-002",
+      "relationship": "Lazy model loading"
     },
     {
       "from": "product_brief.desired_outcomes[3]",
-      "to": "FR-003, NFR-002",
-      "relationship": "No-browser smoke verification"
-    },
-    {
-      "from": "product_brief.desired_outcomes[4]",
-      "to": "FR-005",
-      "relationship": "Documentation updates"
+      "to": "FR-004",
+      "relationship": "Bounded model chips"
     }
   ]
 }

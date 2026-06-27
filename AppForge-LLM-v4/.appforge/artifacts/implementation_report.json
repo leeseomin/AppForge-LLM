@@ -1,54 +1,62 @@
 {
   "schema_version": "1.0",
-  "summary": "Updated the DeepSeek provider configuration so DeepSeek V4 Pro is the default model shown by LLM connection settings and is available as a selectable model chip.",
+  "summary": "Phase4 is implemented across the bridge API, provider settings UI, tests, and packaged web assets.",
   "features_completed": [
-    "Added provider-level default_model support to the llm_bridge provider descriptor contract.",
-    "Set DeepSeek default_model to deepseek-v4-pro and put deepseek-v4-pro first in the DeepSeek model list.",
-    "Added DeepSeek V4 Flash plus legacy DeepSeek Chat/Reasoner entries after the new V4 Pro default.",
-    "Normalized old stored DeepSeek defaults deepseek-chat and deepseek-reasoner to deepseek-v4-pro for default display and default generation fallback.",
-    "Updated frontend provider status typing so the UI contract includes default_model.",
-    "Added llm_bridge registry tests proving DeepSeek V4 Pro is default/selectable and legacy defaults normalize to V4 Pro."
+    "Compact /providers response with models=[] by default and model_count metadata",
+    "Opt-in /providers?include_models=true full provider payload",
+    "Removed unused /providers/models all-provider endpoint",
+    "New dependency-free ModelSelect component with substring fuzzy search and keyboard navigation",
+    "Quick connect, active model, and advanced default model inputs now use ModelSelect",
+    "Provider models lazy-load through getProviderModels(providerId) and cache in memory for the modal lifetime",
+    "Lazy-load failure warnings allow manual model ID input",
+    "Advanced model chips are limited to 10 by default with more/collapse controls and bounded scrolling",
+    "Production frontend assets rebuilt into appforge/resources/web"
   ],
   "files_changed": [
-    "llm_bridge/src/registry.ts",
-    "llm_bridge/src/types.ts",
+    ".appforge/artifacts/*.json",
+    ".appforge/project.json",
+    ".appforge/request.md",
+    "appforge/resources/web/index.html",
+    "appforge/resources/web/assets/index-B8h20RM6.js",
+    "appforge/resources/web/assets/index-CJQsWsDa.css",
+    "frontend/src/components/ModelSelect.vue",
+    "frontend/src/components/ProviderSettings.vue",
+    "frontend/src/styles.css",
     "frontend/src/types.ts",
+    "llm_bridge/src/registry.ts",
+    "llm_bridge/src/server.ts",
+    "llm_bridge/src/types.ts",
     "llm_bridge/test/registry.test.ts",
-    ".appforge/artifacts/implementation_report.json",
-    ".appforge/stage-result.json"
+    "llm_bridge/test/server.test.ts"
   ],
   "commands_run": [
-    "bun test in llm_bridge -> passed, 3 tests",
-    "bun run typecheck in llm_bridge -> passed",
-    "npm --prefix frontend run typecheck -> passed",
-    "bun /providers payload probe -> passed, DeepSeek default_model deepseek-v4-pro and first models include deepseek-v4-pro",
-    "npm --prefix frontend run build -> passed",
-    ".venv/bin/python -m pytest -q -> passed, 27 tests"
+    "bun run typecheck in llm_bridge",
+    "bun test in llm_bridge",
+    "npm run typecheck in frontend",
+    "npm run build in frontend",
+    ".venv/bin/python -m pytest -q",
+    ".venv/bin/ruff check appforge tests",
+    "APPFORGE_MODELS_DEV_URL=http://127.0.0.1:1 bun -e payload probe in llm_bridge",
+    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_SKIP_LLM_BRIDGE=1 ./build.sh --smoke"
   ],
   "decisions": [
-    "Used model ID deepseek-v4-pro and display label DeepSeek V4 Pro so the API payload remains machine-safe while the UI shows a readable model name.",
-    "Kept deepseek-chat and deepseek-reasoner as legacy selectable entries after the new V4 models instead of removing them.",
-    "Normalized only legacy DeepSeek stored defaults to V4 Pro; arbitrary custom stored model IDs remain untouched."
+    "Applied Phase4 F-1 A: remove /providers/models and keep /providers/{id}/models as SSOT.",
+    "Applied Phase4 F-2 A: use component-local memory cache, not localStorage.",
+    "Kept ModelSelect input enabled during loading/failure so manual model IDs remain possible.",
+    "Used provider expansion to trigger advanced-row lazy loading so model chips can populate before explicit typing."
   ],
   "known_gaps": [
-    "A credentialed live DeepSeek API call was not run because it requires the user's API key.",
-    "If DeepSeek changes the public model ID again, the registry list will need another update."
+    "No live third-party model request was run because it requires user credentials.",
+    "No browser screenshot automation was run; production build and smoke verified the served packaged UI."
   ],
   "requirements_covered": [
-    "DeepSeek V4 Pro selectable in LLM connection settings",
-    "DeepSeek V4 Pro shown as the DeepSeek default model",
-    "Legacy DeepSeek defaults no longer keep the settings panel on deepseek-chat or deepseek-reasoner"
-  ],
-  "api_evidence": {
-    "providers_probe": {
-      "status": 200,
-      "default_model": "deepseek-v4-pro",
-      "models": [
-        "deepseek-v4-pro",
-        "deepseek-v4-flash",
-        "deepseek-chat",
-        "deepseek-reasoner"
-      ]
-    }
-  }
+    "FR-001",
+    "FR-002",
+    "FR-003",
+    "FR-004",
+    "FR-005",
+    "NFR-001",
+    "NFR-002",
+    "NFR-003"
+  ]
 }

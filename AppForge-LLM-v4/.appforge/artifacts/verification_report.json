@@ -1,73 +1,90 @@
 {
   "schema_version": "1.0",
-  "summary": "Verified that DeepSeek V4 Pro is now the default and selectable DeepSeek model in the LLM settings provider payload, with bridge registry tests, TypeScript checks, frontend build, and Python regression tests.",
+  "summary": "Phase4 verification passed across bridge tests/typecheck, frontend typecheck/build, Python regression/lint, payload size probe, and packaged web smoke.",
   "passed": true,
   "test_commands": [
-    "bun test in llm_bridge",
-    "bun run typecheck in llm_bridge",
-    "npm --prefix frontend run typecheck",
-    "bun /providers payload probe",
-    "npm --prefix frontend run build",
-    ".venv/bin/python -m pytest -q"
+    "bun run typecheck",
+    "bun test",
+    "npm run typecheck",
+    "npm run build",
+    ".venv/bin/python -m pytest -q",
+    ".venv/bin/ruff check appforge tests",
+    "APPFORGE_MODELS_DEV_URL=http://127.0.0.1:1 bun -e payload probe",
+    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_SKIP_LLM_BRIDGE=1 ./build.sh --smoke"
   ],
   "results": [
     {
-      "check": "llm_bridge registry tests",
-      "passed": "true",
-      "evidence": "bun test passed 3 tests, including DeepSeek V4 Pro default/selectable and legacy default normalization coverage."
+      "check": "Bridge typecheck",
+      "passed": "passed",
+      "evidence": "bun run typecheck in llm_bridge exited 0 with tsc --noEmit"
     },
     {
-      "check": "llm_bridge typecheck",
-      "passed": "true",
-      "evidence": "bun run typecheck completed tsc --noEmit successfully."
+      "check": "Bridge tests",
+      "passed": "passed",
+      "evidence": "bun test passed 8 tests across catalog, registry, and server suites"
     },
     {
-      "check": "frontend typecheck",
-      "passed": "true",
-      "evidence": "npm --prefix frontend run typecheck completed vue-tsc --noEmit successfully."
+      "check": "Frontend typecheck",
+      "passed": "passed",
+      "evidence": "npm run typecheck exited 0 with vue-tsc --noEmit"
     },
     {
-      "check": "provider payload",
-      "passed": "true",
-      "evidence": "Bun /providers probe returned status 200, default_model deepseek-v4-pro, and models [deepseek-v4-pro, deepseek-v4-flash, deepseek-chat, deepseek-reasoner]."
+      "check": "Frontend production build",
+      "passed": "passed",
+      "evidence": "npm run build produced appforge/resources/web/assets/index-B8h20RM6.js and index-CJQsWsDa.css"
     },
     {
-      "check": "frontend production build",
-      "passed": "true",
-      "evidence": "npm --prefix frontend run build completed Vite production build successfully."
+      "check": "Python regression tests",
+      "passed": "passed",
+      "evidence": ".venv/bin/python -m pytest -q passed 78 tests with one Starlette/httpx deprecation warning"
     },
     {
-      "check": "backend regression suite",
-      "passed": "true",
-      "evidence": ".venv/bin/python -m pytest -q passed 27 tests with one existing Starlette TestClient deprecation warning."
+      "check": "Python lint",
+      "passed": "passed",
+      "evidence": ".venv/bin/ruff check appforge tests returned All checks passed"
+    },
+    {
+      "check": "Payload probe",
+      "passed": "passed",
+      "evidence": "/providers bytes=40552, /providers?include_models=true bytes=287573, /providers/openrouter/models bytes=20374 using local models.dev cache"
+    },
+    {
+      "check": "Packaged web smoke",
+      "passed": "passed",
+      "evidence": "./build.sh --smoke served /api/health and / at http://127.0.0.1:8787 then stopped pid 59415"
     }
   ],
   "acceptance_results": [
     {
-      "requirement": "DeepSeek V4 Pro selectable",
-      "passed": "true",
-      "evidence": "Registry test and /providers probe show deepseek-v4-pro in DeepSeek models, first in the list."
+      "requirement": "FR-001",
+      "passed": "passed",
+      "evidence": "server.test verifies compact /providers models=[] and model_count>0; payload probe confirms compact response is far smaller than include_models"
     },
     {
-      "requirement": "DeepSeek V4 Pro default",
-      "passed": "true",
-      "evidence": "Registry test and /providers probe show DeepSeek default_model as deepseek-v4-pro."
+      "requirement": "FR-002",
+      "passed": "passed",
+      "evidence": "ProviderSettings ensureModels uses getProviderModels, modelCache, modelLoading, and modelLoadErrors; frontend typecheck/build passed"
     },
     {
-      "requirement": "Existing DeepSeek legacy defaults no longer dominate the settings panel",
-      "passed": "true",
-      "evidence": "Registry test normalizes stored deepseek-chat and deepseek-reasoner defaultModel values to deepseek-v4-pro for provider status."
+      "requirement": "FR-003",
+      "passed": "passed",
+      "evidence": "ModelSelect is used in all three model entry surfaces and implements id/name substring scoring plus keyboard handling"
     },
     {
-      "requirement": "No unrelated runtime regression",
-      "passed": "true",
-      "evidence": "Full Python suite, llm_bridge typecheck/test, frontend typecheck, and frontend build all passed."
+      "requirement": "FR-004",
+      "passed": "passed",
+      "evidence": "modelSuggestions limits to 10, more/collapse controls update expandedChips, and CSS bounds expanded chip height"
+    },
+    {
+      "requirement": "FR-005",
+      "passed": "passed",
+      "evidence": "server.test verifies /providers/models returns 404 while /providers/{id}/models remains available"
     }
   ],
-  "coverage": "Verification covers the provider status payload consumed by the LLM settings dialog, DeepSeek model chips/default_model behavior, legacy stored default normalization, TypeScript contracts on bridge/frontend, packaged frontend build, and Python web/control-plane regressions. It does not include a live DeepSeek API generation call because no user API key was provided.",
+  "coverage": "Automated coverage spans bridge API contracts, registry status behavior, Vue/TypeScript compilation, packaged Vite build, Python web/control-plane regressions, lint, payload size behavior, and local smoke serving.",
   "failures": [],
   "manual_checks": [
-    "Reviewed llm_bridge/src/registry.ts to confirm custom stored model IDs other than legacy DeepSeek defaults are preserved.",
-    "Reviewed frontend/src/types.ts to confirm ProviderStatus still exposes default_model to ProviderSettings.vue."
+    "Reviewed git diff for Phase4 scope and generated asset replacements",
+    "Confirmed .appforge previous request was stale and updated artifacts to the Phase4 request"
   ]
 }

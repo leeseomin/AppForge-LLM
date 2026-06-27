@@ -1,186 +1,130 @@
 {
   "schema_version": "1.0",
-  "summary": "Memory contract for the build.sh launcher: durable state remains existing repository/dependency artifacts and AppForge runtime files; launcher mode and child-process ownership stay process-local; no new secret or user preference store is introduced.",
+  "summary": "Phase4 memory is intentionally local and short-lived: provider status remains bridge-owned, while loaded model lists live only in the ProviderSettings component for the modal lifetime.",
   "memory_surfaces": [
     {
       "id": "MEM-001",
-      "purpose": "Launcher configuration for one invocation.",
-      "scope": "Process-local arguments and APPFORGE_* environment variables.",
-      "lifetime": "One build.sh process.",
-      "source_of_truth": "Command-line arguments and environment at invocation time.",
-      "invalidated_by": "Process exit or rerun with different arguments/environment."
+      "purpose": "Provider registry and model catalog source of truth",
+      "scope": "llm_bridge process",
+      "lifetime": "Process and models.dev cache lifetime",
+      "source_of_truth": "llm_bridge registry entries and models.dev cache"
     },
     {
       "id": "MEM-002",
-      "purpose": "Python source environment readiness.",
-      "scope": ".venv directory and editable package metadata.",
-      "lifetime": "Persists across local runs until dependencies are changed or the user removes .venv.",
-      "source_of_truth": "pyproject.toml, uv.lock, and the installed .venv/bin/appforge executable.",
-      "invalidated_by": "pyproject.toml or uv.lock changes, missing .venv/bin/appforge, failed uv/pip sync, or explicit APPFORGE_SKIP_INSTALL not being set."
+      "purpose": "Lazy-loaded model lists keyed by provider id",
+      "scope": "ProviderSettings component",
+      "lifetime": "Current settings modal instance",
+      "source_of_truth": "modelCache Map<string, ProviderModel[]>",
+      "invalidated_by": "Closing the modal or recreating the component"
     },
     {
       "id": "MEM-003",
-      "purpose": "Packaged web UI assets.",
-      "scope": "appforge/resources/web built from frontend source.",
-      "lifetime": "Tracked source artifact refreshed by npm --prefix frontend run build.",
-      "source_of_truth": "frontend/package-lock.json, frontend/package.json, frontend/src, frontend/public, and Vite build output under appforge/resources/web.",
-      "invalidated_by": "Frontend source/package changes or a failed/missing production build."
+      "purpose": "Model loading and failure state",
+      "scope": "ProviderSettings component",
+      "lifetime": "Current settings modal instance",
+      "source_of_truth": "modelLoading Set and modelLoadErrors record",
+      "invalidated_by": "Successful fetch or modal recreation"
     },
     {
       "id": "MEM-004",
-      "purpose": "Optional bridge runtime evidence.",
-      "scope": "APPFORGE_LLM_BRIDGE_URL health response and .appforge-web/llm-bridge.log for launcher-owned bridge starts.",
-      "lifetime": "Health is live process state; logs persist as ignored runtime files until user cleanup.",
-      "source_of_truth": "Bridge /health endpoint and launcher-captured bridge PID.",
-      "invalidated_by": "Bridge process exit, changed bridge URL, failed health probe, or launcher cleanup."
+      "purpose": "Advanced model chip expansion",
+      "scope": "ProviderSettings component",
+      "lifetime": "Current settings modal instance",
+      "source_of_truth": "expandedChips Set",
+      "invalidated_by": "Collapse action or modal recreation"
     },
     {
       "id": "MEM-005",
-      "purpose": "Web server runtime state.",
-      "scope": "appforge web process, .appforge-web runtime directory, and existing AppForge web job snapshots after UI use.",
-      "lifetime": "Foreground server lifetime for process state; existing .appforge-web state persists per web app behavior.",
-      "source_of_truth": "appforge.web/web_jobs runtime behavior and launcher-captured web PID in smoke mode.",
-      "invalidated_by": "Server process exit, app restart conversion of in-flight jobs, or user cleanup of .appforge-web."
-    },
-    {
-      "id": "MEM-006",
-      "purpose": "Smoke verification status.",
-      "scope": "Process-local probe results for /api/health and /.",
-      "lifetime": "One smoke invocation.",
-      "source_of_truth": "HTTP status results collected by the launcher within APPFORGE_SMOKE_TIMEOUT.",
-      "invalidated_by": "Smoke process exit or rerun."
-    },
-    {
-      "id": "MEM-007",
-      "purpose": "User-facing startup knowledge.",
-      "scope": "README.md, docs/WEB_APP.md, CHANGELOG.md.",
-      "lifetime": "Tracked source documentation until changed.",
-      "source_of_truth": "Version-controlled documentation updates.",
-      "invalidated_by": "Behavioral changes to build.sh or appforge web startup."
+      "purpose": "Provider credentials and active model selection",
+      "scope": "Existing bridge config",
+      "lifetime": "Existing bridge config persistence",
+      "source_of_truth": "llm_bridge config store",
+      "invalidated_by": "Existing save/delete/active provider flows"
     }
   ],
   "state_ownership": [
     {
-      "state": "Invocation mode, host, port, and skip flags",
-      "owner": "build.sh process",
+      "state": "provider status and model_count",
+      "owner": "llm_bridge registry",
       "writers": [
-        "Command-line argument parser",
-        "Environment variable reader"
+        "llm_bridge/src/registry.ts"
       ],
       "readers": [
-        "build.sh setup, launch, smoke, and help branches"
+        "frontend ProviderSettings",
+        "appforge web proxy",
+        "tests"
       ]
     },
     {
-      "state": ".venv dependency environment",
-      "owner": "Local repository checkout",
+      "state": "lazy model cache",
+      "owner": "ProviderSettings",
       "writers": [
-        "uv sync --extra dev",
-        "python3 -m venv and pip install fallback"
+        "ensureModels"
       ],
       "readers": [
-        "build.sh",
-        "appforge web",
-        "pytest and verification commands"
+        "ModelSelect",
+        "model chip helpers",
+        "activate fallback"
       ]
     },
     {
-      "state": "Packaged web assets",
-      "owner": "Frontend build",
+      "state": "credentials and active selection",
+      "owner": "llm_bridge config store",
       "writers": [
-        "npm --prefix frontend run build"
+        "existing saveProvider",
+        "quickConnect",
+        "setActiveProvider"
       ],
       "readers": [
-        "appforge.web FastAPI static serving",
-        "build.sh smoke probes",
-        "release archive verification"
-      ]
-    },
-    {
-      "state": "Launcher-owned web and bridge PIDs",
-      "owner": "build.sh process",
-      "writers": [
-        "build.sh background start branches"
-      ],
-      "readers": [
-        "build.sh cleanup trap"
-      ]
-    },
-    {
-      "state": "Provider secrets and active provider settings",
-      "owner": "Existing llm_bridge/provider-settings implementation",
-      "writers": [
-        "Existing provider settings UI or environment variables"
-      ],
-      "readers": [
-        "llm_bridge service",
-        "appforge web health"
+        "health",
+        "provider status",
+        "active model UI"
       ]
     }
   ],
-  "retention": "build.sh introduces no new durable preference or secret store. .venv, frontend/node_modules, llm_bridge/node_modules, and .appforge-web runtime files retain existing local-workspace lifetimes. Packaged web assets and documentation are tracked source files. Process-local mode, smoke, and PID memory vanish on exit.",
-  "serialization": "Launcher configuration is serialized only as shell variables. Durable artifacts use existing file formats: pyproject.toml/uv.lock/package-lock.json for dependency state, Vite output files under appforge/resources/web, .appforge-web JSON/log files owned by existing web/bridge systems, and Markdown docs.",
+  "retention": "No browser persistent cache is introduced. Model lists, errors, and chip expansion are discarded when ProviderSettings unmounts.",
+  "serialization": "Provider status and per-provider models remain JSON API payloads. The in-memory Map/Set state is not serialized.",
   "privacy": [
-    "build.sh must not read, print, persist, or transform provider API keys.",
-    "Environment variables pass through to existing appforge/bridge code without logging their values.",
-    ".env and .env.* remain ignored by existing .gitignore policy.",
-    "Bridge logs should capture service startup output but not receive secrets from the launcher."
+    "Model catalog calls do not include API keys",
+    "Provider upsert responses continue to avoid echoing apiKey values",
+    "No localStorage model catalog cache is added"
   ],
-  "reconciliation": "Each run reconciles state from source of truth rather than trusting hidden caches: Python readiness checks .venv/bin/appforge after optional install, frontend readiness depends on npm build unless explicitly skipped, bridge readiness uses live health, smoke readiness uses live HTTP probes, and docs are validated by review/diff.",
+  "reconciliation": "Each modal open starts from fresh compact provider status. Each provider model list reconciles from /providers/{id}/models on first need.",
   "observability": [
-    "Launcher terminal output names each major step and the final URL.",
-    "Smoke mode prints probe progress and success/failure.",
-    "Bridge startup writes .appforge-web/llm-bridge.log only when the launcher owns that process.",
-    "Verification commands record bash syntax, smoke, pytest, typecheck, and build results."
+    "model_count allows the UI/tests to know a compact provider still has models",
+    "Field warnings expose lazy model fetch failures",
+    "Automated tests validate compact and full provider states"
   ],
   "tests": [
     {
-      "name": "process-local-smoke-memory",
-      "evidence": "./build.sh --smoke must start, probe, and cleanup launcher-owned PIDs without persisting a launcher config file."
+      "name": "compact-provider-memory",
+      "evidence": "server.test verifies /providers models=[] and model_count>0"
     },
     {
-      "name": "dependency-state-reconciliation",
-      "evidence": "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 smoke reuses current .venv/assets, while normal mode runs configured sync/build paths."
+      "name": "full-provider-memory",
+      "evidence": "server.test verifies include_models=true returns model IDs"
     },
     {
-      "name": "source-doc-memory",
-      "evidence": "README.md, docs/WEB_APP.md, and CHANGELOG.md contain the launcher path and options."
-    },
-    {
-      "name": "secret-exclusion",
-      "evidence": "Security review checks build.sh and docs for no committed or echoed provider secrets."
+      "name": "component-cache-memory",
+      "evidence": "ProviderSettings uses modelCache Map and no localStorage writes"
     }
   ],
   "traceability": [
     {
       "requirement": "FR-001",
-      "memory_surface": "MEM-001, MEM-005, MEM-007",
-      "workflow_steps": "WF-001, WF-005, WF-007"
+      "memory_surface": "MEM-001"
     },
     {
       "requirement": "FR-002",
-      "memory_surface": "MEM-002, MEM-003",
-      "workflow_steps": "WF-002, WF-003"
-    },
-    {
-      "requirement": "FR-003",
-      "memory_surface": "MEM-005, MEM-006",
-      "workflow_steps": "WF-006"
+      "memory_surface": "MEM-002,MEM-003"
     },
     {
       "requirement": "FR-004",
-      "memory_surface": "MEM-001, MEM-004",
-      "workflow_steps": "WF-004, WF-005"
+      "memory_surface": "MEM-004"
     },
     {
-      "requirement": "FR-005",
-      "memory_surface": "MEM-007",
-      "workflow_steps": "WF-007"
-    },
-    {
-      "requirement": "NFR-001",
-      "memory_surface": "MEM-001, MEM-005",
-      "workflow_steps": "WF-001, WF-005"
+      "requirement": "NFR-003",
+      "memory_surface": "MEM-005"
     }
   ]
 }

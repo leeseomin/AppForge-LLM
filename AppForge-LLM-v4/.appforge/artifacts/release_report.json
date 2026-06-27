@@ -1,82 +1,54 @@
 {
   "schema_version": "1.0",
-  "summary": "Release candidate for the LLM settings bridge autostart fix is ready as source and Python package artifacts. The release preserves local-only defaults, avoids deployment, and includes verification/security evidence for the previous LLM bridge connection-refused failure.",
-  "release_version": "0.4.0",
+  "summary": "Phase4 is release-ready for source handoff after passing automated checks, rebuilding web assets, and smoke-testing the packaged UI.",
+  "release_version": "0.4.0-phase4-llm-ux",
   "build_artifacts": [
-    "dist/openappforge-0.4.0-py3-none-any.whl",
-    "dist/openappforge-0.4.0.tar.gz",
-    ".appforge/reports/sbom.cdx.json"
+    "appforge/resources/web/index.html",
+    "appforge/resources/web/assets/index-B8h20RM6.js",
+    "appforge/resources/web/assets/index-CJQsWsDa.css"
   ],
   "install_and_run": [
-    "From a prepared source checkout, run ./build.sh to launch the local web UI.",
-    "For deterministic smoke verification, run APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke --no-open.",
-    "Open the web UI and click LLM 연결; /api/llm/providers now lazy-starts the bundled local bridge when it is down and then returns provider choices.",
-    "To use a real external model, save a provider API key in the LLM 연결 설정 dialog or provide the provider's documented environment variable, then set/confirm the active provider and model."
+    "Use the existing AppForge-LLM-v4 setup",
+    "Run ./build.sh to prepare and open the local web UI",
+    "Use ./build.sh --smoke for a no-browser health/static UI check"
   ],
   "configuration": [
-    "APPFORGE_LLM_BRIDGE_URL defaults to http://127.0.0.1:8788.",
-    "APPFORGE_LLM_BRIDGE_AUTOSTART defaults to true for local loopback bridge URLs and can be set to 0/false/no/off to disable lazy start.",
-    "APPFORGE_SKIP_LLM_BRIDGE=1 disables bridge autostart.",
-    "APPFORGE_BRIDGE_TIMEOUT controls the bounded bridge startup wait, default 15 seconds.",
-    "Remote bridge URLs are not managed automatically; start those services separately and point APPFORGE_LLM_BRIDGE_URL at them."
+    "Provider credentials remain configured through the LLM settings modal or existing auth CLI",
+    "APPFORGE_LLM_BRIDGE_URL continues to point the web app at the local bridge",
+    "No new Phase4 environment variable is required"
   ],
   "migrations": [
-    "No database, config-file, or provider-secret migration is required.",
-    "Existing llm_bridge config and environment-based provider keys remain compatible.",
-    "Existing build.sh bridge startup behavior remains available for APPFORGE_DRIVER=llm-bridge or APPFORGE_START_LLM_BRIDGE=1."
+    "Clients using /providers/models should migrate to /providers?include_models=true or /providers/{id}/models",
+    "No data migration is required for provider credentials or active model config"
   ],
   "release_checks": [
     {
-      "check": "focused LLM settings API tests",
-      "passed": "true",
-      "evidence": ".venv/bin/python -m pytest tests/test_web.py -q passed 9 tests."
+      "check": "Bridge tests/typecheck",
+      "passed": "passed",
+      "evidence": "bun run typecheck and bun test passed"
     },
     {
-      "check": "full Python regression suite",
-      "passed": "true",
-      "evidence": ".venv/bin/python -m pytest -q and AppForge run_tests both passed 27 tests."
+      "check": "Frontend build",
+      "passed": "passed",
+      "evidence": "npm run build generated current hashed assets"
     },
     {
-      "check": "runtime LLM provider listing",
-      "passed": "true",
-      "evidence": "Outside the restricted sandbox, /api/llm/providers returned HTTP 200 and provider IDs after local bridge autostart."
+      "check": "Python quality",
+      "passed": "passed",
+      "evidence": "pytest passed 78 tests and ruff passed"
     },
     {
-      "check": "web smoke",
-      "passed": "true",
-      "evidence": "Outside the restricted sandbox, build.sh --smoke --no-open reached /api/health and /."
-    },
-    {
-      "check": "package build",
-      "passed": "true",
-      "evidence": "AppForge run_build produced dist/openappforge-0.4.0.tar.gz and dist/openappforge-0.4.0-py3-none-any.whl."
-    },
-    {
-      "check": "release readiness",
-      "passed": "true",
-      "evidence": "release_readiness passed with source_present, README.md, .gitignore, verification artifact, and security artifact checks."
-    },
-    {
-      "check": "secret scan",
-      "passed": "true",
-      "evidence": "secret_scan found no likely committed credentials."
-    },
-    {
-      "check": "llm_bridge typecheck/test",
-      "passed": "true",
-      "evidence": "bun run typecheck and bun test passed in llm_bridge."
+      "check": "Payload and smoke",
+      "passed": "passed",
+      "evidence": "Payload probe showed compact provider response; build.sh --smoke served health and UI"
     }
   ],
   "known_issues": [
-    "Network-enabled dependency audit was not run because network is disabled in this environment.",
-    "Setuptools emitted pre-existing license metadata deprecation warnings during package build.",
-    "Live external provider calls require real user API keys and were not attempted.",
-    "If llm_bridge/node_modules is absent, users must run bun install in llm_bridge; the settings request does not auto-install dependencies."
+    "No live credentialed LLM provider call was run",
+    "No browser screenshot automation was captured"
   ],
   "rollback": [
-    "Revert appforge/llm_bridge_process.py, appforge/web.py, and tests/test_web.py to remove lazy bridge autostart.",
-    "Keep manual bridge startup path by running cd llm_bridge && bun run start before opening LLM 연결 설정.",
-    "Delete regenerated dist artifacts if a clean rebuild is desired, then rerun .venv/bin/python -m appforge tool run run_build --project . --input '{}'.",
-    "No runtime data migration rollback is required."
+    "Revert Phase4 source changes and rebuild frontend assets",
+    "Restore /providers/models route only if downstream compatibility requires it"
   ]
 }

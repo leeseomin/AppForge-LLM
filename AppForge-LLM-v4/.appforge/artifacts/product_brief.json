@@ -1,41 +1,31 @@
 {
   "schema_version": "1.0",
-  "summary": "Add a top-level build.sh launcher that prepares AppForge-LLM v4 from source and opens the existing local web app UI as the primary pipeline entry point.",
-  "problem": "The app already has a browser-based pipeline, but source users still need to remember several CLI-oriented setup and launch commands before they reach the UI. The requested change is a simpler path where running build.sh brings up the local web app environment directly.",
+  "summary": "Phase4 improves LLM provider/model selection for large catalogs such as OpenRouter by reducing initial payload size and replacing datalist inputs with a reusable fuzzy model picker.",
+  "problem": "The web UI loaded every provider model in /providers, relied on prefix-only datalist behavior, and could render hundreds of model chips in one advanced settings row.",
   "target_users": [
-    "Local AppForge-LLM v4 users who want to run product-generation pipelines through the browser UI",
-    "Developers validating the repository from source without memorizing setup commands",
-    "Operators who need a reproducible one-command local web server start on macOS/Linux"
+    "Local AppForge-LLM v4 users connecting external LLM providers",
+    "Operators selecting models from large provider catalogs"
   ],
   "desired_outcomes": [
-    "A repository-root build.sh exists, is executable, and starts the existing appforge web server on a loopback host by default.",
-    "The launcher prepares the Python environment and packaged frontend assets when needed, while allowing explicit skip flags for repeat runs and CI smoke checks.",
-    "Running the launcher in normal mode opens the web UI automatically through the existing appforge web browser-opening behavior.",
-    "The launcher has a non-interactive smoke mode that proves the web UI and health endpoint can start without opening a browser.",
-    "README and web-app documentation identify build.sh as the easiest source-start path while preserving CLI compatibility."
+    "/providers returns provider status without full model catalogs by default",
+    "Users can search model IDs and names with substring matching in quick connect, active model, and advanced provider settings",
+    "Provider models load only when a provider is selected or expanded",
+    "Advanced model chips show a bounded initial list with an explicit expand/collapse control"
   ],
   "constraints": [
-    "Reuse the existing appforge web FastAPI/Vue production entry point; do not create a second web server or parallel UI.",
-    "Keep default binding loopback-only and preserve existing AppForge safety defaults.",
-    "Do not deploy, publish, or require external provider credentials.",
-    "Do not force llm-bridge usage; the launcher should respect APPFORGE_DRIVER and existing provider configuration.",
-    "Avoid destructive repository operations and preserve existing source and tracked AppForge artifacts."
+    "Use Vue 3 and existing TypeScript patterns without adding frontend dependencies",
+    "Keep API keys and OAuth credentials out of logs and browser payloads",
+    "Preserve existing provider save, test, activate, and quick-connect flows"
   ],
   "assumptions": [
-    "Python 3.11+, npm, and the existing project dependency metadata are the supported source-development path.",
-    "uv is preferred when available for local dependency sync; a Python venv/pip fallback is acceptable.",
-    "Bun/llm_bridge startup is optional and should be activated only when the user selects the llm-bridge driver or explicitly asks the launcher to start it.",
-    "A smoke mode may suppress browser opening to keep automated verification deterministic."
+    "Phase4 decision F-1 uses the recommended option: remove the unused /providers/models all-provider endpoint",
+    "Phase4 decision F-2 uses the recommended option: in-memory model cache only",
+    "Manual model ID entry must remain possible even if lazy loading fails"
   ],
   "non_goals": [
-    "Do not redesign the Vue UI or change the pipeline runner behavior.",
-    "Do not add production daemon management, launch agents, Docker packaging, or hosted deployment.",
-    "Do not add new third-party dependencies solely for the launcher.",
-    "Do not guarantee live external LLM calls without configured credentials.",
-    "Do not remove or deprecate the existing appforge CLI commands."
+    "No stage-specific model routing",
+    "No localStorage model catalog cache",
+    "No live third-party LLM call without user credentials"
   ],
-  "open_questions": [
-    "Whether the user wants a separate native desktop wrapper is intentionally out of scope; the safe default is a local browser UI launcher.",
-    "Which coding-agent or LLM driver should be used remains runtime configuration through APPFORGE_DRIVER and the existing web health readiness."
-  ]
+  "open_questions": []
 }

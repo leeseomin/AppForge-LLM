@@ -5,7 +5,7 @@
   "stage": "change_plan",
   "status": "completed",
   "attempt": 1,
-  "timestamp": "2026-06-27T09:09:18+00:00",
+  "timestamp": "2026-06-27T15:52:40+00:00",
   "artifacts": {
     "change_plan": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/change_plan.json"
   },
@@ -34,51 +34,22 @@
     "stage_result": {
       "stage": "change_plan",
       "status": "completed",
-      "summary": "Planned a narrow additive launcher/docs change with executable verification and rollback.",
+      "summary": "Planned the minimal Phase4 bridge, frontend, test, and asset changes.",
       "files_changed": [
-        ".appforge/artifacts/change_plan.json",
-        ".appforge/stage-result.json"
+        ".appforge/artifacts/change_plan.json"
       ],
-      "commands_run": [
-        {
-          "command": ".venv/bin/python -m appforge prompt . --stage change_plan --output .appforge/current-stage.md",
-          "result": "passed; rendered and read the change-plan stage packet"
-        },
-        {
-          "command": ".venv/bin/python -m appforge tool run git_diff --project .",
-          "result": "passed; current diff is AppForge control-plane artifacts/checkpoints only"
-        },
-        {
-          "command": "git status --short",
-          "result": "passed; product source not edited yet"
-        }
-      ],
+      "commands_run": [],
       "checks": [
         {
-          "name": "changes map to requirements",
+          "name": "Change plan schema",
           "passed": true,
-          "evidence": "change_plan.affected_requirements lists FR-001 through FR-005 and NFR-001 through NFR-004; each change names verification."
-        },
-        {
-          "name": "compatibility addressed",
-          "passed": true,
-          "evidence": "migration_or_compatibility preserves existing CLI, frontend dev, and bridge commands."
-        },
-        {
-          "name": "definition of done executable",
-          "passed": true,
-          "evidence": "definition_of_done names exact bash, smoke, pytest, npm, AppForge, and archive outcomes."
+          "evidence": "change_plan.json includes affected requirements, file changes, compatibility, risks, rollback, and definition of done"
         }
       ],
       "decisions": [
         {
-          "decision": "Implement as one additive root shell script plus docs.",
-          "reason": "This meets the user's build.sh request with the smallest surface while leaving existing Python/FastAPI/Vue runtime behavior intact.",
-          "alternatives": [
-            "Change appforge web internals",
-            "Add a new Python CLI command",
-            "Build a separate dev server wrapper"
-          ]
+          "decision": "Limit implementation to the existing bridge and provider settings seams.",
+          "reason": "This meets Phase4 without inventing new provider abstractions."
         }
       ],
       "unresolved": []
