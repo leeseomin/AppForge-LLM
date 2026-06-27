@@ -170,23 +170,51 @@ tail_web_log() {
   fi
 }
 
+install_python_with_pip() {
+  if [[ ! -x "$ROOT_DIR/.venv/bin/python" ]]; then
+    have python3 || die "python3 is required when uv sync is unavailable or unusable."
+    log "Creating .venv with python3."
+    python3 -m venv "$ROOT_DIR/.venv" || die "python3 -m venv .venv failed."
+  fi
+
+  if ! "$ROOT_DIR/.venv/bin/python" -m pip --version >/dev/null 2>&1; then
+    log "Bootstrapping pip in .venv."
+    "$ROOT_DIR/.venv/bin/python" -m ensurepip --upgrade || die "pip is missing and python -m ensurepip failed."
+  fi
+
+  local pip_args=(-e '.[dev]')
+  if "$ROOT_DIR/.venv/bin/python" -c 'import setuptools, wheel' >/dev/null 2>&1; then
+    pip_args=(--no-build-isolation -e '.[dev]')
+    log "Installing Python dependencies with pip editable fallback without build isolation."
+  else
+    log "Installing Python dependencies with pip editable fallback."
+  fi
+  "$ROOT_DIR/.venv/bin/python" -m pip install "${pip_args[@]}" || die "pip install ${pip_args[*]} failed."
+}
+
+uv_supports_sync() {
+  uv sync --help >/dev/null 2>&1
+}
+
 ensure_python_env() {
   if is_true "${APPFORGE_SKIP_INSTALL:-}"; then
     log "Skipping Python dependency sync because APPFORGE_SKIP_INSTALL is set."
-  elif have uv; then
+  elif have uv && uv_supports_sync; then
     log "Syncing Python dependencies with uv."
-    uv sync --extra dev || die "uv sync --extra dev failed."
-  else
-    have python3 || die "python3 is required when uv is unavailable."
-    log "Preparing .venv with python3 and pip."
-    if [[ ! -d "$ROOT_DIR/.venv" ]]; then
-      python3 -m venv "$ROOT_DIR/.venv" || die "python3 -m venv .venv failed."
+    if ! uv sync --extra dev; then
+      log "uv sync failed; falling back to pip editable install."
+      install_python_with_pip
     fi
-    "$ROOT_DIR/.venv/bin/python" -m pip install -e '.[dev]' || die "pip install -e '.[dev]' failed."
+  elif have uv; then
+    log "Installed uv does not support 'uv sync'; falling back to pip editable install."
+    install_python_with_pip
+  else
+    log "uv is unavailable; falling back to pip editable install."
+    install_python_with_pip
   fi
 
   if [[ ! -x "$APPFORGE_BIN" ]]; then
-    die ".venv/bin/appforge is missing or not executable. Run uv sync --extra dev or unset APPFORGE_SKIP_INSTALL."
+    die ".venv/bin/appforge is missing or not executable. Re-run without APPFORGE_SKIP_INSTALL or install the project with .venv/bin/python -m pip install -e '.[dev]'."
   fi
 }
 

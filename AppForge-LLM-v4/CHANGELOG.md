@@ -2,7 +2,7 @@
 
 ## 0.4.0 — 2026-06-27
 
-- Added a repository-root `build.sh` source launcher that prepares dependencies, builds packaged web assets, opens the local web UI, supports `--no-open`, and provides a bounded `--smoke` verification mode.
+- Added a repository-root `build.sh` source launcher that prepares dependencies with `uv sync` or a pip fallback, builds packaged web assets, opens the local web UI, supports `--no-open`, and provides a bounded `--smoke` verification mode.
 - Added the v4 engineering spine: Specification → Workflow → Memory → Loop Engineering.
 - Added a local `llm-bridge` provider path with web Provider Settings, FastAPI `/api/llm` proxy routes, a Bun bridge service, and an `APPFORGE_DRIVER=llm-bridge` driver.
 - Updated all built-in pipeline manifests to version 1.1 with strengthened or inserted `workflow_design`, `memory_engineering`, and `loop_engineering` stages before implementation-oriented work.

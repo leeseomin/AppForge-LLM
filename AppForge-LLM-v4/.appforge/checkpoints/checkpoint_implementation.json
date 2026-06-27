@@ -5,7 +5,7 @@
   "stage": "implementation",
   "status": "completed",
   "attempt": 1,
-  "timestamp": "2026-06-27T09:28:30+00:00",
+  "timestamp": "2026-06-27T09:47:35+00:00",
   "artifacts": {
     "implementation_report": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/implementation_report.json"
   },
@@ -41,7 +41,7 @@
         },
         "artifacts": [],
         "error": null,
-        "duration_seconds": 0.0007,
+        "duration_seconds": 0.0009,
         "command": null
       }
     }
@@ -59,7 +59,7 @@
       {
         "severity": "suggestion",
         "criterion": "unresolved",
-        "finding": "Network-disabled runner means first-run dependency downloads are represented by code path and documentation, while verification uses the prepared workspace skip path.",
+        "finding": "A first-run pip fallback in a completely empty environment still requires network access or a local package cache for missing dependencies.",
         "proposed_change": "Resolve it now or document why it is safely deferred with an owner and verification step."
       }
     ]
@@ -69,7 +69,7 @@
     "stage_result": {
       "stage": "implementation",
       "status": "completed",
-      "summary": "Added the root build.sh source launcher, verified syntax/help/check/smoke behavior, and documented the web-first startup path.",
+      "summary": "Patched build.sh so uv sync is optional rather than mandatory: unsupported or failed uv sync now falls back to a .venv/pip editable install path, including pip bootstrapping for uv-created environments.",
       "files_changed": [
         "build.sh",
         "README.md",
@@ -80,83 +80,94 @@
       ],
       "commands_run": [
         {
-          "command": ".venv/bin/python -m appforge prompt . --stage implementation --output .appforge/current-stage.md",
-          "result": "passed; rendered and read the implementation stage packet"
+          "command": "uv --version",
+          "result": "passed; local uv is 0.7.2"
+        },
+        {
+          "command": "APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check",
+          "result": "failed before patch because uv sync could not access the local uv cache; passed after patch by falling back to pip editable install"
         },
         {
           "command": "bash -n build.sh",
-          "result": "passed; shell syntax validated"
+          "result": "passed"
         },
         {
-          "command": "./build.sh --help",
-          "result": "passed; usage output lists smoke, check, no-open, and environment options"
-        },
-        {
-          "command": "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke",
-          "result": "first sandbox run failed with local bind operation not permitted; approved local-bind rerun passed and cleaned up pid 16103"
+          "command": "bash -c 'uv() { printf \"error: unrecognized subcommand '\\''sync'\\''\\n\" >&2; return 2; }; export -f uv; APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check'",
+          "result": "passed; simulated old uv without sync support and exercised the fallback path"
         },
         {
           "command": "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check",
-          "result": "passed; prepared-workspace check mode completed without starting web"
+          "result": "passed"
         },
         {
-          "command": "APPFORGE_DRIVER=llm-bridge APPFORGE_SKIP_LLM_BRIDGE=1 APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check",
-          "result": "passed; bridge skip escape hatch was honored"
+          "command": "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke",
+          "result": "passed"
         },
         {
-          "command": "rg -n \"build\\.sh|APPFORGE_START_LLM_BRIDGE|APPFORGE_SMOKE_TIMEOUT|--smoke|--no-open|--check\" README.md docs/WEB_APP.md CHANGELOG.md",
-          "result": "passed; docs mention launcher commands and options"
+          "command": ".venv/bin/python -m pytest -q",
+          "result": "passed, 24 tests"
+        },
+        {
+          "command": "npm --prefix frontend run typecheck",
+          "result": "passed"
+        },
+        {
+          "command": "npm --prefix frontend run build",
+          "result": "passed"
         }
       ],
       "checks": [
         {
-          "name": "FR-001 launcher exists and delegates to appforge web",
+          "name": "reported uv compatibility failure",
           "passed": true,
-          "evidence": "build.sh is executable; build_web_command invokes .venv/bin/appforge web with default host/port and optional --no-open-browser."
+          "evidence": "Simulated uv without sync support completed through pip fallback."
         },
         {
-          "name": "FR-002 dependency preparation",
+          "name": "local uv sync unusable fallback",
           "passed": true,
-          "evidence": "ensure_python_env implements uv sync and venv/pip fallback; ensure_frontend implements conditional npm install plus npm build."
+          "evidence": "Local uv sync cache permission failure completed through pip fallback."
         },
         {
-          "name": "FR-003 smoke loop",
+          "name": "launcher syntax",
           "passed": true,
-          "evidence": "Approved APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke returned 0 after /api/health and / HTTP probes."
+          "evidence": "bash -n build.sh returned success."
         },
         {
-          "name": "FR-004 bridge optionality",
+          "name": "web smoke",
           "passed": true,
-          "evidence": "maybe_start_bridge only runs for llm-bridge/APPFORGE_START_LLM_BRIDGE and APPFORGE_SKIP_LLM_BRIDGE=1 --check passed."
+          "evidence": "Smoke mode served /api/health and / on 127.0.0.1:8799 and stopped its pid."
         },
         {
-          "name": "FR-005 documentation",
+          "name": "backend regression",
           "passed": true,
-          "evidence": "README.md, docs/WEB_APP.md, and CHANGELOG.md contain ./build.sh, --smoke, --no-open, and bridge option references."
+          "evidence": ".venv/bin/python -m pytest -q returned 24 passed."
+        },
+        {
+          "name": "frontend regression",
+          "passed": true,
+          "evidence": "npm typecheck and build returned success."
         }
       ],
       "decisions": [
         {
-          "decision": "Implement the UX improvement as one additive shell launcher.",
-          "reason": "The current appforge web command is already the authoritative web UI runtime; a wrapper satisfies the requested easier UX without duplicating server logic.",
+          "decision": "Use uv sync only when it is supported and successful.",
+          "reason": "The launcher should work across uv versions and local cache restrictions without forcing a uv upgrade.",
           "alternatives": [
-            "Modify appforge web startup internals",
-            "Add a second Python launcher command",
-            "Require users to run frontend and backend dev servers manually"
+            "Require users to upgrade uv",
+            "Remove uv usage entirely"
           ]
         },
         {
-          "decision": "Use bounded curl probes for smoke and bridge health checks.",
-          "reason": "The smoke path needs deterministic HTTP status evidence and should not spin forever.",
+          "decision": "Fallback to .venv/bin/python -m pip install for source dependency setup.",
+          "reason": "This matches the documented manual source path and preserves the existing appforge web runtime contract.",
           "alternatives": [
-            "Use arbitrary sleeps",
-            "Use a Python probe script",
-            "Skip endpoint checks"
+            "Call uv pip sync",
+            "Exit with a manual remediation message"
           ]
         }
       ],
       "unresolved": [
-        "Network-disabled runner means first-run dependency downloads are represented by code path and documentation, while verification uses the prepared workspace skip path."
+        "A first-run pip fallback in a completely empty environment still requires network access or a local package cache for missing dependencies."
       ]
     },
     "manual_completion": true

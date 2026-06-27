@@ -1,96 +1,77 @@
 {
   "schema_version": "1.0",
-  "summary": "The build.sh source web-launcher feature is implemented, verified, security-reviewed, release-documented, and archived. A new engineer can run ./build.sh from the source checkout to prepare and open the existing AppForge-LLM v4 web UI, or run the skip-mode smoke command for deterministic local verification.",
+  "summary": "Handoff for the build.sh uv compatibility hotfix. The launcher now keeps uv sync as the preferred path but falls back to .venv/pip editable install when uv sync is unsupported or unusable, so the web UI startup path is no longer blocked by older uv versions.",
   "delivered": [
-    "Executable repository-root build.sh launcher with --help, --check, --no-open, and --smoke modes.",
-    "Python setup path in build.sh using uv sync --extra dev when available, with python3 venv/pip fallback.",
-    "Frontend setup path in build.sh that installs frontend dependencies only when frontend/node_modules is missing and rebuilds packaged FastAPI web assets.",
-    "Normal launcher path delegating to .venv/bin/appforge web with 127.0.0.1:8787 defaults and browser opening enabled by default.",
-    "Prepared-workspace smoke path that starts appforge web without browser opening, probes /api/health and /, then stops only the launcher-owned server PID.",
-    "Optional llm_bridge reuse/startup path gated by APPFORGE_DRIVER=llm-bridge or APPFORGE_START_LLM_BRIDGE=1, with APPFORGE_SKIP_LLM_BRIDGE=1 as an escape hatch.",
-    "README.md, docs/WEB_APP.md, and CHANGELOG.md updates presenting ./build.sh as the easiest source UI path while preserving existing CLI/frontend commands.",
-    "AppForge quality-command detector fix: Python quality commands now use sys.executable so run_tests and run_build gates execute in the active interpreter even when python is not on PATH.",
-    "Regression coverage in tests/test_tools.py for PATH-empty Python quality command detection.",
-    "Release artifacts: dist/openappforge-0.4.0-py3-none-any.whl and dist/openappforge-0.4.0.tar.gz.",
-    "Source archive: .appforge/reports/AppForge-LLM-v4-source.zip with manifest .appforge/reports/AppForge-LLM-v4-source.zip.manifest.json."
+    "build.sh probes uv sync support before using it.",
+    "build.sh falls back when uv sync fails at runtime, including the local sandboxed uv-cache failure class.",
+    "build.sh bootstraps pip into .venv when a uv-created environment lacks pip.",
+    "build.sh uses --no-build-isolation for pip fallback when setuptools and wheel are already present, avoiding unnecessary network-only build dependency resolution in prepared workspaces.",
+    "README.md, docs/WEB_APP.md, and CHANGELOG.md document uv-or-pip fallback behavior.",
+    "Verification, security, release, and handoff AppForge artifacts were refreshed after the hotfix.",
+    "Source archive created at .appforge/reports/AppForge-LLM-v4-source.zip with 267 files and 459539 bytes before final handoff completion."
   ],
   "quickstart": [
-    "Fast source UI path: ./build.sh",
-    "Prepared-workspace smoke: APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke",
-    "Prepared-workspace setup check: APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check",
-    "Headless foreground server: ./build.sh --no-open",
-    "Alternate port: APPFORGE_WEB_PORT=8799 ./build.sh",
-    "Optional bridge path: APPFORGE_DRIVER=llm-bridge ./build.sh, or APPFORGE_START_LLM_BRIDGE=1 ./build.sh",
-    "Manual source path remains: python -m venv .venv; source .venv/bin/activate; python -m pip install -e '.[dev]'; npm --prefix frontend install; npm --prefix frontend run build; appforge web",
-    "Core verification: bash -n build.sh; .venv/bin/python -m pytest -q; npm --prefix frontend run typecheck; npm --prefix frontend run build"
+    "Run ./build.sh from the repository root to prepare dependencies, build packaged web assets, start appforge web, and open the browser.",
+    "Run APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check to verify a prepared workspace without starting the server.",
+    "Run APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke to start the web server without opening a browser, probe /api/health and /, then stop it.",
+    "If the installed uv lacks sync, the launcher prints that it is falling back and continues with pip editable install.",
+    "If uv sync exists but fails locally, the launcher attempts the same pip fallback before failing."
   ],
   "architecture_reference": [
-    ".appforge/artifacts/requirements_spec.json defines FR-001 through FR-005 and NFR-001 through NFR-004 for the launcher.",
-    ".appforge/artifacts/workflow_spec.json defines WF-001 through WF-007 for argument parsing, Python/frontend setup, optional bridge startup, normal web launch, smoke checks, and docs.",
-    ".appforge/artifacts/memory_spec.json defines MEM-001 through MEM-007 for process-local launcher state, dependency readiness, packaged web assets, optional bridge runtime, web runtime, smoke status, and documentation.",
-    ".appforge/artifacts/loop_spec.json defines LOOP-001 through LOOP-006 for bounded setup, bridge, foreground web, smoke, and verification loops.",
-    ".appforge/artifacts/change_plan.json records the accepted implementation plan and rollback.",
-    "Primary source references: build.sh, README.md, docs/WEB_APP.md, CHANGELOG.md, appforge/tooling/detection.py, tests/test_tools.py, appforge/cli.py, appforge/web.py, frontend/vite.config.ts."
+    ".appforge/artifacts/requirements_spec.json: FR-002 covers Python dependency preparation.",
+    ".appforge/artifacts/workflow_spec.json: WF-002 covers uv or venv/pip fallback creating an executable .venv/bin/appforge.",
+    ".appforge/artifacts/memory_spec.json: MEM-002 covers .venv dependency readiness and invalidation.",
+    ".appforge/artifacts/loop_spec.json: LOOP-002 covers bounded dependency reconciliation.",
+    "build.sh: install_python_with_pip, uv_supports_sync, and ensure_python_env implement the hotfix."
   ],
   "verification_reference": [
-    ".appforge/artifacts/implementation_report.json documents the launcher implementation decisions and initial checks.",
-    ".appforge/artifacts/verification_report.json contains the full verification record, including the initial AppForge gate failure and detector fix.",
-    ".appforge/artifacts/security_report.json contains the threat model, secret scan result, dependency audit limitation, and residual risks.",
-    ".appforge/artifacts/release_report.json contains build artifacts, hashes, release checks, known issues, and rollback.",
     "bash -n build.sh passed.",
-    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke passed with approved loopback bind and cleaned up pid 17492.",
-    ".venv/bin/python -m pytest -q passed with 24 tests and one existing Starlette TestClient deprecation warning.",
-    "npm --prefix frontend run typecheck and npm --prefix frontend run build passed.",
-    "AppForge run_tests and run_build passed with skipped=false after the sys.executable detector fix.",
-    "secret_scan passed with findings=[].",
-    "archive_workspace produced .appforge/reports/AppForge-LLM-v4-source.zip with 267 files and 459108 bytes."
+    "APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check passed after uv sync failed locally and pip fallback completed.",
+    "Simulated old uv without sync support passed through pip fallback: bash -c 'uv() { printf \"error: unrecognized subcommand '\\''sync'\\''\\n\" >&2; return 2; }; export -f uv; APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check'.",
+    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check passed.",
+    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke passed and stopped its web server pid.",
+    ".venv/bin/python -m pytest -q passed with 24 tests.",
+    "npm --prefix frontend run typecheck passed.",
+    "npm --prefix frontend run build passed.",
+    "AppForge run_tests, run_build, secret_scan, release_readiness, and archive_workspace gates passed.",
+    "Archive assertion verified build.sh fallback content is included and .appforge, .appforge-web, dist, .git, node_modules, and .venv are excluded."
   ],
   "operations_reference": [
-    "APPFORGE_WEB_HOST controls build.sh/appforge web bind host and defaults to 127.0.0.1.",
-    "APPFORGE_WEB_PORT controls build.sh/appforge web bind port and defaults to 8787.",
+    "Default web URL remains http://127.0.0.1:8787.",
+    "APPFORGE_WEB_HOST and APPFORGE_WEB_PORT override the bind endpoint.",
+    "APPFORGE_SKIP_INSTALL=1 skips Python dependency reconciliation.",
+    "APPFORGE_SKIP_FRONTEND_BUILD=1 skips frontend build and requires packaged web assets to exist.",
     "APPFORGE_NO_OPEN=1 or --no-open suppresses browser opening.",
-    "APPFORGE_SKIP_INSTALL=1 reuses the current .venv.",
-    "APPFORGE_SKIP_FRONTEND_BUILD=1 reuses current packaged web assets.",
-    "APPFORGE_START_LLM_BRIDGE=1 or APPFORGE_DRIVER=llm-bridge requests bridge reuse/startup.",
-    "APPFORGE_SKIP_LLM_BRIDGE=1 leaves bridge management to another terminal/process.",
-    "APPFORGE_LLM_BRIDGE_URL defaults to http://127.0.0.1:8788.",
-    "APPFORGE_SMOKE_TIMEOUT and APPFORGE_BRIDGE_TIMEOUT bound health polling.",
-    "Launcher-owned bridge logs go to APPFORGE_DATA_DIR or .appforge-web by default; this runtime directory is ignored and excluded from source archives."
+    "APPFORGE_DRIVER=llm-bridge or APPFORGE_START_LLM_BRIDGE=1 requests optional bridge startup; APPFORGE_SKIP_LLM_BRIDGE=1 disables launcher-owned bridge startup.",
+    "No deployment, publishing, push, or external provider call was performed."
   ],
   "open_items": [
-    "First-run dependency downloads were not exercised because network downloads are disabled in this AppForge runner.",
-    "Online dependency audit was not performed for the same network policy reason.",
-    "generate_sbom currently inventories root manifests only and does not enumerate nested frontend or llm_bridge npm dependencies.",
-    "Setuptools emits existing project.license/classifier deprecation warnings during python -m build; build succeeds, but license metadata should be modernized before the 2027-Feb-18 setuptools deadline.",
-    "Launcher-owned llm_bridge startup was not tested with live provider credentials; provider-backed use still depends on Bun, bridge dependencies, and user/provider configuration."
+    "A completely fresh pip fallback still requires network access or a local package cache for missing dependencies.",
+    "Online dependency audit remains unrun because network is disabled.",
+    "SBOM generation remains lightweight/root-manifest-only and reported zero components.",
+    "Setuptools emits non-blocking pyproject license metadata deprecation warnings during build."
   ],
   "next_steps": [
-    "Run ./build.sh from a clean network-approved source checkout to exercise first-run uv/pip/npm preparation.",
-    "Run an online dependency audit in an environment where network access is approved.",
-    "Extend AppForge SBOM generation to inspect nested frontend/package.json and llm_bridge/package.json manifests.",
-    "Modernize pyproject.toml license metadata to remove setuptools deprecation warnings.",
-    "Optionally add shell unit tests or a small Bats-style harness for build.sh argument parsing if the launcher grows."
+    "Run ./build.sh in the user's normal shell to confirm the browser opens with their installed uv version.",
+    "Optionally run dependency_audit with --allow-network in a network-approved environment.",
+    "Consider updating pyproject.toml license metadata before the Setuptools 2027 deprecation deadline.",
+    "If full offline first-run is required, provide a local wheelhouse or documented package cache workflow."
   ],
   "source_archive": {
     "path": ".appforge/reports/AppForge-LLM-v4-source.zip",
-    "manifest": ".appforge/reports/AppForge-LLM-v4-source.zip.manifest.json",
     "files": 267,
-    "bytes": 459108,
-    "sha256": "f8e25671482873e99571802db9a0689d00bb3b4700745baec9430c0ef7f85fe5",
-    "assertions": {
-      "has_build_sh": true,
-      "has_detector_fix": true,
-      "has_regression_test": true,
-      "excludes_git": true,
-      "excludes_appforge": true,
-      "excludes_appforge_web": true,
-      "excludes_venv": true,
-      "excludes_node_modules": true,
-      "excludes_dist": true
-    }
-  },
-  "build_artifacts": [
-    "dist/openappforge-0.4.0-py3-none-any.whl (212K, sha256 ff941e4447bf868feb30f7a6f5eca9afb8ce8a751b0a3cd6e12944fdddeb7908)",
-    "dist/openappforge-0.4.0.tar.gz (153K, sha256 ccf2be726d212cd2fff55fba020b129e4edd0ef76f7d7c2ea829b2d6930faaef)"
-  ]
+    "bytes": 459539,
+    "verified_exclusions": [
+      ".appforge",
+      ".appforge-web",
+      "dist",
+      ".git",
+      "node_modules",
+      ".venv"
+    ],
+    "verified_inclusions": [
+      "build.sh",
+      "build.sh uv_supports_sync fallback logic"
+    ]
+  }
 }
