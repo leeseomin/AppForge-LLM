@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import threading
 import webbrowser
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
@@ -16,7 +17,8 @@ from starlette.concurrency import run_in_threadpool
 
 from . import __version__, llm_bridge
 from .constants import RESOURCE_DIR
-from .web_jobs import JobManager, WebConfig, WebJobError
+from .llm_bridge_process import LLMBridgeProcessManager
+from .web_jobs import LLM_BRIDGE_DRIVER_ALIASES, JobManager, WebConfig, WebJobError
 
 WEB_DIR = RESOURCE_DIR / "web"
 ASSET_DIR = WEB_DIR / "assets"
@@ -63,13 +65,18 @@ def create_app(
     config: WebConfig | None = None,
     *,
     manager: JobManager | None = None,
+    llm_bridge_manager: LLMBridgeProcessManager | None = None,
 ) -> FastAPI:
     resolved_config = config or WebConfig.from_env()
     resolved_manager = manager or JobManager(resolved_config)
+    resolved_bridge_manager = llm_bridge_manager or LLMBridgeProcessManager(
+        runtime_dir=resolved_manager.data_dir,
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         yield
+        resolved_bridge_manager.shutdown()
         resolved_manager.shutdown()
 
     app = FastAPI(
@@ -82,6 +89,7 @@ def create_app(
     )
     app.state.job_manager = resolved_manager
     app.state.web_config = resolved_config
+    app.state.llm_bridge_manager = resolved_bridge_manager
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next: Any) -> Any:
@@ -142,7 +150,15 @@ def create_app(
         return JSONResponse(status_code=500, content={"error": error})
 
     @app.get("/api/health")
-    async def health() -> dict[str, Any]:
+    async def health(request: Request) -> dict[str, Any]:
+        if _uses_llm_bridge_driver(request):
+            try:
+                await run_in_threadpool(
+                    request.app.state.llm_bridge_manager.ensure_running,
+                    _bridge_url(request),
+                )
+            except llm_bridge.BridgeError:
+                pass
         return resolved_manager.health()
 
     @app.post("/api/jobs", status_code=202)
@@ -166,9 +182,37 @@ def create_app(
     def _bridge_url(request: Request) -> str:
         return str(request.app.state.web_config.llm_bridge_url)
 
+    def _uses_llm_bridge_driver(request: Request) -> bool:
+        driver = str(request.app.state.web_config.driver).casefold().strip()
+        return driver in LLM_BRIDGE_DRIVER_ALIASES
+
+    async def _bridge_call(
+        request: Request,
+        func: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        bridge_url = _bridge_url(request)
+        try:
+            return await run_in_threadpool(func, bridge_url, *args, **kwargs)
+        except llm_bridge.BridgeError as exc:
+            if exc.status_code != 0:
+                raise
+            await run_in_threadpool(
+                request.app.state.llm_bridge_manager.ensure_running,
+                bridge_url,
+                exc,
+            )
+            return await run_in_threadpool(func, bridge_url, *args, **kwargs)
+
     @app.exception_handler(llm_bridge.BridgeError)
     async def bridge_error_handler(_request: Request, exc: llm_bridge.BridgeError) -> JSONResponse:
         status = 502 if exc.status_code == 0 else exc.status_code
+        action = (
+            exc.payload.get("action")
+            if isinstance(exc.payload, dict) and isinstance(exc.payload.get("action"), str)
+            else "llm_bridge 서비스가 실행 중인지 확인하세요."
+        )
         return JSONResponse(
             status_code=status,
             content={
@@ -176,7 +220,7 @@ def create_app(
                     "code": "LLM_BRIDGE_ERROR",
                     "title": "LLM 브릿지 오류",
                     "message": str(exc),
-                    "action": "llm_bridge 서비스가 실행 중인지 확인하세요.",
+                    "action": action,
                     "context": exc.payload,
                 }
             },
@@ -184,11 +228,11 @@ def create_app(
 
     @app.get("/api/llm/providers")
     async def llm_providers(request: Request) -> dict[str, Any]:
-        return await run_in_threadpool(llm_bridge.list_providers, _bridge_url(request))
+        return await _bridge_call(request, llm_bridge.list_providers)
 
     @app.get("/api/llm/providers/{provider_id}/models")
     async def llm_provider_models(provider_id: str, request: Request) -> dict[str, Any]:
-        return await run_in_threadpool(llm_bridge.provider_models, _bridge_url(request), provider_id)
+        return await _bridge_call(request, llm_bridge.provider_models, provider_id)
 
     @app.put("/api/llm/providers/{provider_id}")
     async def llm_upsert_provider(
@@ -196,9 +240,9 @@ def create_app(
         payload: UpsertProviderRequest,
         request: Request,
     ) -> dict[str, Any]:
-        return await run_in_threadpool(
+        return await _bridge_call(
+            request,
             llm_bridge.upsert_provider,
-            _bridge_url(request),
             provider_id,
             api_key=payload.apiKey,
             base_url_override=payload.baseURL,
@@ -207,7 +251,7 @@ def create_app(
 
     @app.delete("/api/llm/providers/{provider_id}")
     async def llm_delete_provider(provider_id: str, request: Request) -> dict[str, Any]:
-        return await run_in_threadpool(llm_bridge.delete_provider, _bridge_url(request), provider_id)
+        return await _bridge_call(request, llm_bridge.delete_provider, provider_id)
 
     @app.post("/api/llm/providers/{provider_id}/test")
     async def llm_test_provider(
@@ -215,9 +259,9 @@ def create_app(
         payload: TestProviderRequest,
         request: Request,
     ) -> dict[str, Any]:
-        return await run_in_threadpool(
+        return await _bridge_call(
+            request,
             llm_bridge.test_provider,
-            _bridge_url(request),
             provider_id,
             api_key=payload.apiKey,
             base_url_override=payload.baseURL,
@@ -226,13 +270,13 @@ def create_app(
 
     @app.get("/api/llm/active")
     async def llm_active(request: Request) -> dict[str, Any]:
-        return await run_in_threadpool(llm_bridge.get_active, _bridge_url(request))
+        return await _bridge_call(request, llm_bridge.get_active)
 
     @app.put("/api/llm/active")
     async def llm_set_active(payload: ActiveProviderRequest, request: Request) -> dict[str, Any]:
-        return await run_in_threadpool(
+        return await _bridge_call(
+            request,
             llm_bridge.set_active,
-            _bridge_url(request),
             payload.provider,
             payload.model,
         )

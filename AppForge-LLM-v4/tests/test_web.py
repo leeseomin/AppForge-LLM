@@ -14,6 +14,25 @@ from appforge.web import create_app
 from appforge.web_jobs import WebConfig
 
 
+class _FakeBridgeManager:
+    def __init__(self, error: llm_bridge.BridgeError | None = None) -> None:
+        self.error = error
+        self.ensure_calls: list[tuple[str, str | None]] = []
+        self.shutdown_calls = 0
+
+    def ensure_running(
+        self,
+        base_url: str,
+        initial_error: llm_bridge.BridgeError | None = None,
+    ) -> None:
+        self.ensure_calls.append((base_url, str(initial_error) if initial_error else None))
+        if self.error:
+            raise self.error
+
+    def shutdown(self) -> None:
+        self.shutdown_calls += 1
+
+
 def _fixture_config(tmp_path: Path) -> WebConfig:
     framework_root = Path(__file__).resolve().parents[1]
     fixture = framework_root / "tests" / "fixtures" / "fake_stage_agent.py"
@@ -177,7 +196,7 @@ def test_llm_bridge_health_requires_configured_active_provider(tmp_path: Path, m
             }
         ]
     }
-    monkeypatch.setattr(llm_bridge, "ping", lambda url: {"ok": True})
+    monkeypatch.setattr(llm_bridge, "ping", lambda url, **kwargs: {"ok": True})
     monkeypatch.setattr(llm_bridge, "get_active", lambda url: {"provider": "openai", "model": "gpt-4o-mini"})
     monkeypatch.setattr(llm_bridge, "list_providers", lambda url: provider_payload)
 
@@ -296,3 +315,113 @@ def test_llm_provider_api_proxies_to_bridge(tmp_path: Path, monkeypatch) -> None
     assert any(call[0] == "test" and call[2]["model"] == "gpt-4o-mini" for call in calls)
     assert ("set_active", ("http://bridge.test", "openai", "gpt-4o-mini"), {}) in calls
     assert ("delete", ("http://bridge.test", "openai"), {}) in calls
+
+
+def test_llm_provider_api_autostarts_local_bridge_and_retries(tmp_path: Path, monkeypatch) -> None:
+    attempts = {"list": 0}
+
+    def fake_list(url: str) -> dict:
+        attempts["list"] += 1
+        if attempts["list"] == 1:
+            raise llm_bridge.BridgeError(
+                "LLM 브릿지에 연결할 수 없습니다: [Errno 61] Connection refused"
+            )
+        return {
+            "providers": [
+                {
+                    "id": "openai",
+                    "name": "OpenAI",
+                    "kind": "api-key",
+                    "configured": False,
+                    "has_key": False,
+                    "key_source": "none",
+                    "models": [{"id": "gpt-4o-mini"}],
+                }
+            ]
+        }
+
+    monkeypatch.setattr(llm_bridge, "list_providers", fake_list)
+    bridge_manager = _FakeBridgeManager()
+    config = WebConfig(
+        projects_dir=tmp_path / "projects",
+        data_dir=tmp_path / "web-state",
+        llm_bridge_url="http://127.0.0.1:8788",
+    )
+    app = create_app(config, llm_bridge_manager=bridge_manager)
+    with TestClient(app) as client:
+        response = client.get("/api/llm/providers")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["providers"][0]["id"] == "openai"
+    assert attempts["list"] == 2
+    assert bridge_manager.ensure_calls == [
+        (
+            "http://127.0.0.1:8788",
+            "LLM 브릿지에 연결할 수 없습니다: [Errno 61] Connection refused",
+        )
+    ]
+    assert bridge_manager.shutdown_calls == 1
+
+
+def test_llm_provider_api_reports_bridge_autostart_guidance(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        llm_bridge,
+        "list_providers",
+        lambda url: (_ for _ in ()).throw(
+            llm_bridge.BridgeError("LLM 브릿지에 연결할 수 없습니다: [Errno 61] Connection refused")
+        ),
+    )
+    bridge_manager = _FakeBridgeManager(
+        llm_bridge.BridgeError(
+            "Bun을 찾을 수 없어 LLM 브릿지를 자동 시작할 수 없습니다.",
+            payload={
+                "action": "Bun을 설치하거나 llm_bridge 서비스를 직접 실행한 뒤 다시 시도하세요.",
+                "reason": "bun_missing",
+            },
+        )
+    )
+    config = WebConfig(
+        projects_dir=tmp_path / "projects",
+        data_dir=tmp_path / "web-state",
+        llm_bridge_url="http://127.0.0.1:8788",
+    )
+    app = create_app(config, llm_bridge_manager=bridge_manager)
+    with TestClient(app) as client:
+        response = client.get("/api/llm/providers")
+
+    assert response.status_code == 502
+    error = response.json()["error"]
+    assert error["message"] == "Bun을 찾을 수 없어 LLM 브릿지를 자동 시작할 수 없습니다."
+    assert error["action"] == "Bun을 설치하거나 llm_bridge 서비스를 직접 실행한 뒤 다시 시도하세요."
+    assert error["context"]["reason"] == "bun_missing"
+    assert len(bridge_manager.ensure_calls) == 1
+
+
+def test_llm_provider_api_does_not_autostart_bridge_http_errors(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        llm_bridge,
+        "provider_models",
+        lambda url, provider_id: (_ for _ in ()).throw(
+            llm_bridge.BridgeError(
+                "Unknown provider 'missing'",
+                status_code=404,
+                payload={"error": {"code": "UNKNOWN_PROVIDER"}},
+            )
+        ),
+    )
+    bridge_manager = _FakeBridgeManager()
+    config = WebConfig(
+        projects_dir=tmp_path / "projects",
+        data_dir=tmp_path / "web-state",
+        llm_bridge_url="http://127.0.0.1:8788",
+    )
+    app = create_app(config, llm_bridge_manager=bridge_manager)
+    with TestClient(app) as client:
+        response = client.get("/api/llm/providers/missing/models")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["message"] == "Unknown provider 'missing'"
+    assert bridge_manager.ensure_calls == []
