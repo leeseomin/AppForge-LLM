@@ -12,7 +12,7 @@ const bannerText = computed(() => {
     return props.serverError;
   }
   if (!props.health) {
-    return '코딩 에이전트 실행 환경을 확인하고 있습니다.';
+    return '외부 LLM 연결 환경을 확인하고 있습니다.';
   }
   if (!props.health.ready) {
     return `${props.health.driver.message} ${props.health.driver.action}`.trim();

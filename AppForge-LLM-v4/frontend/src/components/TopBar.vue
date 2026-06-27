@@ -4,11 +4,14 @@ import type { HealthPayload } from '../types';
 const props = defineProps<{
   health: HealthPayload | null;
   serverError: string;
+  canCancel: boolean;
+  cancelling: boolean;
 }>();
 
 const emit = defineEmits<{
   refresh: [];
   openSettings: [];
+  cancel: [];
 }>();
 </script>
 
@@ -24,6 +27,15 @@ const emit = defineEmits<{
 
     <div class="topbar-actions">
       <button class="ghost-button" type="button" @click="emit('openSettings')">LLM 연결</button>
+      <button
+        v-if="props.canCancel"
+        class="ghost-button danger"
+        type="button"
+        :disabled="props.cancelling"
+        @click="emit('cancel')"
+      >
+        {{ props.cancelling ? '취소 중' : '취소' }}
+      </button>
       <button class="ghost-button" type="button" @click="emit('refresh')">
         상태 새로고침
       </button>

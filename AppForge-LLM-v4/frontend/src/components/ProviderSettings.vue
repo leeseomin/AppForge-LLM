@@ -222,8 +222,7 @@ function readableError(error: unknown, fallback: string) {
       <section v-if="!loading && !loadError" class="active-block">
         <h3>사용할 모델</h3>
         <p class="settings-hint">
-          AppForge 파이프라인이 호출할 프로바이더와 모델입니다. <code>APPFORGE_DRIVER=llm-bridge</code> 로 실행할
-          때 적용됩니다.
+          AppForge 파이프라인이 호출할 외부 LLM 프로바이더와 모델입니다. 저장 후 바로 실행에 적용됩니다.
         </p>
         <div class="active-row">
           <label class="active-field">

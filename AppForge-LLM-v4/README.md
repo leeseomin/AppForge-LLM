@@ -17,16 +17,11 @@ Describe the app → Build → Follow live stage status → Download the complet
 - **Persistent engineering memory:** the runner records stage outcomes, validation evidence, decisions, and failures in `.appforge/memory/stage-memory.jsonl` and summarizes them into later stage prompts.
 - **Retry-loop guard:** repeated failure signatures are detected as `REPEATED_FAILURE_LOOP` so the runner stops unproductive automatic retries and asks for a changed strategy.
 - **Web status updates:** the Korean timeline now names Memory/Loop engineering stages and explains repeated-loop failures.
-- **Local LLM bridge:** the web app can proxy provider settings through FastAPI to a local Bun bridge and run `APPFORGE_DRIVER=llm-bridge` against a configured external LLM provider.
+- **External LLM only:** the web app proxies provider settings through FastAPI to a local Bun bridge and runs against a configured external LLM API key. Codex/Claude CLI fallback is not used.
 
 ## Fastest start
 
-Prerequisites: Python 3.11+ and one of the following coding-agent executables:
-
-- Codex CLI
-- Claude Code CLI
-- a custom coding-agent command configured through `APPFORGE_AGENT_CMD`
-- Bun, when using the local `llm-bridge` provider path
+Prerequisites: Python 3.11+, Bun, and at least one external LLM API key configured in the web UI or exposed through a supported provider environment variable.
 
 From a built wheel:
 
@@ -76,12 +71,10 @@ Useful launcher options:
 ./build.sh --no-open
 APPFORGE_WEB_PORT=8799 ./build.sh
 APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check
-APPFORGE_DRIVER=llm-bridge ./build.sh
 ```
 
 The launcher keeps the existing `appforge web` command as the runtime authority.
-Set `APPFORGE_START_LLM_BRIDGE=1` or `APPFORGE_DRIVER=llm-bridge` to have it
-reuse or start the local Bun bridge when available; set
+By default it reuses or starts the local Bun bridge when available; set
 `APPFORGE_SKIP_LLM_BRIDGE=1` to skip launcher-owned bridge startup.
 
 ## Frontend development
@@ -103,15 +96,9 @@ npm --prefix frontend run build
 
 This writes `appforge/resources/web/index.html`, `appforge/resources/web/assets/*`, `favicon.svg`, and `manifest.webmanifest`.
 
-## Coding-agent setup
+## External LLM setup
 
-### Automatic selection
-
-The default `APPFORGE_DRIVER=auto` selects Codex CLI first and then Claude Code CLI. Readiness appears in the web app before the build action is enabled.
-
-### Local LLM bridge
-
-Start the bridge in a separate terminal, then start the web app with the bridge driver:
+Start the bridge in a separate terminal, then start the web app:
 
 ```bash
 cd llm_bridge
@@ -120,13 +107,13 @@ bun run start
 ```
 
 ```bash
-APPFORGE_DRIVER=llm-bridge appforge web
+appforge web
 ```
 
 The source launcher can perform the same bridge startup check:
 
 ```bash
-APPFORGE_DRIVER=llm-bridge ./build.sh
+./build.sh
 ```
 
 When no bridge is already healthy at `APPFORGE_LLM_BRIDGE_URL`, the launcher
@@ -137,26 +124,16 @@ by the Bun service.
 
 Open Provider Settings in the web UI to save an API key, choose a default model, test the provider, and activate it for AppForge. The browser talks only to the FastAPI `/api/llm` proxy; the bridge listens on `http://127.0.0.1:8788` by default. Provider keys are stored in the local bridge config path, or read from provider environment variables such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `OPENROUTER_API_KEY`, and `XAI_API_KEY`.
 
-The `llm-bridge` driver is a single-shot stage driver. It is useful for provider-backed stage generation, while fully agentic file-editing workflows should continue to use Codex, Claude Code, or a custom command driver.
+The `llm-bridge` driver is the default runtime path. `APPFORGE_DRIVER=auto` is treated as an alias for the same bridge path. Other driver values, including `codex`, `claude`, and `generic`, are rejected.
 
 The bridge service is included in the source checkout and AppForge source archive. A Python wheel installation serves the built web UI and bridge proxy, but still needs access to the `llm_bridge/` service source or an already-running bridge at `APPFORGE_LLM_BRIDGE_URL`.
-
-### Custom agent command
-
-```bash
-APPFORGE_DRIVER=generic \
-APPFORGE_AGENT_CMD='my-agent --workspace {workspace} --prompt {prompt_file}' \
-appforge web
-```
-
-Available placeholders are `{workspace}`, `{prompt_file}`, `{result_file}`, `{stage}`, and `{attempt}`. When `{prompt_file}` is omitted, the full stage packet is sent on standard input.
 
 ### Main environment variables
 
 ```text
 APPFORGE_PROJECTS_DIR          generated project directory; default projects/
 APPFORGE_DATA_DIR              persisted web-job state; default .appforge-web/
-APPFORGE_DRIVER                auto | codex | claude | generic | llm-bridge
+APPFORGE_DRIVER                llm-bridge by default; auto is an alias
 APPFORGE_WEB_HOST              build.sh/appforge web bind host; default 127.0.0.1
 APPFORGE_WEB_PORT              build.sh/appforge web port; default 8787
 APPFORGE_NO_OPEN               build.sh no-browser foreground mode
@@ -165,15 +142,14 @@ APPFORGE_SKIP_FRONTEND_BUILD   build.sh reuses packaged web assets when true
 APPFORGE_START_LLM_BRIDGE      build.sh starts or reuses the local bridge when true
 APPFORGE_SKIP_LLM_BRIDGE       build.sh avoids launcher-owned bridge startup
 APPFORGE_SMOKE_TIMEOUT         build.sh smoke timeout in seconds; default 30
-APPFORGE_AGENT_CMD             generic command template
 APPFORGE_MODEL                 model passed to the selected driver
 APPFORGE_LLM_BRIDGE_URL        llm-bridge URL; default http://127.0.0.1:8788
 APPFORGE_LLM_PROVIDER          optional provider override for llm-bridge driver
 APPFORGE_ALLOW_NETWORK         default true for installs and remote audits
 APPFORGE_STAGE_TIMEOUT         per-stage timeout in seconds; default 3600
 APPFORGE_MAX_STAGE_ATTEMPTS    optional maximum automatic attempts per stage
-APPFORGE_MAX_TURNS             optional Claude Code turn limit
-APPFORGE_UNSAFE_AGENT          default false; isolated environments only
+APPFORGE_MAX_TURNS             reserved for compatibility; ignored by the default LLM bridge
+APPFORGE_UNSAFE_AGENT          reserved for compatibility; ignored by the default LLM bridge
 APPFORGE_PROMPT_MAX_CHARS      request input limit; default 20000
 ```
 
@@ -191,7 +167,7 @@ APPFORGE_LLM_CONFIG            provider config file path; default providers.json
 `appforge web` is the recommended v4 experience, while the full CLI and repository-native agent loop remain available:
 
 ```bash
-appforge forge "Build a responsive personal budget app" --driver auto --allow-network
+appforge forge "Build a responsive personal budget app" --driver llm-bridge --allow-network
 appforge run <project>
 appforge status <project>
 appforge prompt <project>
@@ -205,7 +181,7 @@ Existing-repository changes remain available through the CLI:
 ```bash
 cd existing-project
 appforge forge "Add passkey login while preserving password login" \
-  --target . --driver auto --allow-network
+  --target . --driver llm-bridge --allow-network
 ```
 
 ## Development and verification

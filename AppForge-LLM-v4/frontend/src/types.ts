@@ -1,4 +1,4 @@
-export type JobStatus = 'queued' | 'initializing' | 'running' | 'packaging' | 'completed' | 'failed';
+export type JobStatus = 'queued' | 'initializing' | 'running' | 'packaging' | 'completed' | 'failed' | 'cancelled';
 export type StageStatus = 'pending' | 'running' | 'validating' | 'retrying' | 'completed' | 'failed';
 
 export interface DriverReadiness {

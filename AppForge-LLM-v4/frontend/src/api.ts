@@ -62,6 +62,10 @@ export function getJob(jobId: string): Promise<JobPayload> {
   return request<JobPayload>(`/api/jobs/${encodeURIComponent(jobId)}`);
 }
 
+export function cancelJob(jobId: string): Promise<JobPayload> {
+  return request<JobPayload>(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' });
+}
+
 export function getProviders(): Promise<ProvidersPayload> {
   return request<ProvidersPayload>('/api/llm/providers');
 }

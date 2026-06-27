@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -46,6 +47,7 @@ class PipelineRunner:
         max_stage_attempts: int | None = None,
         stage_timeout: int = 3600,
         event_handler: RunEventHandler | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> None:
         self.layout = layout
         self.driver = driver
@@ -57,6 +59,7 @@ class PipelineRunner:
         self.max_stage_attempts = max_stage_attempts or self.pipeline.max_stage_attempts
         self.stage_timeout = stage_timeout
         self.event_handler = event_handler
+        self.cancel_event = cancel_event
         self.project = update_project(
             layout,
             {
@@ -179,6 +182,17 @@ class PipelineRunner:
             stage_name = next_stage(self.layout, self.pipeline)
 
         while stage_name is not None:
+            if self._cancelled():
+                failure = self._cancel_failure(stage_name)
+                self._emit("pipeline_cancelled", stage=stage_name, failure=failure)
+                return RunSummary(
+                    False,
+                    "cancelled",
+                    completed_stages=completed,
+                    failed_stage=stage_name,
+                    message=failure["message"],
+                    failure=failure,
+                )
             stage = self.pipeline.stage(stage_name)
             result = self._run_stage(stage)
             if not result["passed"]:
@@ -247,6 +261,15 @@ class PipelineRunner:
             max_attempts=self.max_stage_attempts,
         )
         for attempt in range(1, self.max_stage_attempts + 1):
+            if self._cancelled():
+                failure = self._cancel_failure(stage.name, attempt=attempt)
+                self._emit("stage_cancelled", stage=stage.name, attempt=attempt, failure=failure)
+                return {
+                    "passed": False,
+                    "status": "cancelled",
+                    "message": failure["message"],
+                    "failure": failure,
+                }
             self._emit(
                 "attempt_started",
                 stage=stage.name,
@@ -287,6 +310,7 @@ class PipelineRunner:
                     stage=stage.name,
                     attempt=attempt,
                     timeout=self.stage_timeout,
+                    cancel_event=self.cancel_event,
                 )
             except DriverError as exc:
                 driver_result_dict = {
@@ -298,8 +322,8 @@ class PipelineRunner:
                     "code": "DRIVER_ERROR",
                     "message": str(exc),
                     "action": (
-                        "Verify that the selected coding-agent CLI is installed, authenticated, "
-                        "and available on PATH, then retry."
+                        "Verify that the selected external LLM provider, API key, and bridge "
+                        "URL are configured, then retry."
                     ),
                     "stage": stage.name,
                     "attempt": attempt,
@@ -368,6 +392,15 @@ class PipelineRunner:
                 exit_code=driver_result.exit_code,
                 duration_seconds=driver_result.duration_seconds,
             )
+            if self._cancelled():
+                failure = self._cancel_failure(stage.name, attempt=attempt)
+                self._emit("stage_cancelled", stage=stage.name, attempt=attempt, failure=failure)
+                return {
+                    "passed": False,
+                    "status": "cancelled",
+                    "message": failure["message"],
+                    "failure": failure,
+                }
             self._emit("validation_started", stage=stage.name, attempt=attempt)
             stage_record_ok, stage_result, stage_record_error = validate_stage_result(
                 self.layout, stage
@@ -722,6 +755,18 @@ class PipelineRunner:
             "stage_result_error": stage_record_error,
             "failed_checks": failed_checks,
             "review_findings": findings,
+        }
+
+    def _cancelled(self) -> bool:
+        return bool(self.cancel_event and self.cancel_event.is_set())
+
+    def _cancel_failure(self, stage: str | None, *, attempt: int | None = None) -> dict[str, Any]:
+        return {
+            "code": "JOB_CANCELLED",
+            "message": "사용자가 실행 중인 작업을 취소했습니다.",
+            "action": "필요하면 새 요청을 시작하세요.",
+            "stage": stage,
+            "attempt": attempt,
         }
 
     def _emit(self, event: str, **payload: Any) -> None:

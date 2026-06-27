@@ -1,10 +1,21 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
-from appforge.drivers import AgentDriver, DriverError, GenericCommandDriver
+import pytest
+
+from appforge import llm_bridge
+from appforge.drivers import (
+    AgentDriver,
+    DriverError,
+    LLMBridgeDriver,
+    _apply_bridge_envelope,
+    _build_bridge_prompt,
+    create_driver,
+)
 from appforge.models import DriverResult
 from appforge.pipelines import load_pipeline
 from appforge.projects import initialize_project
@@ -14,15 +25,174 @@ from appforge.runner import PipelineRunner
 class NoopSuccessDriver(AgentDriver):
     name = "noop"
 
-    def run(self, prompt, *, layout, stage, attempt, timeout):  # type: ignore[no-untyped-def]
+    def run(self, prompt, *, layout, stage, attempt, timeout, cancel_event=None):  # type: ignore[no-untyped-def]
         return DriverResult(True, 0, "ok", "", 0.01, ["noop"])
 
 
 class FailingDriver(AgentDriver):
     name = "failing"
 
-    def run(self, prompt, *, layout, stage, attempt, timeout):  # type: ignore[no-untyped-def]
+    def run(self, prompt, *, layout, stage, attempt, timeout, cancel_event=None):  # type: ignore[no-untyped-def]
         raise DriverError("fixture driver failure")
+
+
+class FixtureScriptDriver(AgentDriver):
+    name = "fixture"
+
+    def __init__(self, fixture: Path, framework_root: Path) -> None:
+        self.fixture = fixture
+        self.framework_root = framework_root
+
+    def run(self, prompt, *, layout, stage, attempt, timeout, cancel_event=None):  # type: ignore[no-untyped-def]
+        final_path = layout.logs / f"{stage}-attempt-{attempt}-fixture-final.txt"
+        try:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-S",
+                    str(self.fixture),
+                    str(layout.root),
+                    stage,
+                    str(self.framework_root),
+                ],
+                cwd=layout.root,
+                input=prompt,
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+            stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+            final_path.write_text(stdout, encoding="utf-8")
+            return DriverResult(False, 124, stdout, stderr, float(timeout), ["fixture"], str(final_path))
+        final_path.write_text(completed.stdout, encoding="utf-8")
+        return DriverResult(
+            completed.returncode == 0,
+            completed.returncode,
+            completed.stdout,
+            completed.stderr,
+            0.01,
+            ["fixture"],
+            str(final_path),
+        )
+
+
+def test_auto_driver_resolves_to_llm_bridge() -> None:
+    driver = create_driver("auto")
+    assert isinstance(driver, LLMBridgeDriver)
+    assert driver.bridge_url == "http://127.0.0.1:8788"
+
+
+@pytest.mark.parametrize("name", ["codex", "claude", "generic"])
+def test_cli_and_command_drivers_are_removed(name: str) -> None:
+    with pytest.raises(DriverError, match="removed|Unknown driver"):
+        create_driver(name)
+
+
+def test_llm_bridge_prompt_includes_stage_artifact_schema(tmp_path) -> None:
+    layout = initialize_project(
+        "Build a small web app",
+        projects_dir=tmp_path,
+        name="bridge-prompt",
+        pipeline_name="web-app",
+    )
+    prompt, produces = _build_bridge_prompt("original stage packet", layout=layout, stage_name="intake")
+    assert produces == ("product_brief",)
+    assert "External LLM bridge execution contract" in prompt
+    assert "product_brief" in prompt
+    assert "original stage packet" in prompt
+
+
+def test_llm_bridge_envelope_writes_artifacts_stage_result_and_files(tmp_path) -> None:
+    layout = initialize_project(
+        "Build a small web app",
+        projects_dir=tmp_path,
+        name="bridge-envelope",
+        pipeline_name="web-app",
+    )
+    response = json.dumps(
+        {
+            "artifacts": {"product_brief": _valid_product_brief()},
+            "stage_result": {
+                "stage": "wrong-stage",
+                "status": "completed",
+                "summary": "Bridge wrote the intake artifact",
+                "files_changed": [],
+                "commands_run": [],
+                "checks": [{"name": "fixture", "passed": True}],
+                "decisions": [],
+                "unresolved": [],
+            },
+            "files": {"README.md": "# Bridge fixture\n"},
+        }
+    )
+    changed = _apply_bridge_envelope(
+        layout,
+        stage="intake",
+        produces=("product_brief",),
+        response_text=response,
+    )
+    assert "README.md" in changed
+    assert ".appforge/artifacts/product_brief.json" in changed
+    assert (layout.root / "README.md").read_text(encoding="utf-8") == "# Bridge fixture\n"
+    artifact = json.loads((layout.artifacts / "product_brief.json").read_text(encoding="utf-8"))
+    assert artifact["schema_version"] == "1.0"
+    stage_result = json.loads((layout.control / "stage-result.json").read_text(encoding="utf-8"))
+    assert stage_result["stage"] == "intake"
+    assert stage_result["status"] == "completed"
+    assert "README.md" in stage_result["files_changed"]
+
+
+def test_llm_bridge_envelope_rejects_unsafe_file_paths(tmp_path) -> None:
+    layout = initialize_project(
+        "Build a small web app",
+        projects_dir=tmp_path,
+        name="bridge-unsafe",
+        pipeline_name="web-app",
+    )
+    response = json.dumps(
+        {
+            "artifacts": {"product_brief": _valid_product_brief()},
+            "files": {"../escape.txt": "nope"},
+        }
+    )
+    with pytest.raises(DriverError, match="Unsafe file path"):
+        _apply_bridge_envelope(
+            layout,
+            stage="intake",
+            produces=("product_brief",),
+            response_text=response,
+        )
+
+
+def test_llm_bridge_driver_applies_generate_envelope(tmp_path, monkeypatch) -> None:
+    layout = initialize_project(
+        "Build a small web app",
+        projects_dir=tmp_path,
+        name="bridge-driver",
+        pipeline_name="web-app",
+    )
+    response = json.dumps(
+        {
+            "artifacts": {"product_brief": _valid_product_brief()},
+            "stage_result": _valid_stage_result(),
+        }
+    )
+    monkeypatch.setattr(llm_bridge, "generate", lambda *args, **kwargs: {"text": response})
+    driver = LLMBridgeDriver(bridge_url="http://bridge.test")
+    result = driver.run(
+        "stage packet",
+        layout=layout,
+        stage="intake",
+        attempt=1,
+        timeout=60,
+    )
+    assert result.success
+    assert result.command == ["llm-bridge", "/generate"]
+    assert (layout.artifacts / "product_brief.json").is_file()
+    assert (layout.control / "stage-result.json").is_file()
 
 
 def _valid_product_brief() -> dict[str, object]:
@@ -52,7 +222,7 @@ def _valid_stage_result() -> dict[str, object]:
     }
 
 
-def test_full_prototype_pipeline_completes_with_generic_fixture_agent(tmp_path) -> None:
+def test_full_prototype_pipeline_completes_with_fixture_agent(tmp_path) -> None:
     framework_root = Path(__file__).resolve().parents[1]
     fixture = framework_root / "tests" / "fixtures" / "fake_stage_agent.py"
     layout = initialize_project(
@@ -62,10 +232,9 @@ def test_full_prototype_pipeline_completes_with_generic_fixture_agent(tmp_path) 
         pipeline_name="prototype",
         mode="autonomous",
     )
-    command = f'{sys.executable} -S "{fixture}" {{workspace}} {{stage}} "{framework_root}"'
     runner = PipelineRunner(
         layout,
-        GenericCommandDriver(command),
+        FixtureScriptDriver(fixture, framework_root),
         auto_approve=True,
         max_stage_attempts=1,
         stage_timeout=120,

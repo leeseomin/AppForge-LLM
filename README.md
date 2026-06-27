@@ -14,11 +14,11 @@ It deliberately separates two responsibilities:
 - **The coding agent** reasons, edits source, and resolves implementation problems.
 - **OpenAppForge** supplies production policy, tools, artifact contracts, safety boundaries, review gates, and resumable state.
 
-No second model-orchestration service is required. You can use it as a one-command autopilot with Codex or Claude Code, or let Cursor, Copilot, Windsurf, Gemini CLI, and other assistants follow the repository-native agent guide.
+The default web runtime uses the local LLM bridge with external provider API keys. Repository-native assistants can still follow the agent guide manually when you want direct editor-side control.
 
 ## One-command use
 
-Prerequisites: Python 3.11+ and either the Codex CLI, Claude Code CLI, or a compatible command supplied through the generic driver.
+Prerequisites: Python 3.11+, Bun, and at least one external LLM API key configured through the local LLM bridge.
 
 ```bash
 python -m venv .venv
@@ -27,7 +27,7 @@ pip install -e .
 
 appforge forge \
   "Build a responsive personal finance web app with local-first storage, CSV import, budgets, tests, and Docker support" \
-  --driver auto \
+  --driver llm-bridge \
   --allow-network
 ```
 
@@ -39,7 +39,7 @@ The output is created under `projects/<slug>/`. Progress and evidence live in it
 
 ```bash
 cd existing-project
-appforge forge "Add passkey login while preserving password login" --target . --driver auto --allow-network
+appforge forge "Add passkey login while preserving password login" --target . --driver llm-bridge --allow-network
 ```
 
 A request containing bug/fix language is routed to the bugfix pipeline; other existing-repository work defaults to the feature pipeline. Baseline behavior, unrelated working-tree changes, and regression evidence are part of the stage contract.
@@ -77,7 +77,7 @@ automatic pipeline router
 YAML stage manifest ──► stage skill + prior artifacts + repository context
         │                                      │
         │                                      ▼
-        │                               coding-agent driver
+        │                               external LLM bridge
         │                                      │
         ▼                                      ▼
 JSON artifact contracts ◄──────────── source edits + stage-result.json
@@ -105,24 +105,14 @@ The framework ships with:
 appforge pipelines                         # list available production paths
 appforge route "Build a Flutter app"       # preview routing scores
 appforge new "Build a CLI"                 # initialize without running
-appforge run projects/build-a-cli          # resume with an agent driver
+appforge run projects/build-a-cli          # resume through the external LLM bridge
 appforge status projects/build-a-cli       # show durable checkpoint state
 appforge prompt projects/build-a-cli       # render next stage packet
 appforge complete projects/build-a-cli     # validate manually completed work
 appforge preflight projects/build-a-cli    # inspect stack and quality commands
-appforge doctor                            # inspect drivers and tool support
+appforge doctor                            # inspect the LLM bridge and tool support
 appforge tool list                         # list live tool contracts
 ```
-
-For a custom coding-agent process:
-
-```bash
-appforge run <project> \
-  --driver generic \
-  --agent-cmd 'my-agent --workspace {workspace} --prompt {prompt_file}'
-```
-
-Available placeholders are `{workspace}`, `{prompt_file}`, `{result_file}`, `{stage}`, and `{attempt}`. When `{prompt_file}` is omitted, the stage packet is sent on standard input.
 
 ## Durable project state
 

@@ -169,6 +169,10 @@ def create_app(
     async def get_job(job_id: str) -> dict[str, Any]:
         return resolved_manager.get_job(job_id)
 
+    @app.post("/api/jobs/{job_id}/cancel")
+    async def cancel_job(job_id: str) -> dict[str, Any]:
+        return resolved_manager.cancel_job(job_id)
+
     @app.get("/api/jobs/{job_id}/download")
     async def download(job_id: str) -> FileResponse:
         path, filename = resolved_manager.download_path(job_id)
@@ -184,7 +188,7 @@ def create_app(
 
     def _uses_llm_bridge_driver(request: Request) -> bool:
         driver = str(request.app.state.web_config.driver).casefold().strip()
-        return driver in LLM_BRIDGE_DRIVER_ALIASES
+        return driver == "auto" or driver in LLM_BRIDGE_DRIVER_ALIASES
 
     async def _bridge_call(
         request: Request,
