@@ -1,7 +1,7 @@
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises"
-import type { ActiveSelection, StoredProviderConfig } from "./types"
+import type { ActiveSelection, OAuthCredential, StoredProviderConfig } from "./types"
 
 const DEFAULT_CONFIG_DIR =
   process.env.APPFORGE_LLM_CONFIG_DIR ||
@@ -106,6 +106,26 @@ export async function deleteProvider(id: string): Promise<void> {
   if (config.active.provider === id) {
     config.active = { provider: null, model: null }
   }
+  await save(config)
+}
+
+export async function setOAuthCredential(id: string, credential: OAuthCredential): Promise<void> {
+  const config = await load()
+  const existing = config.providers[id] ?? {}
+  config.providers[id] = { ...existing, oauth: credential }
+  await save(config)
+}
+
+export async function getOAuthCredential(id: string): Promise<OAuthCredential | undefined> {
+  const config = await load()
+  return config.providers[id]?.oauth
+}
+
+export async function deleteOAuthCredential(id: string): Promise<void> {
+  const config = await load()
+  const existing = config.providers[id]
+  if (!existing) return
+  delete existing.oauth
   await save(config)
 }
 

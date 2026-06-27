@@ -13,6 +13,12 @@ def test_auth_login_invokes_flow(monkeypatch):
     assert result.exit_code == 0
 
 
+def test_auth_login_oauth_invokes_flow(monkeypatch):
+    monkeypatch.setattr("appforge.llm_auth.cmd_login_oauth", lambda *a, **k: 0)
+    result = runner.invoke(app, ["auth", "login", "--oauth", "--provider", "openai"])
+    assert result.exit_code == 0
+
+
 def test_auth_list_command(monkeypatch):
     monkeypatch.setattr("appforge.llm_auth.cmd_list", lambda *a, **k: 0)
     result = runner.invoke(app, ["auth", "list"])

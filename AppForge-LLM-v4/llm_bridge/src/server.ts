@@ -1,6 +1,7 @@
 import * as registry from "./registry"
 import * as store from "./config"
 import * as catalog from "./catalog"
+import * as oauth from "./oauth"
 import { BridgeLLMError, generate, runOnce, stream, type StreamEvent } from "./llm"
 import { VERSION } from "./version"
 import type {
@@ -35,6 +36,10 @@ const ROUTES: Route[] = [
   { method: "PUT", pattern: /^\/active\/?$/, handler: setActive },
   { method: "POST", pattern: /^\/generate\/?$/, handler: generateHandler },
   { method: "POST", pattern: /^\/stream\/?$/, handler: streamHandler },
+  { method: "GET", pattern: /^\/oauth\/providers\/?$/, handler: oauthProviders },
+  { method: "POST", pattern: /^\/oauth\/start\/?$/, handler: oauthStart },
+  { method: "GET", pattern: /^\/oauth\/poll\/([^/]+)\/([^/]+)\/?$/, handler: oauthPoll },
+  { method: "POST", pattern: /^\/oauth\/refresh\/([^/]+)\/?$/, handler: oauthRefresh },
 ]
 
 function json(body: unknown, status = 200): Response {
@@ -247,6 +252,60 @@ async function streamHandler(request: Request): Promise<Response> {
     },
   })
   return new Response(streamBody, { status: 200, headers })
+}
+
+async function oauthProviders(): Promise<Response> {
+  return cors(json({ providers: oauth.listOAuthProviders() }))
+}
+
+async function oauthStart(request: Request): Promise<Response> {
+  const body = await readJsonBody(request)
+  const providerId = typeof body.provider === "string" ? body.provider : ""
+  const method = body.method === "browser" || body.method === "device-code" ? body.method : "browser"
+  const enterpriseDomain = typeof body.enterpriseDomain === "string" ? body.enterpriseDomain : undefined
+  if (!oauth.isOAuthProvider(providerId)) {
+    return cors(errorResponse(`No OAuth handler for '${providerId}'`, 404, "UNKNOWN_OAUTH_PROVIDER"))
+  }
+  try {
+    const result = await oauth.startOAuthFlow(providerId, method as "browser" | "device-code", { enterpriseDomain })
+    return cors(json(result))
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return cors(errorResponse(message, 500, "OAUTH_START_FAILED"))
+  }
+}
+
+async function oauthPoll(_request: Request, match: RegExpMatchArray): Promise<Response> {
+  const providerId = decodeParam(match[1] ?? "")
+  const pollId = decodeParam(match[2] ?? "")
+  const result = oauth.pollOAuthFlow(providerId, pollId)
+  if (result.status === "success" && result.credential && result.provider) {
+    try {
+      await store.setOAuthCredential(result.provider, result.credential)
+    } catch {
+      // best-effort persist; the credential is still returned to the caller
+    }
+  }
+  return cors(json(result))
+}
+
+async function oauthRefresh(_request: Request, match: RegExpMatchArray): Promise<Response> {
+  const providerId = decodeParam(match[1] ?? "")
+  if (!oauth.isOAuthProvider(providerId)) {
+    return cors(errorResponse(`No OAuth handler for '${providerId}'`, 404, "UNKNOWN_OAUTH_PROVIDER"))
+  }
+  const existing = await store.getOAuthCredential(providerId)
+  if (!existing) {
+    return cors(errorResponse(`No OAuth credential stored for '${providerId}'`, 404, "NO_OAUTH_CREDENTIAL"))
+  }
+  try {
+    const refreshed = await oauth.refreshOAuthToken(providerId, existing.refresh)
+    await store.setOAuthCredential(providerId, refreshed)
+    return cors(json({ ok: true, provider: providerId, credential: refreshed }))
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return cors(errorResponse(message, 500, "OAUTH_REFRESH_FAILED"))
+  }
 }
 
 async function dispatch(request: Request): Promise<Response> {

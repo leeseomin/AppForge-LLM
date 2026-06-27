@@ -47,6 +47,19 @@ class ActiveProviderRequest(BaseModel):
     model: str | None = None
 
 
+class QuickConnectRequest(BaseModel):
+    provider: str
+    apiKey: str
+    baseURL: str | None = None
+    model: str | None = None
+
+
+class OAuthStartRequest(BaseModel):
+    provider: str
+    method: str = "browser"
+    enterpriseDomain: str | None = None
+
+
 def _web_file(filename: str, media_type: str) -> FileResponse:
     path = WEB_DIR / filename
     if not path.is_file():
@@ -300,6 +313,82 @@ def create_app(
             payload.provider,
             payload.model,
         )
+
+    @app.get("/api/llm/oauth/providers")
+    async def llm_oauth_providers(request: Request) -> dict[str, Any]:
+        return await _bridge_call(request, llm_bridge.oauth_providers)
+
+    @app.post("/api/llm/oauth/start")
+    async def llm_oauth_start(payload: OAuthStartRequest, request: Request) -> dict[str, Any]:
+        return await _bridge_call(
+            request,
+            llm_bridge.oauth_start,
+            provider=payload.provider,
+            method=payload.method,
+            enterprise_domain=payload.enterpriseDomain,
+        )
+
+    @app.get("/api/llm/oauth/poll/{provider}/{poll_id}")
+    async def llm_oauth_poll(provider: str, poll_id: str, request: Request) -> dict[str, Any]:
+        return await _bridge_call(request, llm_bridge.oauth_poll, provider, poll_id)
+
+    @app.post("/api/llm/oauth/refresh/{provider}")
+    async def llm_oauth_refresh(provider: str, request: Request) -> dict[str, Any]:
+        return await _bridge_call(request, llm_bridge.oauth_refresh, provider)
+
+    @app.post("/api/llm/quick-connect")
+    async def llm_quick_connect(payload: QuickConnectRequest, request: Request) -> dict[str, Any]:
+        """One-shot connect: save key → test → activate. Mirrors `appforge auth login`."""
+        bridge_url = _bridge_url(request)
+        try:
+            await run_in_threadpool(
+                llm_bridge.upsert_provider,
+                bridge_url,
+                payload.provider,
+                api_key=payload.apiKey,
+                base_url_override=payload.baseURL,
+                default_model=payload.model,
+            )
+        except llm_bridge.BridgeError as exc:
+            return {"ok": False, "step": "save", "error": str(exc), "provider": payload.provider}
+        try:
+            test_result = await run_in_threadpool(
+                llm_bridge.test_provider,
+                bridge_url,
+                payload.provider,
+                api_key=payload.apiKey,
+                base_url_override=payload.baseURL,
+                model=payload.model,
+                timeout=30.0,
+            )
+        except llm_bridge.BridgeError as exc:
+            return {"ok": False, "step": "test", "error": str(exc), "provider": payload.provider}
+        if not test_result.get("ok"):
+            return {
+                "ok": False,
+                "step": "test",
+                "error": test_result.get("error") or "연결 테스트 실패",
+                "provider": payload.provider,
+                "model": test_result.get("model"),
+                "test": test_result,
+            }
+        chosen_model = payload.model or test_result.get("model")
+        try:
+            await run_in_threadpool(
+                llm_bridge.set_active,
+                bridge_url,
+                payload.provider,
+                chosen_model,
+            )
+        except llm_bridge.BridgeError as exc:
+            return {"ok": False, "step": "activate", "error": str(exc), "provider": payload.provider, "test": test_result}
+        return {
+            "ok": True,
+            "step": "done",
+            "provider": payload.provider,
+            "model": chosen_model,
+            "test": test_result,
+        }
 
     if ASSET_DIR.is_dir():
         app.mount("/assets", StaticFiles(directory=str(ASSET_DIR)), name="assets")
