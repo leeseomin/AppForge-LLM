@@ -6,12 +6,14 @@ const props = defineProps<{
   serverError: string;
   canCancel: boolean;
   cancelling: boolean;
+  endingSession: boolean;
 }>();
 
 const emit = defineEmits<{
   refresh: [];
   openSettings: [];
   cancel: [];
+  endSession: [];
 }>();
 </script>
 
@@ -38,6 +40,14 @@ const emit = defineEmits<{
       </button>
       <button class="ghost-button" type="button" @click="emit('refresh')">
         상태 새로고침
+      </button>
+      <button
+        class="ghost-button danger"
+        type="button"
+        :disabled="props.endingSession"
+        @click="emit('endSession')"
+      >
+        {{ props.endingSession ? '종료 중' : '세션 종료' }}
       </button>
       <div
         class="server-badge"

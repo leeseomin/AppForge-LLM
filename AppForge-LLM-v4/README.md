@@ -63,7 +63,7 @@ npm --prefix frontend run build
 appforge web
 ```
 
-The default browser opens `http://127.0.0.1:8787`. The browser stores only the current job ID; authoritative state remains under `.appforge-web/jobs/`.
+The default browser opens `http://127.0.0.1:8787`. If that port is already in use, `build.sh` scans upward and opens the next available port. The browser stores only the current job ID; authoritative state remains under `.appforge-web/jobs/`.
 
 Useful launcher options:
 
@@ -135,7 +135,8 @@ APPFORGE_PROJECTS_DIR          generated project directory; default projects/
 APPFORGE_DATA_DIR              persisted web-job state; default .appforge-web/
 APPFORGE_DRIVER                llm-bridge by default; auto is an alias
 APPFORGE_WEB_HOST              build.sh/appforge web bind host; default 127.0.0.1
-APPFORGE_WEB_PORT              build.sh/appforge web port; default 8787
+APPFORGE_WEB_PORT              build.sh/appforge web preferred port; default 8787
+APPFORGE_WEB_PORT_FALLBACK_LIMIT  additional web ports to scan upward; default 20
 APPFORGE_NO_OPEN               build.sh no-browser foreground mode
 APPFORGE_SKIP_INSTALL          build.sh reuses the existing .venv when true
 APPFORGE_SKIP_FRONTEND_BUILD   build.sh reuses packaged web assets when true

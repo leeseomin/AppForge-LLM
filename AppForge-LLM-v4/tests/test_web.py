@@ -278,6 +278,28 @@ def test_web_job_cancel_stops_active_driver(tmp_path: Path, monkeypatch) -> None
         assert driver.cancel_seen
 
 
+def test_session_end_shuts_down_managers_and_schedules_process_stop(tmp_path: Path) -> None:
+    callbacks: list[str] = []
+    bridge_manager = _FakeBridgeManager()
+    app = create_app(
+        _fixture_config(tmp_path),
+        llm_bridge_manager=bridge_manager,
+        shutdown_callback=lambda: callbacks.append("stop"),
+    )
+    with TestClient(app) as client:
+        response = client.post("/api/session/end")
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["closing"] is True
+        assert "세션" in payload["message"]
+        assert bridge_manager.shutdown_calls == 1
+
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and not callbacks:
+            time.sleep(0.02)
+        assert callbacks == ["stop"]
+
+
 def test_web_job_returns_detailed_llm_setup_error(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(llm_bridge, "ping", lambda url, **kwargs: {"ok": True})
     monkeypatch.setattr(llm_bridge, "get_active", lambda url: {"provider": "openai", "model": "gpt-4o-mini"})

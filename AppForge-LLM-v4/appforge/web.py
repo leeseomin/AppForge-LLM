@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import os
+import signal
 import threading
 import webbrowser
 from collections.abc import Callable
@@ -66,6 +68,7 @@ def create_app(
     *,
     manager: JobManager | None = None,
     llm_bridge_manager: LLMBridgeProcessManager | None = None,
+    shutdown_callback: Callable[[], None] | None = None,
 ) -> FastAPI:
     resolved_config = config or WebConfig.from_env()
     resolved_manager = manager or JobManager(resolved_config)
@@ -90,6 +93,7 @@ def create_app(
     app.state.job_manager = resolved_manager
     app.state.web_config = resolved_config
     app.state.llm_bridge_manager = resolved_bridge_manager
+    app.state.shutdown_callback = shutdown_callback or _request_process_shutdown
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next: Any) -> Any:
@@ -172,6 +176,18 @@ def create_app(
     @app.post("/api/jobs/{job_id}/cancel")
     async def cancel_job(job_id: str) -> dict[str, Any]:
         return resolved_manager.cancel_job(job_id)
+
+    @app.post("/api/session/end")
+    async def end_session(request: Request) -> dict[str, Any]:
+        resolved_manager.shutdown()
+        resolved_bridge_manager.shutdown()
+        timer = threading.Timer(0.25, request.app.state.shutdown_callback)
+        timer.daemon = True
+        timer.start()
+        return {
+            "closing": True,
+            "message": "세션을 종료합니다. 잠시 뒤 로컬 서버가 중지됩니다.",
+        }
 
     @app.get("/api/jobs/{job_id}/download")
     async def download(job_id: str) -> FileResponse:
@@ -307,6 +323,10 @@ def create_app(
         return _index_response()
 
     return app
+
+
+def _request_process_shutdown() -> None:
+    os.kill(os.getpid(), signal.SIGINT)
 
 
 def serve(
