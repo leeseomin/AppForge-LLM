@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Callable
 
 from .checkpoints import next_stage, read_checkpoint, write_checkpoint

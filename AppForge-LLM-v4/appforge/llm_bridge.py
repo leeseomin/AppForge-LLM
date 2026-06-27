@@ -130,6 +130,10 @@ def get_active(base_url: str, *, timeout: float = 5.0) -> dict[str, Any]:
     return _request(base_url, "GET", "/active", timeout=timeout)
 
 
+def refresh_catalog(base_url: str, *, timeout: float = 15.0) -> dict[str, Any]:
+    return _request(base_url, "POST", "/catalog/refresh", timeout=timeout)
+
+
 def set_active(base_url: str, provider: str | None, model: str | None, *, timeout: float = 5.0) -> dict[str, Any]:
     return _request(base_url, "PUT", "/active", body={"provider": provider, "model": model}, timeout=timeout)
 

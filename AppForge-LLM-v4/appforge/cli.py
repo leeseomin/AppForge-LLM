@@ -15,7 +15,7 @@ from .drivers import DEFAULT_LLM_BRIDGE_URL, DriverError, create_driver
 from .gates import review_stage, run_declared_gates, validate_stage_artifacts, validate_stage_result
 from .models import ProjectLayout
 from .pipelines import all_pipelines, auto_select_pipeline, load_pipeline
-from .projects import ProjectError, find_project, initialize_project, load_project, update_project
+from .projects import ProjectError, find_project, initialize_project, load_project
 from .prompting import build_stage_prompt
 from .runner import PipelineRunner
 from .tooling.detection import detect_stack, quality_commands
@@ -29,7 +29,9 @@ app = typer.Typer(
     add_completion=False,
 )
 tool_app = typer.Typer(help="Inspect and execute auditable AppForge tools.", no_args_is_help=True)
+auth_app = typer.Typer(help="Connect and manage external LLM providers.", no_args_is_help=True)
 app.add_typer(tool_app, name="tool")
+app.add_typer(auth_app, name="auth")
 console = Console()
 
 
@@ -411,7 +413,6 @@ def doctor() -> None:
     table.add_row("llm-bridge", "configured externally", DEFAULT_LLM_BRIDGE_URL)
     console.print(table)
 
-    tools = ToolRegistry().all()
     summary = Table(title="Tool support envelope")
     summary.add_column("Capability")
     summary.add_column("Available")
@@ -432,6 +433,62 @@ def preflight(project: Path = typer.Argument(Path("."), help="Project path")) ->
     stack = detect_stack(layout.root)
     commands = quality_commands(layout.root)
     console.print(Panel.fit(json.dumps({"project": metadata, "stack": stack, "quality_commands": commands}, ensure_ascii=False, indent=2), title="Preflight"))
+
+
+@auth_app.command("login")
+def auth_login(
+    provider: str | None = typer.Option(None, "--provider", "-p", help="Provider id to connect (skips interactive selection)"),
+    llm_bridge_url: str = typer.Option(DEFAULT_LLM_BRIDGE_URL, "--llm-bridge-url"),
+) -> None:
+    """Connect an external LLM provider: pick → API key → test → activate model."""
+    from . import llm_auth
+
+    raise typer.Exit(llm_auth.cmd_login(llm_bridge_url, provider_id=provider))
+
+
+@auth_app.command("list")
+def auth_list(
+    llm_bridge_url: str = typer.Option(DEFAULT_LLM_BRIDGE_URL, "--llm-bridge-url"),
+) -> None:
+    """List stored credentials and the active model."""
+    from . import llm_auth
+
+    raise typer.Exit(llm_auth.cmd_list(llm_bridge_url))
+
+
+@auth_app.command("logout")
+def auth_logout(
+    provider: str | None = typer.Argument(None, help="Provider id to remove (skips selection)"),
+    llm_bridge_url: str = typer.Option(DEFAULT_LLM_BRIDGE_URL, "--llm-bridge-url"),
+) -> None:
+    """Remove a stored provider credential."""
+    from . import llm_auth
+
+    raise typer.Exit(llm_auth.cmd_logout(llm_bridge_url, provider_id=provider))
+
+
+@auth_app.command("use")
+def auth_use(
+    provider: str | None = typer.Argument(None, help="Provider id to activate"),
+    model: str | None = typer.Option(None, "--model", "-m", help="Model id to activate"),
+    llm_bridge_url: str = typer.Option(DEFAULT_LLM_BRIDGE_URL, "--llm-bridge-url"),
+) -> None:
+    """Switch the active provider/model used by the pipeline."""
+    from . import llm_auth
+
+    raise typer.Exit(llm_auth.cmd_use(llm_bridge_url, provider_id=provider, model_id=model))
+
+
+@app.command()
+def models(
+    provider: str | None = typer.Argument(None, help="Provider id to list models for"),
+    refresh: bool = typer.Option(False, "--refresh", help="Refresh the models.dev catalog cache"),
+    llm_bridge_url: str = typer.Option(DEFAULT_LLM_BRIDGE_URL, "--llm-bridge-url"),
+) -> None:
+    """List available providers and models from the models.dev catalog."""
+    from . import llm_auth
+
+    raise typer.Exit(llm_auth.cmd_models(llm_bridge_url, provider_id=provider, refresh=refresh))
 
 
 @tool_app.command("list")
