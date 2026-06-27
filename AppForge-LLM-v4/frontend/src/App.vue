@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
-import { ApiError, cancelJob, createJob, getHealth, getJob } from './api';
+import { ApiError, cancelJob, createJob, endSession, getHealth, getJob } from './api';
 import ComposerCard from './components/ComposerCard.vue';
 import HealthBanner from './components/HealthBanner.vue';
 import JobPanel from './components/JobPanel.vue';
@@ -19,6 +19,7 @@ const job = ref<JobPayload | null>(null);
 const prompt = ref('');
 const submitting = ref(false);
 const cancelling = ref(false);
+const endingSession = ref(false);
 const toastMessage = ref('');
 const settingsOpen = ref(false);
 
@@ -159,6 +160,22 @@ async function cancelActiveJob() {
   }
 }
 
+async function endCurrentSession() {
+  if (endingSession.value) return;
+  endingSession.value = true;
+  window.clearTimeout(pollTimer);
+  try {
+    const payload = await endSession();
+    showToast(payload.message || '세션을 종료합니다.');
+    serverError.value = '세션 종료됨';
+    health.value = null;
+  } catch (error) {
+    endingSession.value = false;
+    showToast(readableError(error, '세션 종료에 실패했습니다.'));
+    schedulePoll(1200);
+  }
+}
+
 function startNewRequest() {
   window.clearTimeout(pollTimer);
   job.value = null;
@@ -262,9 +279,11 @@ onBeforeUnmount(() => {
       :server-error="serverError"
       :can-cancel="isActiveJob"
       :cancelling="cancelling"
+      :ending-session="endingSession"
       @refresh="refreshHealth"
       @open-settings="openProviderSettings"
       @cancel="cancelActiveJob"
+      @end-session="endCurrentSession"
     />
 
     <section class="hero" aria-labelledby="heroTitle">

@@ -11,6 +11,7 @@ BRIDGE_PID=""
 
 APPFORGE_WEB_HOST="${APPFORGE_WEB_HOST:-127.0.0.1}"
 APPFORGE_WEB_PORT="${APPFORGE_WEB_PORT:-8787}"
+APPFORGE_WEB_PORT_FALLBACK_LIMIT="${APPFORGE_WEB_PORT_FALLBACK_LIMIT:-20}"
 APPFORGE_LOG_LEVEL="${APPFORGE_LOG_LEVEL:-info}"
 APPFORGE_SMOKE_TIMEOUT="${APPFORGE_SMOKE_TIMEOUT:-30}"
 APPFORGE_BRIDGE_TIMEOUT="${APPFORGE_BRIDGE_TIMEOUT:-15}"
@@ -63,11 +64,12 @@ Options:
 
 Environment:
   APPFORGE_WEB_HOST                 Bind host, default 127.0.0.1.
-  APPFORGE_WEB_PORT                 Bind port, default 8787.
+  APPFORGE_WEB_PORT                 Preferred bind port, default 8787.
+  APPFORGE_WEB_PORT_FALLBACK_LIMIT  Additional ports to scan upward if busy, default 20.
   APPFORGE_NO_OPEN=1                Suppress browser opening.
   APPFORGE_SKIP_INSTALL=1           Reuse the current .venv instead of syncing Python deps.
   APPFORGE_SKIP_FRONTEND_BUILD=1    Reuse current packaged frontend assets.
-  APPFORGE_DRIVER                  Driver path; default llm-bridge. auto is an alias.
+  APPFORGE_DRIVER                   Driver path; default llm-bridge. auto is an alias.
   APPFORGE_START_LLM_BRIDGE=1       Start or reuse llm_bridge before the web server.
   APPFORGE_SKIP_LLM_BRIDGE=1        Do not start llm_bridge from this launcher.
   APPFORGE_LLM_BRIDGE_URL           Bridge health URL base, default http://127.0.0.1:8788.
@@ -134,6 +136,16 @@ fi
 validate_uint "APPFORGE_SMOKE_TIMEOUT" "$APPFORGE_SMOKE_TIMEOUT"
 validate_uint "APPFORGE_BRIDGE_TIMEOUT" "$APPFORGE_BRIDGE_TIMEOUT"
 
+validate_nonnegative_uint() {
+  local name="$1"
+  local value="$2"
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    die "$name must be a non-negative integer; got '$value'."
+  fi
+}
+
+validate_nonnegative_uint "APPFORGE_WEB_PORT_FALLBACK_LIMIT" "$APPFORGE_WEB_PORT_FALLBACK_LIMIT"
+
 cleanup() {
   local status=$?
   set +e
@@ -161,6 +173,48 @@ require_curl() {
 http_ok() {
   local url="$1"
   curl -fsS --max-time 2 --output /dev/null "$url" >/dev/null 2>&1
+}
+
+port_available() {
+  local port="$1"
+  "$ROOT_DIR/.venv/bin/python" -c '
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+family = socket.AF_INET6 if ":" in host else socket.AF_INET
+
+with socket.socket(family, socket.SOCK_STREAM) as sock:
+    try:
+        sock.bind((host, port))
+    except OSError:
+        sys.exit(1)
+' "$APPFORGE_WEB_HOST" "$port"
+}
+
+select_web_port() {
+  local requested_port=$((10#$APPFORGE_WEB_PORT))
+  local fallback_limit=$((10#$APPFORGE_WEB_PORT_FALLBACK_LIMIT))
+  local end_port=$((requested_port + fallback_limit))
+  local port
+
+  if (( end_port > 65535 )); then
+    end_port=65535
+  fi
+
+  for (( port = requested_port; port <= end_port; port++ )); do
+    if port_available "$port"; then
+      if (( port != requested_port )); then
+        log "Web port $requested_port is already in use; using $port instead."
+      fi
+      APPFORGE_WEB_PORT="$port"
+      WEB_URL="http://${APPFORGE_WEB_HOST}:${APPFORGE_WEB_PORT}"
+      return 0
+    fi
+  done
+
+  die "No available web port found from $requested_port through $end_port. Set APPFORGE_WEB_PORT to a free port or increase APPFORGE_WEB_PORT_FALLBACK_LIMIT."
 }
 
 tail_web_log() {
@@ -369,6 +423,7 @@ run_foreground_web() {
 
 ensure_python_env
 ensure_frontend
+select_web_port
 maybe_start_bridge
 
 case "$MODE" in
