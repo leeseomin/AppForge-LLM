@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="AppForge">
+  <defs>
+    <linearGradient id="g" x1="10" x2="54" y1="8" y2="56" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#60A5FA"/>
+      <stop offset="0.55" stop-color="#A78BFA"/>
+      <stop offset="1" stop-color="#34D399"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="18" fill="#111827"/>
+  <path d="M17 45 29 17h7l12 28h-7l-2.3-6H26.1l-2.2 6H17Zm11.2-12h8.4L32.4 22 28.2 33Z" fill="url(#g)"/>
+</svg>
