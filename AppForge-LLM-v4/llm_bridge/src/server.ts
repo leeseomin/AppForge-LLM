@@ -2,7 +2,7 @@ import * as registry from "./registry"
 import * as store from "./config"
 import * as catalog from "./catalog"
 import * as oauth from "./oauth"
-import { BridgeLLMError, generate, runOnce, stream, type StreamEvent } from "./llm"
+import { BridgeLLMCancelled, BridgeLLMError, generate, runOnce, stream, type StreamEvent } from "./llm"
 import { VERSION } from "./version"
 import type {
   ActiveSelection,
@@ -207,9 +207,12 @@ async function generateHandler(request: Request): Promise<Response> {
     return cors(errorResponse("`prompt` is required", 422, "INVALID_REQUEST"))
   }
   try {
-    const result = await generate(payload)
+    const result = await generate(payload, { signal: request.signal })
     return cors(json(result))
   } catch (error) {
+    if (error instanceof BridgeLLMCancelled) {
+      return cors(errorResponse(error.message, 499, "LLM_CANCELLED"))
+    }
     const message = error instanceof Error ? error.message : String(error)
     const status = error instanceof BridgeLLMError ? 502 : 400
     return cors(errorResponse(message, status, "LLM_ERROR"))
@@ -238,9 +241,13 @@ async function streamHandler(request: Request): Promise<Response> {
       try {
         const meta = await stream(payload, (event: StreamEvent) => {
           send(event.type, event)
-        })
+        }, { signal: request.signal })
         send("done", meta)
       } catch (error) {
+        if (error instanceof BridgeLLMCancelled) {
+          send("cancelled", { message: error.message })
+          return
+        }
         const message = error instanceof Error ? error.message : String(error)
         send("error", { message })
       } finally {

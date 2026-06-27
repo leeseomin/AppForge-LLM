@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "summary": "Phase4 verification passed across bridge tests/typecheck, frontend typecheck/build, Python regression/lint, payload size probe, and packaged web smoke.",
+  "summary": "Phase4 verification passed across bridge tests/typecheck, frontend typecheck/build, Python regression/lint, cancellation regressions, payload size probe, and packaged web smoke.",
   "passed": true,
   "test_commands": [
     "bun run typecheck",
@@ -11,6 +11,8 @@
     ".venv/bin/ruff check appforge tests",
     ".venv/bin/python -m pytest tests/test_llm_auth.py -q",
     ".venv/bin/ruff check appforge/llm_auth.py tests/test_llm_auth.py",
+    ".venv/bin/python -m pytest tests/test_llm_bridge.py tests/test_runner.py::test_llm_bridge_driver_maps_cancelled_request_to_cancel_result -q",
+    ".venv/bin/ruff check appforge/llm_bridge.py appforge/drivers.py tests/test_llm_bridge.py tests/test_runner.py",
     "APPFORGE_MODELS_DEV_URL=http://127.0.0.1:1 bun -e payload probe",
     "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_SKIP_LLM_BRIDGE=1 ./build.sh --smoke"
   ],
@@ -38,7 +40,7 @@
     {
       "check": "Python regression tests",
       "passed": "passed",
-      "evidence": ".venv/bin/python -m pytest -q passed 78 tests with one Starlette/httpx deprecation warning"
+      "evidence": ".venv/bin/python -m pytest -q passed 81 tests with one Starlette/httpx deprecation warning"
     },
     {
       "check": "Python lint",
@@ -54,6 +56,16 @@
       "check": "CLI auth targeted lint",
       "passed": "passed",
       "evidence": ".venv/bin/ruff check appforge/llm_auth.py tests/test_llm_auth.py returned All checks passed"
+    },
+    {
+      "check": "Session shutdown bridge cancellation regression",
+      "passed": "passed",
+      "evidence": "Targeted pytest passed 2 tests covering cancel_event-triggered HTTP connection shutdown and LLMBridgeDriver exit_code=130 mapping"
+    },
+    {
+      "check": "Bridge cancellation targeted lint",
+      "passed": "passed",
+      "evidence": ".venv/bin/ruff check appforge/llm_bridge.py appforge/drivers.py tests/test_llm_bridge.py tests/test_runner.py returned All checks passed"
     },
     {
       "check": "Payload probe",
@@ -93,10 +105,11 @@
       "evidence": "server.test verifies /providers/models returns 404 while /providers/{id}/models remains available"
     }
   ],
-  "coverage": "Automated coverage spans bridge API contracts, registry status behavior, Vue/TypeScript compilation, packaged Vite build, Python web/control-plane regressions, lint, payload size behavior, and local smoke serving.",
+  "coverage": "Automated coverage spans bridge API contracts, registry status behavior, Vue/TypeScript compilation, packaged Vite build, Python web/control-plane regressions, bridge cancellation behavior, lint, payload size behavior, and local smoke serving.",
   "failures": [],
   "manual_checks": [
     "Reviewed git diff for Phase4 scope and generated asset replacements",
-    "Confirmed .appforge previous request was stale and updated artifacts to the Phase4 request"
+    "Confirmed .appforge previous request was stale and updated artifacts to the Phase4 request",
+    "OpenAppForge optional root run_typecheck was skipped because no root Python typecheck command is configured; llm_bridge TypeScript typecheck was run explicitly with bun run typecheck"
   ]
 }

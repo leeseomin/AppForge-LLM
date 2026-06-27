@@ -5,7 +5,7 @@
   "stage": "handoff",
   "status": "completed",
   "attempt": 1,
-  "timestamp": "2026-06-27T16:03:51+00:00",
+  "timestamp": "2026-06-27T16:20:14+00:00",
   "artifacts": {
     "handoff_report": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/handoff_report.json"
   },
@@ -31,7 +31,7 @@
             {
               "name": "source_present",
               "passed": true,
-              "detail": "280 source/project files",
+              "detail": "281 source/project files",
               "required": true
             },
             {
@@ -68,7 +68,7 @@
         },
         "artifacts": [],
         "error": null,
-        "duration_seconds": 0.0057,
+        "duration_seconds": 0.0061,
         "command": null
       }
     },
@@ -82,15 +82,15 @@
         "success": true,
         "data": {
           "archive": ".appforge/reports/AppForge-LLM-v4-source.zip",
-          "files": 280,
-          "bytes": 507237
+          "files": 281,
+          "bytes": 509440
         },
         "artifacts": [
           "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/reports/AppForge-LLM-v4-source.zip",
           "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/reports/AppForge-LLM-v4-source.zip.manifest.json"
         ],
         "error": null,
-        "duration_seconds": 0.0683,
+        "duration_seconds": 0.0694,
         "command": null
       }
     },
@@ -159,19 +159,41 @@
     "stage_result": {
       "stage": "handoff",
       "status": "completed",
-      "summary": "Updated handoff evidence and source archive for the CLI model_count regression fix.",
+      "summary": "Updated handoff evidence and source archive for cancellable session shutdown.",
       "files_changed": [
         ".appforge/artifacts/handoff_report.json",
-        "appforge/llm_auth.py",
-        "tests/test_llm_auth.py"
+        "appforge/llm_bridge.py",
+        "appforge/drivers.py",
+        "llm_bridge/src/llm.ts",
+        "llm_bridge/src/server.ts",
+        "tests/test_llm_bridge.py",
+        "tests/test_runner.py",
+        "README.md",
+        "docs/WEB_APP.md"
       ],
       "commands_run": [
         {
-          "command": ".venv/bin/python -m pytest tests/test_llm_auth.py -q",
-          "result": "passed; 14 tests"
+          "command": ".venv/bin/python -m pytest tests/test_llm_bridge.py tests/test_runner.py::test_llm_bridge_driver_maps_cancelled_request_to_cancel_result -q",
+          "result": "passed; 2 tests"
         },
         {
-          "command": ".venv/bin/ruff check appforge/llm_auth.py tests/test_llm_auth.py",
+          "command": ".venv/bin/ruff check appforge/llm_bridge.py appforge/drivers.py tests/test_llm_bridge.py tests/test_runner.py",
+          "result": "passed"
+        },
+        {
+          "command": "cd llm_bridge && bun run typecheck",
+          "result": "passed"
+        },
+        {
+          "command": "cd llm_bridge && bun test",
+          "result": "passed; 8 tests"
+        },
+        {
+          "command": ".venv/bin/python -m pytest -q",
+          "result": "passed; 81 tests"
+        },
+        {
+          "command": ".venv/bin/ruff check appforge tests",
           "result": "passed"
         },
         {
@@ -191,13 +213,13 @@
         {
           "name": "Handoff report schema",
           "passed": true,
-          "evidence": "handoff_report.json references the CLI model_count fix and targeted regression test"
+          "evidence": "handoff_report.json references session shutdown cancellation behavior and bridge ownership policy"
         }
       ],
       "decisions": [
         {
-          "decision": "Regenerate handoff archive after the CLI fix.",
-          "reason": "Source handoff must include appforge/llm_auth.py and tests/test_llm_auth.py changes."
+          "decision": "Regenerate source handoff after the cancellation fix.",
+          "reason": "The handoff archive must include the Python bridge client, Bun bridge abort propagation, tests, and docs updates."
         }
       ],
       "unresolved": []

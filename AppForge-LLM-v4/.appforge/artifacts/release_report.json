@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "summary": "Phase4 is release-ready for source handoff after passing automated checks, rebuilding web assets, and smoke-testing the packaged UI.",
+  "summary": "Phase4 is release-ready for source handoff after passing automated checks, rebuilding web assets, smoke-testing the packaged UI, and verifying session shutdown cancellation.",
   "release_version": "0.4.0-phase4-llm-ux",
   "build_artifacts": [
     "appforge/resources/web/index.html",
@@ -35,7 +35,12 @@
     {
       "check": "Python quality",
       "passed": "passed",
-      "evidence": "pytest passed 78 tests and ruff passed; targeted llm_auth regression passed 14 tests"
+      "evidence": "pytest passed 81 tests and ruff passed; targeted llm_auth regression passed 14 tests; targeted bridge cancellation regression passed 2 tests"
+    },
+    {
+      "check": "Session shutdown cancellation",
+      "passed": "passed",
+      "evidence": "cancel_event now aborts in-flight Python-to-bridge /generate requests and the bridge maps request aborts to LLM cancellation"
     },
     {
       "check": "Payload and smoke",
@@ -49,6 +54,7 @@
   ],
   "rollback": [
     "Revert Phase4 source changes and rebuild frontend assets",
-    "Restore /providers/models route only if downstream compatibility requires it"
+    "Restore /providers/models route only if downstream compatibility requires it",
+    "Revert the cancellable bridge client path only if it regresses bridge connectivity"
   ]
 }

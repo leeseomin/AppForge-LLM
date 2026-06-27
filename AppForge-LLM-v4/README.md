@@ -76,6 +76,9 @@ APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check
 The launcher keeps the existing `appforge web` command as the runtime authority.
 By default it reuses or starts the local Bun bridge when available; set
 `APPFORGE_SKIP_LLM_BRIDGE=1` to skip launcher-owned bridge startup.
+Using **세션 종료** cancels the active AppForge job, aborts its in-flight bridge
+generation request, stops the web server, and terminates only a bridge process
+started by this launcher/app. A bridge you started separately is left running.
 
 ## Frontend development
 
