@@ -404,7 +404,11 @@ function defaultModelOf(entry: RegistryEntry, stored: StoredProviderConfig | und
   return storedDefault ?? entry.default_model ?? null
 }
 
-export function statusOf(entry: RegistryEntry, stored: StoredProviderConfig | undefined): ProviderStatus {
+export function statusOf(
+  entry: RegistryEntry,
+  stored: StoredProviderConfig | undefined,
+  options?: { includeModels?: boolean },
+): ProviderStatus {
   const key = resolveKey(entry, stored)
   const baseURL = resolveBaseURL(entry, stored)
   const hasBaseURL = entry.base_url_required ? Boolean(baseURL) : true
@@ -422,7 +426,8 @@ export function statusOf(entry: RegistryEntry, stored: StoredProviderConfig | un
     key_source: key.source,
     default_model: defaultModelOf(entry, stored),
     configured,
-    models: entry.models,
+    models: options?.includeModels ? entry.models : [],
+    model_count: entry.models.length,
     oauth: Boolean(stored?.oauth),
     oauth_account_id: stored?.oauth?.accountId,
   }

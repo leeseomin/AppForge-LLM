@@ -52,7 +52,8 @@ export interface ProviderStatus {
   key_source: "stored" | "env" | "oauth" | "none"
   default_model?: string | null
   configured: boolean
-  models: ProviderModel[]
+  models?: ProviderModel[]
+  model_count?: number
   oauth?: boolean
   oauth_account_id?: string
 }

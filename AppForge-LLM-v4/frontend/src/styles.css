@@ -1227,6 +1227,12 @@ pre {
   line-height: 1.55;
 }
 
+.field-warning {
+  color: var(--warning);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
 .settings-hint {
   margin: 8px 0 0;
 }
@@ -1386,6 +1392,12 @@ pre {
   gap: 8px;
 }
 
+.model-chips.is-expanded {
+  max-height: 200px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
 .model-chip {
   max-width: 100%;
   padding: 7px 9px;
@@ -1398,6 +1410,18 @@ pre {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.model-chip-more {
+  color: var(--text-soft);
+  border-style: dashed;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.model-chip-more:hover {
+  color: var(--text);
+  border-color: rgba(96, 165, 250, 0.5);
 }
 
 .test-result {

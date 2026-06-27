@@ -26,7 +26,6 @@ interface Route {
 const ROUTES: Route[] = [
   { method: "GET", pattern: /^\/health\/?$/, handler: health },
   { method: "GET", pattern: /^\/providers\/?$/, handler: listProviders },
-  { method: "GET", pattern: /^\/providers\/models\/?$/, handler: allModels },
   { method: "POST", pattern: /^\/catalog\/refresh\/?$/, handler: refreshCatalog },
   { method: "PUT", pattern: /^\/providers\/([^/]+)\/?$/, handler: upsertProvider },
   { method: "DELETE", pattern: /^\/providers\/([^/]+)\/?$/, handler: removeProvider },
@@ -98,17 +97,15 @@ async function health(): Promise<Response> {
   )
 }
 
-async function listProviders(): Promise<Response> {
+async function listProviders(request: Request): Promise<Response> {
+  const url = new URL(request.url)
+  const includeModels = url.searchParams.get("include_models") === "true"
   const config = await store.load()
   const entries = await registry.list()
-  const statuses: ProviderStatus[] = entries.map((entry) => registry.statusOf(entry, config.providers[entry.id]))
+  const statuses: ProviderStatus[] = entries.map((entry) =>
+    registry.statusOf(entry, config.providers[entry.id], { includeModels }),
+  )
   return cors(json({ providers: statuses }))
-}
-
-async function allModels(): Promise<Response> {
-  const entries = await registry.list()
-  const grouped = entries.map((entry) => ({ id: entry.id, name: entry.name, models: entry.models }))
-  return cors(json({ providers: grouped }))
 }
 
 async function refreshCatalog(): Promise<Response> {
