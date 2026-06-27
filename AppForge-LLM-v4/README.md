@@ -46,6 +46,10 @@ opens the browser:
 ./build.sh
 ```
 
+When `uv sync` is supported and usable, the launcher uses it. Older `uv`
+installations or local environments where `uv sync` cannot run fall back to the
+same `.venv` plus a pip editable install path.
+
 For prepared workspaces or CI-style local checks, run the no-browser smoke path:
 
 ```bash

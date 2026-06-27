@@ -1,76 +1,48 @@
 {
   "schema_version": "1.0",
-  "summary": "Security review passed for the build.sh launcher and quality-detector fix. The launcher remains loopback-first, does not collect or echo secrets, uses bounded health probes, logs only runtime startup output, and cleans up only PIDs it captured. AppForge secret_scan found zero likely committed credentials.",
+  "summary": "Security review for the build.sh uv fallback hotfix passed. The change remains local-only, adds no credentials or network endpoint, and secret scanning found no likely committed credentials.",
   "passed": true,
   "threat_model": [
-    "Assets: local provider API keys in existing environment/bridge config, AppForge stage prompts and outputs, generated source archives, packaged web assets, .venv/frontend dependency state, and launcher-owned process PIDs.",
-    "Actors: local user/operator, local browser tab, appforge FastAPI web process, optional local Bun llm_bridge process, dependency managers, external LLM providers, and other local processes that may already occupy configured ports.",
-    "Entry points: build.sh command-line flags, APPFORGE_* environment variables, appforge web host/port, optional llm_bridge health URL, npm/uv/pip/bun dependency commands, and FastAPI /api endpoints served by the existing app.",
-    "Trust boundaries: shell launcher to local filesystem, launcher to child process PIDs, browser to loopback FastAPI, FastAPI to optional loopback bridge, and local config/environment variables to provider-backed generation.",
-    "Abuse cases reviewed: public bind by default, secret echo through logs, shell argument injection, killing unrelated processes, infinite polling, stale bridge reuse, dependency install failure, committed credentials, and test fixtures that contain fake secret-shaped strings."
+    "Asset: local source checkout, .venv, packaged web assets, and loopback appforge web runtime.",
+    "Entry point: build.sh arguments and APPFORGE_* environment variables.",
+    "Trust boundary: local shell environment to local package-manager commands and loopback web process.",
+    "Abuse case: a dependency setup failure could leak sensitive environment values in logs; the launcher logs command names and paths but does not echo provider secrets.",
+    "Abuse case: bridge startup could expose provider secrets; this hotfix does not change bridge handling and bridge remains opt-in.",
+    "Abuse case: fallback package installation could fetch dependencies; this remains a local operator-controlled action and is skipped when APPFORGE_SKIP_INSTALL=1."
   ],
   "checks": [
     {
-      "check": "Secret scan",
-      "passed": "passed",
-      "evidence": ".venv/bin/python -m appforge tool run secret_scan --project . --input '{}' returned success with findings=[]."
+      "check": "secret_scan",
+      "passed": "true",
+      "evidence": "appforge tool run secret_scan returned passed=true with findings=[]."
     },
     {
-      "check": "Dependency audit",
+      "check": "generate_sbom",
+      "passed": "true",
+      "evidence": "appforge tool run generate_sbom wrote .appforge/reports/sbom.cdx.json with components=0."
+    },
+    {
+      "check": "dependency_audit",
       "passed": "not run",
-      "evidence": ".venv/bin/python -m appforge tool run dependency_audit --project . --input '{}' failed fast with 'This tool requires allow_network=true'; project network downloads are disabled."
+      "evidence": "appforge tool run dependency_audit returned: This tool requires allow_network=true. Network is disabled for this runner."
     },
     {
-      "check": "SBOM generation",
-      "passed": "passed",
-      "evidence": ".venv/bin/python -m appforge tool run generate_sbom --project . --input '{}' returned success and wrote .appforge/reports/sbom.cdx.json with components=0 for root manifests detected by AppForge."
+      "check": "launcher secret handling review",
+      "passed": "true",
+      "evidence": "build.sh fallback logs uv/pip setup state and paths but does not print APPFORGE provider variables or API keys."
     },
     {
-      "check": "Secret and boundary grep",
-      "passed": "passed",
-      "evidence": "rg review found only documented environment names and test fixtures; no committed real credential or private key was found."
-    },
-    {
-      "check": "Launcher loopback default",
-      "passed": "passed",
-      "evidence": "build.sh defaults APPFORGE_WEB_HOST to 127.0.0.1 and APPFORGE_WEB_PORT to 8787, matching the existing appforge web safe default."
-    },
-    {
-      "check": "Launcher process cleanup",
-      "passed": "passed",
-      "evidence": "cleanup only checks and kills captured WEB_PID and BRIDGE_PID values. Smoke verification stopped pid 17492 and ps -p 17492 showed no remaining process."
-    },
-    {
-      "check": "Launcher secret handling",
-      "passed": "passed",
-      "evidence": "build.sh passes APPFORGE_* environment variables through to appforge web but does not echo provider API key variables or write .env files."
-    },
-    {
-      "check": "Quality detector gate safety",
-      "passed": "passed",
-      "evidence": "appforge/tooling/detection.py now uses sys.executable for Python quality commands rather than trusting PATH; tests/test_tools.py covers PATH-empty detection."
+      "check": "local-only boundary review",
+      "passed": "true",
+      "evidence": "The patch only changes dependency setup before appforge web launch; default host remains 127.0.0.1 and no deployment or public bind is added."
     }
   ],
-  "findings": [
-    {
-      "severity": "suggestion",
-      "status": "documented",
-      "finding": "Online dependency audit was not run because the dependency_audit tool requires allow_network=true and this AppForge project disallows network downloads.",
-      "fix": "Documented the limitation, generated the available local SBOM, and kept deterministic pytest/frontend/build checks green."
-    },
-    {
-      "severity": "suggestion",
-      "status": "documented",
-      "finding": "AppForge generate_sbom only inspects root manifests, so frontend/ and llm_bridge/ package manifests are not reflected in the generated component count.",
-      "fix": "Recorded the tooling limitation as residual risk; npm lockfiles remain in source and frontend build/typecheck passed."
-    }
-  ],
-  "secrets_scan": "passed; AppForge secret_scan found zero likely committed credentials. Manual rg review only found documented environment variable names and synthetic test fixtures.",
-  "dependency_audit": "not run; dependency_audit requires allow_network=true and network downloads are disabled for this project. No online vulnerability audit evidence is claimed.",
+  "findings": [],
+  "secrets_scan": "Passed: appforge tool run secret_scan returned no findings.",
+  "dependency_audit": "Not run: dependency_audit requires allow_network=true and this runner has network disabled.",
   "residual_risks": [
-    "First-run dependency installation and online dependency audit remain unproven under the network-disabled runner; prepared-workspace checks and local builds passed.",
-    "If a user overrides APPFORGE_WEB_HOST, APPFORGE_LLM_BRIDGE_HOST, HOST, or PORT to a non-loopback interface, the local unauthenticated app or bridge could be exposed beyond the machine; defaults remain loopback.",
-    "Provider API keys remain owned by the existing environment/llm_bridge configuration path, not by build.sh; local machine compromise can still expose local secrets.",
-    "The generated SBOM currently reports root-manifest coverage only and does not enumerate nested frontend or llm_bridge npm dependencies."
+    "Online dependency vulnerability status is unverified until dependency_audit is run with network access.",
+    "SBOM generation remains lightweight/root-manifest-only and reported zero components.",
+    "A first-run pip fallback may need network access or a package cache for missing dependencies."
   ]
 }

@@ -1,5 +1,8 @@
 # OpenAppForge
 
+An autonomous AI agent service that builds apps on its own with just a prompt.
+(프롬프트 하나만으로 알아서 앱을 구축하는 자율형 AI 에이전트 서비스)
+
 **Turn a natural-language product command into a release-ready software source handoff.**
 
 [한국어 문서](README.ko.md) · [Architecture](docs/ARCHITECTURE.md) · [Safety](docs/SAFETY.md) · [Agent Guide](AGENT_GUIDE.md)

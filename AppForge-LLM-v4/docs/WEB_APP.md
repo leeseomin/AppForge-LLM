@@ -16,8 +16,10 @@ For a source checkout, use the launcher first:
 ```
 
 It syncs the Python environment, installs frontend packages when needed, builds
-the packaged Vue assets, and delegates to `appforge web`. Normal mode opens the
-default browser at `http://127.0.0.1:8787`.
+the packaged Vue assets, and delegates to `appforge web`. When `uv sync` is not
+available or cannot be used locally, it falls back to `.venv` plus
+`pip install -e '.[dev]'`. Normal mode opens the default browser at
+`http://127.0.0.1:8787`.
 
 Useful source-launcher checks and variants:
 

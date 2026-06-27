@@ -1,138 +1,106 @@
 {
   "schema_version": "1.0",
-  "summary": "Verification passed for the build.sh web launcher and the AppForge quality-gate detector fix: shell syntax, executable bit, prepared-workspace smoke startup, backend tests, frontend typecheck/build, AppForge-native run_tests/run_build gates, and documentation trace checks all passed.",
+  "summary": "Verified the build.sh uv compatibility fix against the reported unsupported-sync class, the local uv-sync failure class, the prepared-workspace path, web smoke startup, Python tests, frontend checks, and AppForge quality gates.",
   "passed": true,
   "test_commands": [
     "bash -n build.sh",
-    "test -x build.sh",
-    ".venv/bin/python -m appforge tool run detect_quality_commands --project . --input '{}'",
+    "APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check",
+    "bash -c 'uv() { printf \"error: unrecognized subcommand '\\''sync'\\''\\n\" >&2; return 2; }; export -f uv; APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check'",
+    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check",
+    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke",
     ".venv/bin/python -m pytest -q",
-    ".venv/bin/python -m pytest tests/test_tools.py -q",
     "npm --prefix frontend run typecheck",
     "npm --prefix frontend run build",
     ".venv/bin/python -m appforge tool run run_tests --project . --input '{}'",
-    ".venv/bin/python -m appforge tool run run_build --project . --input '{}'",
-    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke",
-    "rg -n \"./build.sh|--smoke|--no-open|APPFORGE_START_LLM_BRIDGE|APPFORGE_SKIP_LLM_BRIDGE|appforge web --no-open-browser\" README.md docs/WEB_APP.md CHANGELOG.md"
+    ".venv/bin/python -m appforge tool run run_build --project . --input '{}'"
   ],
   "results": [
     {
-      "check": "Shell syntax",
-      "passed": "passed",
-      "evidence": "bash -n build.sh returned 0."
+      "check": "shell syntax",
+      "passed": "true",
+      "evidence": "bash -n build.sh returned success."
     },
     {
-      "check": "Executable launcher",
-      "passed": "passed",
-      "evidence": "test -x build.sh returned 0 after chmod +x."
+      "check": "local uv sync failure fallback",
+      "passed": "true",
+      "evidence": "APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check first showed the sandboxed uv cache failure, then fell back to pip editable install without build isolation and completed."
     },
     {
-      "check": "Prepared-workspace smoke",
-      "passed": "passed",
-      "evidence": "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke returned 0 with /api/health and / ready, then stopped web server pid 17492."
+      "check": "unsupported uv sync fallback",
+      "passed": "true",
+      "evidence": "A shell-exported uv function returning unrecognized subcommand 'sync' caused build.sh to skip uv sync and complete through pip fallback."
     },
     {
-      "check": "Backend regression suite",
-      "passed": "passed",
-      "evidence": ".venv/bin/python -m pytest -q returned 0: 24 passed with one StarletteDeprecationWarning from FastAPI/TestClient."
+      "check": "prepared workspace check",
+      "passed": "true",
+      "evidence": "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check returned success."
     },
     {
-      "check": "Detector regression test",
-      "passed": "passed",
-      "evidence": ".venv/bin/python -m pytest tests/test_tools.py -q returned 0: 7 tests passed, including PATH-empty Python quality command detection."
+      "check": "web smoke",
+      "passed": "true",
+      "evidence": "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke returned HTTP success for /api/health and /, then stopped its web pid."
     },
     {
-      "check": "Frontend TypeScript/Vue typecheck",
-      "passed": "passed",
-      "evidence": "npm --prefix frontend run typecheck returned 0 and ran vue-tsc --noEmit."
+      "check": "backend tests",
+      "passed": "true",
+      "evidence": ".venv/bin/python -m pytest -q returned 24 passed with one existing Starlette TestClient deprecation warning."
     },
     {
-      "check": "Frontend production build",
-      "passed": "passed",
-      "evidence": "npm --prefix frontend run build returned 0; Vite transformed 32 modules and emitted index-Bto0ykgx.js plus index-C_67LZJ9.css with no tracked asset diff."
+      "check": "frontend typecheck and build",
+      "passed": "true",
+      "evidence": "npm --prefix frontend run typecheck and npm --prefix frontend run build returned success; Vite rebuilt the packaged assets."
     },
     {
-      "check": "AppForge quality command detection",
-      "passed": "passed",
-      "evidence": "detect_quality_commands now returns tests [.venv/bin/python -m pytest -q] and build [.venv/bin/python -m build --no-isolation] by using sys.executable for Python commands."
+      "check": "AppForge run_tests gate",
+      "passed": "true",
+      "evidence": "appforge tool run run_tests executed .venv/bin/python -m pytest -q and returned success."
     },
     {
-      "check": "AppForge native run_tests gate",
-      "passed": "passed",
-      "evidence": ".venv/bin/python -m appforge tool run run_tests --project . --input '{}' returned success with skipped=false and command .venv/bin/python -m pytest -q."
-    },
-    {
-      "check": "AppForge native run_build gate",
-      "passed": "passed",
-      "evidence": ".venv/bin/python -m appforge tool run run_build --project . --input '{}' returned success with skipped=false and command .venv/bin/python -m build --no-isolation. Setuptools license deprecation warnings remain non-blocking."
-    },
-    {
-      "check": "Documentation trace",
-      "passed": "passed",
-      "evidence": "rg found ./build.sh, --smoke, --no-open, APPFORGE_START_LLM_BRIDGE, APPFORGE_SKIP_LLM_BRIDGE, and appforge web --no-open-browser references in README.md, docs/WEB_APP.md, and CHANGELOG.md."
+      "check": "AppForge run_build gate",
+      "passed": "true",
+      "evidence": "appforge tool run run_build executed .venv/bin/python -m build --no-isolation and returned success."
     }
   ],
   "acceptance_results": [
     {
-      "requirement": "FR-001",
-      "passed": "passed",
-      "evidence": "build.sh exists, is executable, defaults to APPFORGE_WEB_HOST=127.0.0.1 and APPFORGE_WEB_PORT=8787, and build_web_command delegates normal mode to .venv/bin/appforge web with browser opening unless no-open is selected."
+      "requirement": "FR-002 / WF-002 Python environment preparation",
+      "passed": "true",
+      "evidence": "uv sync remains preferred, unsupported uv sync falls back to pip, uv sync runtime failure falls back to pip, and .venv/bin/appforge remains executable after setup."
     },
     {
-      "requirement": "FR-002",
-      "passed": "passed",
-      "evidence": "ensure_python_env implements uv sync --extra dev and python3 venv/pip fallback; ensure_frontend conditionally runs npm --prefix frontend install and npm --prefix frontend run build. Skip-mode smoke/check verified prepared workspace behavior."
+      "requirement": "FR-003 / LOOP-005 smoke verification",
+      "passed": "true",
+      "evidence": "--smoke reached both the health endpoint and web UI endpoint on 127.0.0.1:8799 and cleaned up the child web process."
     },
     {
-      "requirement": "FR-003",
-      "passed": "passed",
-      "evidence": "--smoke passed on port 8799 with APPFORGE_SKIP_INSTALL=1 and APPFORGE_SKIP_FRONTEND_BUILD=1, probed /api/health and /, and cleaned up the launcher-owned web server PID."
+      "requirement": "NFR-002 deterministic local check",
+      "passed": "true",
+      "evidence": "bash syntax, prepared --check, fallback --check, and no-browser smoke all returned success."
     },
     {
-      "requirement": "FR-004",
-      "passed": "passed",
-      "evidence": "Source inspection verifies APPFORGE_DRIVER pass-through and no forced llm-bridge default. APPFORGE_DRIVER=llm-bridge APPFORGE_SKIP_LLM_BRIDGE=1 --check passed during implementation, proving the bridge skip branch."
+      "requirement": "NFR-003 preserve backend/frontend behavior",
+      "passed": "true",
+      "evidence": "pytest, frontend typecheck, frontend build, and AppForge run_build all passed after the patch."
     },
     {
-      "requirement": "FR-005",
-      "passed": "passed",
-      "evidence": "README.md promotes ./build.sh before manual source setup, docs/WEB_APP.md documents launcher smoke/no-open/check and bridge behavior, and CHANGELOG.md records the launcher."
+      "requirement": "MEM-002 dependency-state reconciliation",
+      "passed": "true",
+      "evidence": "The launcher reconciles a uv-created venv missing pip by bootstrapping pip, then performs editable install."
     },
     {
-      "requirement": "NFR-001",
-      "passed": "passed",
-      "evidence": "Default bind remains 127.0.0.1; the launcher adds no deployment, public bind, destructive cleanup of unrelated processes, or credential collection."
-    },
-    {
-      "requirement": "NFR-002",
-      "passed": "passed",
-      "evidence": "bash -n build.sh and prepared-workspace ./build.sh --smoke both returned 0."
-    },
-    {
-      "requirement": "NFR-003",
-      "passed": "passed",
-      "evidence": ".venv/bin/python -m pytest -q, npm --prefix frontend run typecheck, npm --prefix frontend run build, AppForge run_tests, and AppForge run_build all returned 0."
-    },
-    {
-      "requirement": "NFR-004",
-      "passed": "passed",
-      "evidence": "APPFORGE_SKIP_INSTALL=1 and APPFORGE_SKIP_FRONTEND_BUILD=1 were used successfully for check/smoke, and the script only runs npm install when frontend/node_modules is absent."
-    },
-    {
-      "requirement": "quality-gate-regression",
-      "passed": "passed",
-      "evidence": "appforge/tooling/detection.py now uses sys.executable for Python quality commands, and tests/test_tools.py covers PATH-empty detection so AppForge complete can run required run_tests/run_build gates."
+      "requirement": "LOOP-002 bounded setup loop",
+      "passed": "true",
+      "evidence": "Each invocation attempts uv sync at most once, then falls back to one pip install path before exiting or continuing."
     }
   ],
-  "coverage": "Verification covers requirements FR-001 through FR-005 and NFR-001 through NFR-004 plus the AppForge quality-gate regression discovered during verification. It maps to workflow steps WF-001 through WF-007, memory surfaces MEM-001 through MEM-007, and loop IDs LOOP-001 through LOOP-006 through syntax, prepared-workspace check/smoke, source inspection, docs grep, pytest, typecheck, production build, and AppForge-native gate evidence.",
+  "coverage": "The reported uv subcommand compatibility failure, the local uv execution failure, prepared-workspace skip mode, web smoke convergence, Python package tests, frontend TypeScript/build, and AppForge required test/build gates were covered. No live external LLM provider call was needed or attempted.",
   "failures": [
-    "A first sandboxed smoke attempt failed with operation not permitted while binding 127.0.0.1:8799; the approved local-bind rerun passed. This is recorded as an environment permission issue, not a product failure.",
-    "The first AppForge verification completion failed because quality_commands emitted python-based commands that were dropped when python was not on PATH. Fixed by using sys.executable for Python quality commands and adding a regression test; AppForge run_tests and run_build now pass with skipped=false.",
-    "First-run dependency downloads were not exercised because the AppForge runner has network downloads disabled; verification used the prepared workspace and skip flags as specified."
+    "Pre-fix reproduction: APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check failed because uv sync could not access /Users/lee/Library/Caches/uv under sandbox restrictions.",
+    "Intermediate failure: the first pip fallback assumed pip existed in a uv-created .venv; fixed by bootstrapping pip with ensurepip.",
+    "Intermediate failure: pip editable install with build isolation tried to download setuptools in a network-restricted run; fixed by using --no-build-isolation when setuptools and wheel are already available."
   ],
   "manual_checks": [
-    "Reviewed build.sh for side-effect-free argument parsing before setup commands, finite smoke and bridge loops, and cleanup limited to captured WEB_PID/BRIDGE_PID.",
-    "Reviewed README.md and docs/WEB_APP.md to confirm the new launcher is documented as the easiest source UI path while existing appforge web and frontend development commands remain present.",
-    "Reviewed appforge/tooling/detection.py to confirm Python quality commands use the active interpreter and continue through the existing command policy."
+    "Reviewed build.sh fallback branch ordering for unsupported uv, failed uv sync, missing pip, missing build backend packages, and final .venv/bin/appforge validation.",
+    "Reviewed README.md, docs/WEB_APP.md, and CHANGELOG.md text for uv-or-pip fallback accuracy."
   ]
 }

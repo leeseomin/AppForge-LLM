@@ -1,14 +1,11 @@
 {
   "schema_version": "1.0",
-  "summary": "Implemented the source-checkout build.sh web launcher as an additive root script with dependency preparation, packaged frontend build support, optional llm_bridge startup, foreground appforge web delegation, bounded smoke verification, and updated source-start documentation.",
+  "summary": "Hardened the build.sh Python dependency setup path so the web launcher no longer fails when the installed uv lacks the sync subcommand or when uv sync is unusable in the local environment.",
   "features_completed": [
-    "Added executable repository-root build.sh with safe loopback defaults, --help, --check, --no-open, and --smoke modes.",
-    "Implemented Python environment preparation through uv sync --extra dev with a python3 venv/pip fallback and clear missing-command errors.",
-    "Implemented frontend preparation that installs frontend dependencies only when node_modules is missing and runs npm --prefix frontend run build unless skipped.",
-    "Delegated normal runtime to .venv/bin/appforge web, preserving browser opening by default and honoring APPFORGE_WEB_HOST, APPFORGE_WEB_PORT, APPFORGE_LOG_LEVEL, APPFORGE_NO_OPEN, and existing APPFORGE_* runtime variables.",
-    "Implemented finite no-browser smoke verification that starts appforge web, probes /api/health and /, then kills only the launcher-owned server PID.",
-    "Implemented optional llm_bridge reuse/startup only when APPFORGE_DRIVER=llm-bridge or APPFORGE_START_LLM_BRIDGE=1 is selected, with APPFORGE_SKIP_LLM_BRIDGE as an escape hatch.",
-    "Updated README.md, docs/WEB_APP.md, and CHANGELOG.md so ./build.sh is the easiest source UI path while preserving manual appforge web and frontend dev commands."
+    "build.sh now probes whether uv supports sync before using it.",
+    "If uv sync is unsupported or fails, build.sh falls back to the existing .venv or creates one with python3.",
+    "The pip fallback bootstraps pip with ensurepip when needed and uses no-build-isolation when setuptools and wheel are already present, preserving prepared/offline-friendly workspaces.",
+    "README.md, docs/WEB_APP.md, and CHANGELOG.md now document the uv-or-pip fallback behavior."
   ],
   "files_changed": [
     "build.sh",
@@ -19,63 +16,38 @@
     ".appforge/stage-result.json"
   ],
   "commands_run": [
-    ".venv/bin/python -m appforge prompt . --stage implementation --output .appforge/current-stage.md",
-    "bash -n build.sh",
-    "./build.sh --help",
-    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke (sandbox run failed with local bind operation not permitted)",
-    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke (approved local bind run passed)",
-    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check",
-    "APPFORGE_DRIVER=llm-bridge APPFORGE_SKIP_LLM_BRIDGE=1 APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check",
-    "git diff -- build.sh README.md docs/WEB_APP.md CHANGELOG.md",
-    "rg -n \"build\\.sh|APPFORGE_START_LLM_BRIDGE|APPFORGE_SMOKE_TIMEOUT|--smoke|--no-open|--check\" README.md docs/WEB_APP.md CHANGELOG.md"
+    "uv --version -> passed; local uv is 0.7.2",
+    "APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check -> reproduced pre-fix uv sync failure against sandboxed uv cache",
+    "bash -n build.sh -> passed after patch",
+    "APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check -> passed after patch by falling back from uv sync to pip editable install",
+    "bash -c 'uv() { printf \"error: unrecognized subcommand '\\''sync'\\''\\n\" >&2; return 2; }; export -f uv; APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check' -> passed after patch by using the unsupported-uv fallback",
+    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check -> passed",
+    "APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 APPFORGE_WEB_PORT=8799 ./build.sh --smoke -> passed",
+    ".venv/bin/python -m pytest -q -> passed, 24 tests",
+    "npm --prefix frontend run typecheck -> passed",
+    "npm --prefix frontend run build -> passed"
   ],
   "decisions": [
-    "Keep build.sh as an additive shell launcher rather than changing appforge web internals, because the existing FastAPI/Vue runtime already owns serving and browser-opening behavior.",
-    "Use APPFORGE_DATA_DIR for launcher smoke and bridge logs so runtime files align with the existing web app state directory.",
-    "Use curl for HTTP health probes because it is available on the target macOS/local shell environment and keeps the launcher independent from Python snippets during polling.",
-    "Run llm_bridge only for explicit bridge mode or APPFORGE_START_LLM_BRIDGE=1 so default auto/codex/claude/generic users are not blocked by Bun or provider setup.",
-    "Keep --smoke and --check skip-friendly so prepared workspaces can verify startup without network-dependent dependency installation."
+    "Kept uv sync as the preferred fast path when it is supported and succeeds.",
+    "Used a pip editable fallback instead of requiring users to upgrade uv, because the launcher should remain the easy source-start path.",
+    "Bootstrapped pip only inside .venv and only when missing, avoiding global Python changes.",
+    "Used --no-build-isolation only when setuptools and wheel are already available, so prepared environments avoid network-only build dependency resolution while fresh environments can still use pip's normal isolation path."
   ],
   "known_gaps": [
-    "First-run dependency installation was not exercised because network downloads are not allowed by the current AppForge runner; skip-mode verification used the prepared workspace.",
-    "Launcher-owned llm_bridge startup was not exercised with Bun because the implementation stage only verified the bridge skip/reuse branch locally; full provider-backed operation still requires user credentials and bridge dependencies."
+    "A completely fresh pip fallback still needs either network access for missing Python dependencies or a pre-populated package cache.",
+    "The first failed ensurepip attempt observed during validation came from two concurrent fallback checks touching the same .venv; final validation was rerun sequentially."
   ],
   "requirements_covered": [
-    "FR-001",
     "FR-002",
-    "FR-003",
-    "FR-004",
-    "FR-005",
-    "NFR-001",
     "NFR-002",
-    "NFR-003",
-    "NFR-004"
+    "NFR-004",
+    "WF-002",
+    "MEM-002",
+    "LOOP-002"
   ],
-  "traceability": [
-    {
-      "requirement": "FR-001",
-      "files": "build.sh",
-      "evidence": "Executable launcher delegates to .venv/bin/appforge web with 127.0.0.1:8787 defaults and browser opening unless no-open is selected."
-    },
-    {
-      "requirement": "FR-002",
-      "files": "build.sh",
-      "evidence": "ensure_python_env and ensure_frontend implement uv/venv/npm setup and skip flags."
-    },
-    {
-      "requirement": "FR-003",
-      "files": "build.sh",
-      "evidence": "--smoke starts appforge web with --no-open-browser, probes /api/health and /, and cleans up the owned PID."
-    },
-    {
-      "requirement": "FR-004",
-      "files": "build.sh",
-      "evidence": "maybe_start_bridge only acts for llm-bridge or APPFORGE_START_LLM_BRIDGE and respects APPFORGE_SKIP_LLM_BRIDGE."
-    },
-    {
-      "requirement": "FR-005",
-      "files": "README.md, docs/WEB_APP.md, CHANGELOG.md",
-      "evidence": "Docs promote ./build.sh, smoke/no-open/check options, bridge behavior, and retained CLI/manual commands."
-    }
-  ]
+  "reproduction": {
+    "reported_failure": "[build.sh] Syncing Python dependencies with uv. error: unrecognized subcommand 'sync'",
+    "local_failure": "APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --check failed before the patch because uv sync could not access the local uv cache under sandbox restrictions.",
+    "simulated_old_uv": "A shell-exported uv function returning the same unrecognized-subcommand failure reproduced the user's uv compatibility case."
+  }
 }
