@@ -1,6 +1,6 @@
 # Product request
 
-Create a build.sh launcher for AppForge-LLM v4 so running it immediately prepares and opens the local web app UI, making the pipeline easier to use than the CLI-only workflow.
+Implement Phase4.md for AppForge-LLM v4: improve the LLM connection UX by compacting `/providers`, loading provider models lazily, replacing datalist model inputs with fuzzy search, and limiting model chips.
 
 - Pipeline: `feature`
 - Mode: `autonomous`

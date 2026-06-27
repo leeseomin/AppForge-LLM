@@ -5,7 +5,7 @@
   "stage": "specification",
   "status": "completed",
   "attempt": 1,
-  "timestamp": "2026-06-27T09:04:36+00:00",
+  "timestamp": "2026-06-27T15:51:52+00:00",
   "artifacts": {
     "requirements_spec": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4/.appforge/artifacts/requirements_spec.json"
   },
@@ -35,42 +35,22 @@
     "stage_result": {
       "stage": "specification",
       "status": "completed",
-      "summary": "Defined testable launcher requirements, non-functional safety/repeatability gates, risks, and traceability from the product brief.",
+      "summary": "Defined traceable Phase4 requirements for compact providers, lazy model loading, fuzzy search, bounded chips, and endpoint compatibility.",
       "files_changed": [
-        ".appforge/artifacts/requirements_spec.json",
-        ".appforge/stage-result.json"
+        ".appforge/artifacts/requirements_spec.json"
       ],
-      "commands_run": [
-        {
-          "command": ".venv/bin/python -m appforge prompt . --stage specification --output .appforge/current-stage.md",
-          "result": "passed; rendered and read the specification stage packet"
-        }
-      ],
+      "commands_run": [],
       "checks": [
         {
-          "name": "stable requirement IDs",
+          "name": "Requirements schema",
           "passed": true,
-          "evidence": "requirements_spec defines FR-001 through FR-005 and NFR-001 through NFR-004."
-        },
-        {
-          "name": "acceptance criteria cover lifecycle boundaries",
-          "passed": true,
-          "evidence": "FR-003 covers smoke startup/probing/cleanup; FR-004 covers optional bridge and env pass-through behavior."
-        },
-        {
-          "name": "quality gates executable",
-          "passed": true,
-          "evidence": "quality_gates names exact shell, smoke, pytest, typecheck, and build commands."
+          "evidence": "requirements_spec.json includes FR-001 through FR-005, NFRs, gates, risks, and traceability"
         }
       ],
       "decisions": [
         {
-          "decision": "Keep llm_bridge optional in the launcher requirement set.",
-          "reason": "The user requested easier web UI access, while the existing app supports non-bridge drivers; forcing bridge startup would make the default path harder.",
-          "alternatives": [
-            "Always start llm_bridge",
-            "Never support bridge startup from build.sh"
-          ]
+          "decision": "Keep the Phase4 requirements bounded to provider/model UX.",
+          "reason": "Phase4.md explicitly excludes stage-specific model routing as a later phase."
         }
       ],
       "unresolved": []

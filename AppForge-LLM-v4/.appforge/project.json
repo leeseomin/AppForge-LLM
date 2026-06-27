@@ -2,7 +2,7 @@
   "version": "1.0",
   "name": "AppForge-LLM-v4",
   "root": "/Users/lee/Music/joha_app/AppForge-LLM/AppForge-LLM-v4",
-  "prompt": "Create a build.sh launcher for AppForge-LLM v4 so running it immediately prepares and opens the local web app UI, making the pipeline easier to use than the CLI-only workflow.",
+  "prompt": "Implement Phase4.md for AppForge-LLM v4: improve the LLM connection UX by compacting /providers, loading provider models lazily, replacing datalist model inputs with fuzzy search, and limiting model chips.",
   "pipeline": "feature",
   "pipeline_version": "1.1",
   "mode": "autonomous",

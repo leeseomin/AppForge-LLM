@@ -1,52 +1,44 @@
 {
   "schema_version": "1.0",
-  "summary": "Final handoff for the LLM connection settings fix: the web app now lazy-starts the bundled local llm_bridge for loopback settings/API calls, retries provider loading once, and presents actionable setup errors instead of the previous connection-refused dead end.",
+  "summary": "Phase4 LLM connection UX changes are implemented, verified, and packaged for handoff.",
   "delivered": [
-    "appforge/llm_bridge_process.py: bounded local Bun bridge process manager for loopback bridge URLs.",
-    "appforge/web.py: /api/llm/* bridge calls now autostart on network-level BridgeError and retry once; BridgeError action guidance is surfaced to the UI.",
-    "tests/test_web.py: regression coverage for autostart retry, autostart guidance, and preserving bridge HTTP errors.",
-    "Verification/security/release AppForge artifacts updated with current evidence.",
-    "Source archive: .appforge/reports/AppForge-LLM-v4-source.zip with 268 source files."
+    "Compact bridge provider status with include_models opt-in",
+    "Removed unused /providers/models all-provider endpoint",
+    "Reusable ModelSelect fuzzy model picker",
+    "Lazy provider model loading with in-memory cache and failure hints",
+    "Bounded advanced model chips with more/collapse controls",
+    "Updated bridge tests and rebuilt web assets"
   ],
   "quickstart": [
-    "Run ./build.sh to start the local AppForge web UI.",
-    "Open the web UI and click LLM 연결.",
-    "If the bundled local bridge is down, /api/llm/providers will start llm_bridge automatically for http://127.0.0.1:8788-style loopback URLs.",
-    "Save a provider API key or provide that provider's environment variable, choose a model, and apply it as the active provider/model.",
-    "For headless verification, run APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke --no-open."
+    "Run ./build.sh from AppForge-LLM-v4 to open the local web UI",
+    "Open LLM settings, select a provider, and type a substring such as claude in a model field",
+    "Use ./build.sh --smoke for a no-browser local health/static UI check"
   ],
   "architecture_reference": [
-    ".appforge/artifacts/implementation_report.json records the concrete changed files and decisions.",
-    ".appforge/artifacts/release_report.json records configuration variables, install/run instructions, build artifacts, and rollback.",
-    "appforge/llm_bridge_process.py owns the local process lifecycle and is intentionally separate from the HTTP client in appforge/llm_bridge.py.",
-    "appforge/web.py remains the same-origin FastAPI proxy between the Vue settings panel and the Bun bridge."
+    "Bridge provider payload: llm_bridge/src/registry.ts and llm_bridge/src/server.ts",
+    "Frontend model UX: frontend/src/components/ModelSelect.vue and ProviderSettings.vue",
+    "Same-origin proxy: appforge/web.py"
   ],
   "verification_reference": [
-    ".appforge/artifacts/verification_report.json lists all executed checks and sandbox limitations.",
-    ".venv/bin/python -m pytest tests/test_web.py -q passed 9 tests.",
-    ".venv/bin/python -m pytest -q and AppForge run_tests passed 27 tests.",
-    "Outside the restricted sandbox, /api/llm/providers returned HTTP 200 with provider IDs after local bridge autostart.",
-    "Outside the restricted sandbox, build.sh --smoke --no-open reached /api/health and /.",
-    "bun run typecheck and bun test passed in llm_bridge.",
-    "Archive assertion confirmed appforge/llm_bridge_process.py, appforge/web.py, tests/test_web.py, and README.md are included and .git/.venv/node_modules/dist/.appforge are excluded."
+    "bun test passed 8 bridge tests",
+    "bun run typecheck passed",
+    "npm run typecheck and npm run build passed",
+    ".venv/bin/python -m pytest -q passed 78 tests",
+    ".venv/bin/ruff check appforge tests passed",
+    "Payload probe: /providers 40552 bytes vs include_models 287573 bytes",
+    "./build.sh --smoke passed for http://127.0.0.1:8787"
   ],
   "operations_reference": [
-    "APPFORGE_LLM_BRIDGE_URL defaults to http://127.0.0.1:8788.",
-    "APPFORGE_LLM_BRIDGE_AUTOSTART can disable/enable lazy bridge startup; default is enabled unless APPFORGE_SKIP_LLM_BRIDGE is set.",
-    "APPFORGE_BRIDGE_TIMEOUT bounds bridge startup polling; default is 15 seconds.",
-    "If llm_bridge/node_modules is missing, run bun install in llm_bridge before opening settings again.",
-    "Remote bridge URLs must be started by the operator; AppForge will not auto-manage non-loopback bridge services."
+    "No deployment was performed",
+    "No new runtime dependency or environment variable was added",
+    "Provider API keys remain stored by the local llm_bridge config flow"
   ],
   "open_items": [
-    "Network-enabled dependency audit remains unrun in this environment.",
-    "Live external provider generation/test requires user credentials and provider network access.",
-    "Setuptools license metadata deprecation warnings remain pre-existing package metadata cleanup work."
+    "Live provider generation remains user-verifiable after entering credentials",
+    "Browser screenshot QA can be added if visual regression evidence is required"
   ],
   "next_steps": [
-    "With a real API key, open LLM 연결 설정, save a provider, run 연결 테스트, and set the active model.",
-    "When network is available, rerun dependency audit with AppForge allow-network or the ecosystem audit tools.",
-    "Consider documenting APPFORGE_LLM_BRIDGE_AUTOSTART in README/docs if this behavior should be promoted beyond the settings flow."
-  ],
-  "source_archive": ".appforge/reports/AppForge-LLM-v4-source.zip",
-  "source_archive_evidence": "archive_workspace wrote 268 files and 463350 bytes; zip assertion confirmed required changed files are included and dependency/cache/control-plane directories are excluded."
+    "Consider Phase5 for stage-specific model selection if desired",
+    "Update any external client that still calls /providers/models"
+  ]
 }
