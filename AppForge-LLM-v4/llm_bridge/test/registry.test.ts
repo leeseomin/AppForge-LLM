@@ -30,9 +30,12 @@ test("deepseek defaults to v4 pro and keeps it selectable", async () => {
   if (!entry) return
 
   const status = statusOf(entry, undefined)
-
   expect(status.default_model).toBe("deepseek-v4-pro")
-  expect(status.models.map((model) => model.id)).toContain("deepseek-v4-pro")
+  expect(status.model_count).toBeGreaterThan(0)
+  expect(status.models).toEqual([])
+
+  const statusWithModels = statusOf(entry, undefined, { includeModels: true })
+  expect((statusWithModels.models ?? []).map((model) => model.id)).toContain("deepseek-v4-pro")
 })
 
 test("deepseek legacy defaults are normalized to v4 pro", async () => {

@@ -118,9 +118,10 @@ export interface ProviderStatus {
   docs_url?: string | null;
   default_model?: string | null;
   has_key: boolean;
-  key_source: 'stored' | 'env' | 'none';
+  key_source: 'stored' | 'env' | 'oauth' | 'none';
   configured: boolean;
-  models: ProviderModel[];
+  models?: ProviderModel[];
+  model_count?: number;
 }
 
 export interface ProvidersPayload {

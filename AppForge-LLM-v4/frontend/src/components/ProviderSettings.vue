@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
+import ModelSelect from './ModelSelect.vue';
 import {
   ApiError,
   deleteProvider,
   getActiveProvider,
   getOAuthProviders,
+  getProviderModels,
   getProviders,
   pollOAuth,
   quickConnect,
@@ -18,6 +20,7 @@ import type {
   ActiveSelection,
   OAuthProvider,
   OAuthPollResult,
+  ProviderModel,
   ProviderStatus,
   QuickConnectResult,
   TestResult,
@@ -52,11 +55,13 @@ const qcBusy = ref(false);
 const qcResult = ref<QuickConnectResult | null>(null);
 
 const activeProvider = computed(() => providers.value.find((p) => p.id === activeProviderId.value) ?? null);
-const activeModelOptions = computed(() => activeProvider.value?.models ?? []);
 
 const qcProviderEntry = computed(() => providers.value.find((p) => p.id === qcProvider.value) ?? null);
-const qcModelOptions = computed(() => qcProviderEntry.value?.models ?? []);
+const qcModelOptions = computed(() => modelCache.value.get(qcProvider.value) ?? []);
+const qcModelLoading = computed(() => modelLoading.value.has(qcProvider.value));
+const qcModelError = computed(() => modelLoadErrors.value[qcProvider.value] ?? '');
 const qcModelPlaceholder = computed(() => {
+  if (qcModelLoading.value) return '모델 목록 로딩 중...';
   const first = qcModelOptions.value[0];
   return first ? `예: ${first.id}` : '모델 ID';
 });
@@ -64,7 +69,66 @@ const qcNeedsBaseURL = computed(() => Boolean(qcProviderEntry.value?.base_url_re
 const qcCanSubmit = computed(
   () => Boolean(qcProvider.value) && qcApiKey.value.trim().length > 0 && (!qcNeedsBaseURL.value || qcBaseURL.value.trim().length > 0),
 );
+
+const activeModelOptions = computed(() => modelCache.value.get(activeProviderId.value) ?? []);
+const activeModelLoading = computed(() => modelLoading.value.has(activeProviderId.value));
+const activeModelError = computed(() => modelLoadErrors.value[activeProviderId.value] ?? '');
+
+function setCachedModels(providerId: string, models: ProviderModel[]): void {
+  modelCache.value = new Map(modelCache.value).set(providerId, models);
+}
+
+function setModelLoading(providerId: string, loading: boolean): void {
+  const next = new Set(modelLoading.value);
+  if (loading) {
+    next.add(providerId);
+  } else {
+    next.delete(providerId);
+  }
+  modelLoading.value = next;
+}
+
+function setModelLoadError(providerId: string, message: string | null): void {
+  const next = { ...modelLoadErrors.value };
+  if (message) {
+    next[providerId] = message;
+  } else {
+    delete next[providerId];
+  }
+  modelLoadErrors.value = next;
+}
+
+async function ensureModels(providerId: string): Promise<void> {
+  if (!providerId || modelCache.value.has(providerId) || modelLoading.value.has(providerId)) return;
+  const provider = providers.value.find((p) => p.id === providerId);
+  if (provider?.models?.length) {
+    setCachedModels(providerId, provider.models);
+    return;
+  }
+  setModelLoading(providerId, true);
+  setModelLoadError(providerId, null);
+  try {
+    const payload = await getProviderModels(providerId);
+    setCachedModels(providerId, payload.models ?? []);
+  } catch {
+    setCachedModels(providerId, []);
+    setModelLoadError(providerId, '모델 목록 로딩 실패. 모델 ID를 직접 입력할 수 있습니다.');
+  } finally {
+    setModelLoading(providerId, false);
+  }
+}
+
+watch(activeProviderId, (id) => {
+  if (id) ensureModels(id);
+});
 const qcBaseURL = ref<string>('');
+
+// Lazy-loaded model cache (F-2 A: memory only, cleared when modal closes)
+const modelCache = ref<Map<string, ProviderModel[]>>(new Map());
+const modelLoading = ref<Set<string>>(new Set());
+const modelLoadErrors = ref<Record<string, string>>({});
+const expandedChips = ref<Set<string>>(new Set());
+const MODEL_CHIPS_LIMIT = 10;
 
 // OAuth state
 const oauthProviders = ref<OAuthProvider[]>([]);
@@ -96,7 +160,8 @@ async function reload() {
     active.value = activePayload;
     activeProviderId.value = activePayload.provider ?? providers.value[0]?.id ?? '';
     activeModel.value = activePayload.model ?? '';
-    if (!qcProvider.value && activePayload.provider) qcProvider.value = activePayload.provider;
+    if (!qcProvider.value) qcProvider.value = activePayload.provider ?? providers.value[0]?.id ?? '';
+    qcBaseURL.value = qcProviderEntry.value?.base_url ?? '';
     oauthProviders.value = oauthPayload.providers;
     if (!oauthProviderId.value && oauthProviders.value.length > 0) {
       oauthProviderId.value = oauthProviders.value[0].id;
@@ -113,6 +178,7 @@ function onQcProviderChange() {
   qcModel.value = '';
   qcResult.value = null;
   qcBaseURL.value = qcProviderEntry.value?.base_url ?? '';
+  if (qcProvider.value) ensureModels(qcProvider.value);
 }
 
 function onOauthProviderChange() {
@@ -224,7 +290,7 @@ function ensureDraft(provider: ProviderStatus) {
       apiKey: '',
       baseURL: provider.base_url ?? '',
       defaultModel: provider.default_model ?? '',
-      useCustomModel: Boolean(provider.default_model) && !provider.models.some((m) => m.id === provider.default_model),
+      useCustomModel: Boolean(provider.default_model) && !(provider.models ?? []).some((m) => m.id === provider.default_model),
     };
   }
   return draft.value[provider.id];
@@ -232,7 +298,9 @@ function ensureDraft(provider: ProviderStatus) {
 
 function toggle(provider: ProviderStatus) {
   ensureDraft(provider);
-  expandedId.value = expandedId.value === provider.id ? null : provider.id;
+  const nextId = expandedId.value === provider.id ? null : provider.id;
+  expandedId.value = nextId;
+  if (nextId) ensureModels(provider.id);
 }
 
 function keyPlaceholder(provider: ProviderStatus) {
@@ -255,8 +323,38 @@ function statusClass(provider: ProviderStatus) {
   return 'is-ready';
 }
 
-function modelSuggestions(provider: ProviderStatus) {
-  return provider.models.map((m) => m.id);
+function modelSuggestions(provider: ProviderStatus): string[] {
+  const models = providerModelOptions(provider);
+  if (expandedChips.value.has(provider.id)) return models.map((m) => m.id);
+  return models.slice(0, MODEL_CHIPS_LIMIT).map((m) => m.id);
+}
+
+function modelChipExtraCount(provider: ProviderStatus): number {
+  const models = providerModelOptions(provider);
+  return Math.max(0, models.length - MODEL_CHIPS_LIMIT);
+}
+
+function toggleChips(provider: ProviderStatus): void {
+  const next = new Set(expandedChips.value);
+  if (next.has(provider.id)) {
+    next.delete(provider.id);
+  } else {
+    next.add(provider.id);
+    ensureModels(provider.id);
+  }
+  expandedChips.value = next;
+}
+
+function ensureProviderModels(provider: ProviderStatus): void {
+  ensureModels(provider.id);
+}
+
+function providerModelOptions(provider: ProviderStatus): ProviderModel[] {
+  return modelCache.value.get(provider.id) ?? provider.models ?? [];
+}
+
+function providerModelLoadError(provider: ProviderStatus): string {
+  return modelLoadErrors.value[provider.id] ?? '';
 }
 
 async function save(provider: ProviderStatus) {
@@ -330,7 +428,7 @@ async function test(provider: ProviderStatus) {
 
 async function activate(provider: ProviderStatus) {
   const d = ensureDraft(provider);
-  const model = d.defaultModel.trim() || provider.default_model || provider.models[0]?.id || '';
+  const model = d.defaultModel.trim() || provider.default_model || providerModelOptions(provider)[0]?.id || '';
   busyId.value = provider.id;
   try {
     const result = await setActiveProvider(provider.id, model || null);
@@ -416,15 +514,13 @@ function readableError(error: unknown, fallback: string) {
           </label>
           <label class="qc-field qc-model">
             <span>모델 <small>(선택)</small></span>
-            <input
+            <ModelSelect
               v-model="qcModel"
-              type="text"
-              list="qcModelOptions"
+              :models="qcModelOptions"
+              :loading="qcModelLoading"
               :placeholder="qcModelPlaceholder"
             />
-            <datalist id="qcModelOptions">
-              <option v-for="m in qcModelOptions" :key="m.id" :value="m.id">{{ m.name }}</option>
-            </datalist>
+            <small v-if="qcModelError" class="field-warning">{{ qcModelError }}</small>
           </label>
         </div>
         <p v-if="qcProviderEntry?.env_key" class="form-hint">
@@ -523,15 +619,13 @@ function readableError(error: unknown, fallback: string) {
           </label>
           <label class="active-field">
             <span>모델</span>
-            <input
+            <ModelSelect
               v-model="activeModel"
-              type="text"
-              list="activeModelOptions"
+              :models="activeModelOptions"
+              :loading="activeModelLoading"
               placeholder="예: gpt-4o-mini"
             />
-            <datalist id="activeModelOptions">
-              <option v-for="m in activeModelOptions" :key="m.id" :value="m.id">{{ m.name }}</option>
-            </datalist>
+            <small v-if="activeModelError" class="field-warning">{{ activeModelError }}</small>
           </label>
           <button
             class="secondary-button"
@@ -594,17 +688,18 @@ function readableError(error: unknown, fallback: string) {
 
               <label class="form-field">
                 <span>기본 모델</span>
-                <input
+                <ModelSelect
                   v-model="ensureDraft(provider).defaultModel"
-                  :type="'text'"
-                  :list="`models-${provider.id}`"
+                  :models="providerModelOptions(provider)"
+                  :loading="modelLoading.has(provider.id)"
                   placeholder="모델 ID"
+                  @update:model-value="ensureProviderModels(provider)"
                 />
-                <datalist :id="`models-${provider.id}`">
-                  <option v-for="m in provider.models" :key="m.id" :value="m.id">{{ m.name }}</option>
-                </datalist>
+                <small v-if="providerModelLoadError(provider)" class="field-warning">
+                  {{ providerModelLoadError(provider) }}
+                </small>
               </label>
-              <div class="model-chips">
+              <div class="model-chips" :class="{ 'is-expanded': expandedChips.has(provider.id) }">
                 <button
                   v-for="id in modelSuggestions(provider)"
                   :key="id"
@@ -613,6 +708,22 @@ function readableError(error: unknown, fallback: string) {
                   @click="ensureDraft(provider).defaultModel = id"
                 >
                   {{ id }}
+                </button>
+                <button
+                  v-if="modelChipExtraCount(provider) > 0 && !expandedChips.has(provider.id)"
+                  type="button"
+                  class="model-chip model-chip-more"
+                  @click="toggleChips(provider)"
+                >
+                  더 보기 ({{ modelChipExtraCount(provider) }}개)
+                </button>
+                <button
+                  v-if="expandedChips.has(provider.id)"
+                  type="button"
+                  class="model-chip model-chip-more"
+                  @click="toggleChips(provider)"
+                >
+                  접기
                 </button>
               </div>
 
