@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import mimetypes
 import os
+import queue
+import secrets
 import signal
 import threading
 import webbrowser
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
+from urllib.parse import urlparse
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
@@ -26,6 +30,32 @@ from .web_jobs import LLM_BRIDGE_DRIVER_ALIASES, JobManager, WebConfig, WebJobEr
 
 WEB_DIR = RESOURCE_DIR / "web"
 ASSET_DIR = WEB_DIR / "assets"
+logger = logging.getLogger(__name__)
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+SSE_KEEPALIVE_SECONDS = 15.0
+
+
+def _host_without_port(value: str) -> str:
+    host = value.split(",", 1)[0].strip()
+    if host.startswith("["):
+        return host.split("]", 1)[0].strip("[]")
+    return host.split(":", 1)[0]
+
+
+def _is_loopback_host(value: str | None) -> bool:
+    if not value:
+        return False
+    return _host_without_port(value).casefold() in LOCAL_HOSTS
+
+
+def _origin_host(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        return urlparse(value).hostname
+    except Exception:
+        return None
 
 
 class CreateJobRequest(BaseModel):
@@ -96,8 +126,10 @@ def create_app(
     manager: JobManager | None = None,
     llm_bridge_manager: LLMBridgeProcessManager | None = None,
     shutdown_callback: Callable[[], None] | None = None,
+    session_token: str | None = None,
 ) -> FastAPI:
     resolved_config = config or WebConfig.from_env()
+    resolved_session_token = session_token or secrets.token_urlsafe(32)
     resolved_manager = manager or JobManager(resolved_config)
     resolved_bridge_manager = llm_bridge_manager or LLMBridgeProcessManager(
         runtime_dir=resolved_manager.data_dir,
@@ -121,10 +153,9 @@ def create_app(
     app.state.web_config = resolved_config
     app.state.llm_bridge_manager = resolved_bridge_manager
     app.state.shutdown_callback = shutdown_callback or _request_process_shutdown
+    app.state.session_token = resolved_session_token
 
-    @app.middleware("http")
-    async def security_headers(request: Request, call_next: Any) -> Any:
-        response = await call_next(request)
+    def _apply_security_headers(request: Request, response: Any) -> Any:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Permissions-Policy"] = (
@@ -133,12 +164,13 @@ def create_app(
         if request.url.path.startswith("/preview/"):
             response.headers["X-Frame-Options"] = "SAMEORIGIN"
             response.headers["Content-Security-Policy"] = (
+                "sandbox allow-scripts allow-forms; "
                 "default-src 'self' data: blob:; "
-                "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+                "script-src 'self' 'unsafe-inline'; "
                 "style-src 'self' 'unsafe-inline'; "
                 "img-src 'self' data: blob:; "
                 "font-src 'self' data:; "
-                "connect-src 'self'; "
+                "connect-src 'none'; "
                 "object-src 'none'; "
                 "base-uri 'none'; "
                 "frame-ancestors 'self'"
@@ -166,6 +198,55 @@ def create_app(
             response.headers["Cache-Control"] = "no-store"
         return response
 
+    def _guard_response(request: Request, code: str, message: str) -> JSONResponse:
+        response = JSONResponse(
+            status_code=403,
+            content={"error": {"code": code, "message": message}},
+        )
+        return _apply_security_headers(request, response)
+
+    @app.middleware("http")
+    async def local_request_guard(request: Request, call_next: Any) -> Any:
+        path = request.url.path
+        if not _is_loopback_host(request.headers.get("host")):
+            return _guard_response(
+                request,
+                "FORBIDDEN_HOST",
+                "허용되지 않은 Host header입니다.",
+            )
+
+        if request.method.upper() not in SAFE_METHODS:
+            origin = request.headers.get("origin")
+            referer = request.headers.get("referer")
+            origin_host = _origin_host(origin)
+            referer_host = _origin_host(referer)
+            if origin and (not origin_host or origin_host.casefold() not in LOCAL_HOSTS):
+                return _guard_response(request, "FORBIDDEN_ORIGIN", "허용되지 않은 Origin입니다.")
+            if (
+                not origin
+                and referer
+                and (not referer_host or referer_host.casefold() not in LOCAL_HOSTS)
+            ):
+                return _guard_response(request, "FORBIDDEN_REFERER", "허용되지 않은 Referer입니다.")
+
+        protected = path.startswith("/api/") and path not in {"/api/health"}
+        if protected:
+            expected = str(request.app.state.session_token)
+            supplied = request.headers.get("x-appforge-token")
+            if request.method.upper() == "GET" and (
+                path.endswith("/events") or path.endswith("/download")
+            ):
+                supplied = supplied or request.query_params.get("token")
+            if not supplied or not secrets.compare_digest(supplied, expected):
+                return _guard_response(
+                    request,
+                    "INVALID_SESSION_TOKEN",
+                    "세션 token이 없거나 올바르지 않습니다.",
+                )
+
+        response = await call_next(request)
+        return _apply_security_headers(request, response)
+
     @app.exception_handler(WebJobError)
     async def web_job_error_handler(_request: Request, exc: WebJobError) -> JSONResponse:
         return JSONResponse(status_code=exc.status_code, content={"error": exc.to_dict()})
@@ -180,16 +261,17 @@ def create_app(
             "title": "입력 내용을 확인해 주세요",
             "message": "요청 형식이 올바르지 않습니다.",
             "action": "앱 설명을 입력한 뒤 다시 실행하세요.",
-            "context": {"validation": exc.errors()},
+            "context": {"fields": [".".join(map(str, item.get("loc", []))) for item in exc.errors()]},
         }
         return JSONResponse(status_code=422, content={"error": error})
 
     @app.exception_handler(Exception)
     async def unexpected_error_handler(_request: Request, exc: Exception) -> JSONResponse:
+        logger.exception("Unhandled web error")
         error = {
             "code": "INTERNAL_SERVER_ERROR",
             "title": "서버 오류가 발생했습니다",
-            "message": f"{type(exc).__name__}: {exc}",
+            "message": "요청을 처리하는 중 예기치 못한 오류가 발생했습니다.",
             "action": "서버 로그를 확인한 뒤 웹앱을 다시 시작하세요.",
             "context": {},
         }
@@ -268,21 +350,43 @@ def create_app(
         )
 
     @app.get("/api/jobs/{job_id}/events")
-    async def job_events(job_id: str) -> StreamingResponse:
-        subscriber = resolved_manager.subscribe_events(job_id)
+    async def job_events(job_id: str, request: Request) -> StreamingResponse:
+        last_id_raw = request.headers.get("last-event-id") or request.query_params.get("lastEventId")
+        last_event_id = int(last_id_raw) if last_id_raw and last_id_raw.isdigit() else None
+        subscriber = resolved_manager.subscribe_events(job_id, last_event_id=last_event_id)
 
         async def event_stream() -> AsyncIterator[str]:
             try:
                 while True:
-                    item = await run_in_threadpool(subscriber.get)
+                    if await request.is_disconnected():
+                        break
+                    try:
+                        item = await run_in_threadpool(
+                            subscriber.get,
+                            True,
+                            SSE_KEEPALIVE_SECONDS,
+                        )
+                    except queue.Empty:
+                        yield ": keepalive\n\n"
+                        continue
                     event_name = str(item.get("event") or "message")
-                    yield f"event: {event_name}\ndata: {json.dumps(item, ensure_ascii=False)}\n\n"
+                    lines = []
+                    event_id = item.get("id")
+                    if event_id is not None:
+                        lines.append(f"id: {event_id}")
+                    lines.append(f"event: {event_name}")
+                    lines.append(f"data: {json.dumps(item, ensure_ascii=False)}")
+                    yield "\n".join(lines) + "\n\n"
                     if event_name in {"job_completed", "job_failed", "job_cancelled"}:
                         break
             finally:
                 resolved_manager.unsubscribe_events(job_id, subscriber)
 
-        return StreamingResponse(event_stream(), media_type="text/event-stream")
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
 
     @app.get("/api/jobs/{job_id}/workspace/tree")
     async def workspace_tree(job_id: str) -> dict[str, Any]:
@@ -531,9 +635,11 @@ def serve(
     log_level: str = "info",
 ) -> None:
     config = WebConfig.from_env()
-    app = create_app(config)
+    token = secrets.token_urlsafe(32)
+    app = create_app(config, session_token=token)
+    url = f"http://{host}:{port}/?token={token}"
+    logger.info("Open AppForge Web UI: %s", url)
     if open_browser:
-        url = f"http://{host}:{port}"
         timer = threading.Timer(0.8, lambda: webbrowser.open(url))
         timer.daemon = True
         timer.start()

@@ -1,4 +1,4 @@
-.PHONY: install frontend-install frontend-build frontend-dev run test check build clean
+.PHONY: install frontend-install frontend-build frontend-dev web-bundle-check run test check build clean
 
 install: frontend-install
 	python -m pip install -e '.[dev]'
@@ -12,13 +12,16 @@ frontend-build:
 frontend-dev:
 	npm --prefix frontend run dev
 
+web-bundle-check: frontend-build
+	git diff --exit-code appforge/resources/web
+
 run:
 	python -m appforge web
 
 test:
 	python -m pytest
 
-check: frontend-build
+check: web-bundle-check
 	python -m compileall -q appforge tests
 	python -m appforge pipelines >/dev/null
 	python -m appforge tool list >/dev/null

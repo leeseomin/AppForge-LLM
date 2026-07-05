@@ -29,12 +29,29 @@ export class ApiError extends Error {
   }
 }
 
+const TOKEN_KEY = 'appforge.sessionToken';
+
+export function bootstrapSessionToken(): void {
+  const url = new URL(window.location.href);
+  const token = url.searchParams.get('token');
+  if (!token) return;
+  sessionStorage.setItem(TOKEN_KEY, token);
+  url.searchParams.delete('token');
+  window.history.replaceState({}, document.title, url.toString());
+}
+
+export function getSessionToken(): string | null {
+  return sessionStorage.getItem(TOKEN_KEY);
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const token = getSessionToken();
   const response = await fetch(path, {
     ...options,
     headers: {
       Accept: 'application/json',
       ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(token ? { 'X-AppForge-Token': token } : {}),
       ...(options.headers || {}),
     },
   });

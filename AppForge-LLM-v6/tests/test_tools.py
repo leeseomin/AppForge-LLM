@@ -5,6 +5,8 @@ import zipfile
 
 import pytest
 
+from appforge.drivers import LLMBridgeAgentDriver
+from appforge.models import ProjectLayout
 from appforge.tooling.detection import quality_commands
 from appforge.tooling.command import CommandPolicy, run_command
 from appforge.tooling.registry import ToolRegistry
@@ -104,20 +106,53 @@ def test_command_policy_blocks_network_and_destructive_patterns(tmp_path) -> Non
         run_command(tmp_path, ["git", "reset", "--hard"], policy=CommandPolicy())
 
 
+def test_command_policy_blocks_shell_escape_when_destructive_disabled(tmp_path) -> None:
+    with pytest.raises(PermissionError):
+        run_command(tmp_path, ["bash", "-lc", "echo ok"], policy=CommandPolicy())
+
+
+def test_command_policy_blocks_inline_python_when_destructive_disabled(tmp_path) -> None:
+    with pytest.raises(PermissionError):
+        run_command(tmp_path, [sys.executable, "-c", "print('ok')"], policy=CommandPolicy())
+
+
+def test_run_command_llm_schema_hides_policy_flags() -> None:
+    params = ToolRegistry().get("run_command").info()["llm_parameters"]
+
+    assert "allow_network" not in params["properties"]
+    assert "allow_destructive" not in params["properties"]
+
+
+def test_llm_tool_arguments_cannot_escalate_safety_flags(tmp_path) -> None:
+    layout = ProjectLayout.from_root(tmp_path)
+    project = {"safety": {"allow_destructive": False, "allow_network": False}}
+
+    result = LLMBridgeAgentDriver(bridge_url="http://bridge.test")._execute_registered_tool(
+        layout,
+        "run_command",
+        {"command": [sys.executable, "--version"], "allow_destructive": True},
+        project,
+    )
+
+    assert not result.success
+    assert "allow_destructive" in str(result.error)
+
+
 def test_run_command_does_not_inherit_sensitive_host_environment(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("APPFORGE_TEST_SECRET", "should-not-leak")
+    script = tmp_path / "print_env.py"
+    script.write_text(
+        (
+            "import os\n"
+            "print(os.environ.get('APPFORGE_TEST_SECRET', 'missing'))\n"
+            "print(os.environ.get('APPFORGE_EXPLICIT_ENV', 'missing'))\n"
+        ),
+        encoding="utf-8",
+    )
 
     result = run_command(
         tmp_path,
-        [
-            sys.executable,
-            "-c",
-            (
-                "import os; "
-                "print(os.environ.get('APPFORGE_TEST_SECRET', 'missing')); "
-                "print(os.environ.get('APPFORGE_EXPLICIT_ENV', 'missing'))"
-            ),
-        ],
+        [sys.executable, str(script)],
         env={"APPFORGE_EXPLICIT_ENV": "allowed"},
     )
 

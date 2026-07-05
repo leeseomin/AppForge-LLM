@@ -1,6 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
-import { ApiError, cancelJob, createJob, endSession, getHealth, getJob } from './api';
+import {
+  ApiError,
+  bootstrapSessionToken,
+  cancelJob,
+  createJob,
+  endSession,
+  getHealth,
+  getJob,
+  getSessionToken,
+} from './api';
 import ComposerCard from './components/ComposerCard.vue';
 import HealthBanner from './components/HealthBanner.vue';
 import JobPanel from './components/JobPanel.vue';
@@ -11,6 +20,8 @@ import { isActiveJobStatus } from './jobStatus';
 import type { ApiErrorPayload, HealthPayload, JobPayload } from './types';
 
 const STORAGE_KEY = 'appforge-v6-current-job';
+
+bootstrapSessionToken();
 
 const health = ref<HealthPayload | null>(null);
 const serverError = ref('');
@@ -28,6 +39,7 @@ let pollTimer: number | undefined;
 let toastTimer: number | undefined;
 let eventSource: EventSource | undefined;
 let eventJobId: string | null = null;
+const lastEventIds = new Map<string, string>();
 
 type LoadCurrentJobOptions = {
   immediate?: boolean;
@@ -147,11 +159,23 @@ function openEventStream(jobId: string) {
   if (eventSource && eventJobId === jobId) return;
   closeEventStream();
   eventJobId = jobId;
-  eventSource = new EventSource(`/api/jobs/${encodeURIComponent(jobId)}/events`);
+  const url = new URL(`/api/jobs/${encodeURIComponent(jobId)}/events`, window.location.origin);
+  const token = getSessionToken();
+  const lastEventId = lastEventIds.get(jobId);
+  if (token) url.searchParams.set('token', token);
+  if (lastEventId) url.searchParams.set('lastEventId', lastEventId);
+  eventSource = new EventSource(url.toString());
 
   const refreshFromEvent = (event: MessageEvent) => {
     try {
+      if (event.lastEventId) {
+        lastEventIds.set(jobId, event.lastEventId);
+      }
       const payload = JSON.parse(event.data || '{}');
+      if (payload.event === 'event_gap') {
+        loadCurrentJob({ immediate: true });
+        return;
+      }
       if (payload.job) {
         job.value = payload.job;
         if (!prompt.value && payload.job.prompt) {
@@ -193,6 +217,7 @@ function openEventStream(jobId: string) {
     'revision_queued',
     'stage_retry_requested',
     'stage_failed',
+    'event_gap',
     'job_completed',
     'job_failed',
     'job_cancelled',

@@ -28,6 +28,15 @@ class RunCommandTool(Tool):
             "env": {"type": "object"},
         },
     }
+    llm_parameters = {
+        "type": "object",
+        "required": ["command"],
+        "properties": {
+            "command": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]},
+            "timeout": {"type": "integer"},
+            "env": {"type": "object"},
+        },
+    }
 
     def execute(self, workspace: Path, inputs: dict[str, Any]) -> ToolResult:
         policy = CommandPolicy(
@@ -88,5 +97,9 @@ class InstallDependenciesTool(Tool):
         return run_command(
             workspace,
             command,
-            policy=CommandPolicy(allow_network=bool(inputs.get("allow_network", False)), allow_destructive=True, timeout_seconds=int(inputs.get("timeout", 1200))),
+            policy=CommandPolicy(
+                allow_network=bool(inputs.get("allow_network", False)),
+                allow_destructive=bool(inputs.get("allow_destructive", False)),
+                timeout_seconds=int(inputs.get("timeout", 1200)),
+            ),
         )

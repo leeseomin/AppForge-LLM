@@ -23,6 +23,10 @@ _BLOCKED_PATTERNS = [
     re.compile(r"dd\s+[^\n]*of=/dev/", re.I),
     re.compile(r":\(\)\s*\{\s*:\|:&\s*\};:", re.I),
 ]
+_SHELL_EXECUTABLES = {"sh", "bash", "zsh", "fish", "cmd", "powershell", "pwsh"}
+_INLINE_CODE_FLAGS = {"-c", "-e"}
+_INTERPRETERS = {"node", "ruby", "perl"}
+_PYTHON_MODULE_INSTALLERS = {"pip", "pip3"}
 
 SAFE_ENV_KEYS = {
     "PATH",
@@ -54,13 +58,27 @@ def normalize_command(command: str | Sequence[str]) -> list[str]:
 
 
 def validate_command(argv: list[str], policy: CommandPolicy) -> None:
+    executable = Path(argv[0]).name.lower()
     rendered = shlex.join(argv)
     if not policy.allow_destructive:
+        if executable in _SHELL_EXECUTABLES:
+            raise PermissionError("Shell execution requires allow_destructive=true or sandbox isolation")
+        is_python = executable == "python" or executable.startswith("python")
+        is_interpreter = is_python or executable in _INTERPRETERS
+        if is_interpreter and any(arg in _INLINE_CODE_FLAGS for arg in argv[1:3]):
+            raise PermissionError("Inline interpreter execution requires allow_destructive=true or sandbox isolation")
+        if (
+            is_python
+            and len(argv) >= 4
+            and argv[1] == "-m"
+            and argv[2].lower() in _PYTHON_MODULE_INSTALLERS
+            and argv[3].lower() in {"install", "uninstall"}
+        ):
+            raise PermissionError("Python package mutation requires allow_destructive=true or sandbox isolation")
         for pattern in _BLOCKED_PATTERNS:
             if pattern.search(rendered):
                 raise PermissionError(f"Blocked potentially destructive command: {rendered}")
     if not policy.allow_network:
-        executable = Path(argv[0]).name.lower()
         network_commands = {
             "curl",
             "wget",

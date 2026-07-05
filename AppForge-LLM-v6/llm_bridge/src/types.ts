@@ -34,9 +34,11 @@ export interface ProviderConfigInput {
 
 export interface StoredProviderConfig {
   apiKey?: string
+  apiKeyRef?: string
   baseURL?: string
   defaultModel?: string
   oauth?: OAuthCredential
+  oauthRef?: string
 }
 
 export interface ProviderStatus {

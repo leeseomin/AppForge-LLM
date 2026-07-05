@@ -141,7 +141,7 @@ class WebConfig:
     prompt_max_chars: int = 20_000
     llm_bridge_url: str = DEFAULT_LLM_BRIDGE_URL
     llm_provider: str | None = None
-    llm_router: bool = False
+    llm_router: bool = True
     router_model: str | None = None
     router_timeout: int = 30
     queue_limit: int = 8
@@ -743,14 +743,35 @@ class JobManager:
                 )
                 self._mark_cancelled_locked(job, error, stage=stage)
 
-    def subscribe_events(self, job_id: str) -> queue.Queue[dict[str, Any]]:
+    def subscribe_events(
+        self,
+        job_id: str,
+        *,
+        last_event_id: int | None = None,
+    ) -> queue.Queue[dict[str, Any]]:
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
                 raise WebJobError("JOB_NOT_FOUND", "작업을 찾을 수 없습니다.", status_code=404)
             q: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=200)
             self._event_subscribers.setdefault(job_id, []).append(q)
-            q.put({"event": "snapshot", "message": "현재 작업 상태", "timestamp": utc_now(), "job": self._public_job_locked(job)})
+            if last_event_id is not None:
+                replayed = False
+                for event in job.get("events") or []:
+                    if int(event.get("id") or 0) > last_event_id:
+                        self._put_subscriber_event(q, event)
+                        replayed = True
+                if replayed:
+                    return q
+            self._put_subscriber_event(
+                q,
+                {
+                    "event": "snapshot",
+                    "message": "현재 작업 상태",
+                    "timestamp": utc_now(),
+                    "job": self._public_job_locked(job),
+                },
+            )
             return q
 
     def unsubscribe_events(self, job_id: str, subscriber: queue.Queue[dict[str, Any]]) -> None:
@@ -1635,6 +1656,17 @@ class JobManager:
     def _public_job_locked(self, job: dict[str, Any]) -> dict[str, Any]:
         public = copy.deepcopy(job)
         public.pop("archive_path", None)
+        if isinstance(public.get("error"), dict):
+            public["error"] = self._compact_error(public["error"])
+        for stage in public.get("stages") or []:
+            if isinstance(stage.get("error"), dict):
+                stage["error"] = self._compact_error(stage["error"])
+        for event in public.get("events") or []:
+            data = event.get("data")
+            if isinstance(data, dict):
+                data.pop("traceback", None)
+                data.pop("exception", None)
+                data.pop("technical", None)
         public["progress"] = self._progress(job)
         public["terminal"] = job.get("status") in TERMINAL_JOB_STATUSES
         public["queue_position"] = self._queue_position_locked(str(job.get("id") or ""))
@@ -1708,12 +1740,17 @@ class JobManager:
         )
 
     def _compact_error(self, error: dict[str, Any]) -> dict[str, Any]:
-        return {
+        compact = {
             "code": error.get("code"),
             "title": error.get("title"),
             "message": _clean_text(str(error.get("message") or ""), 1_000),
             "action": _clean_text(str(error.get("action") or ""), 1_000),
         }
+        if error.get("stage") is not None:
+            compact["stage"] = error.get("stage")
+        if error.get("attempt") is not None:
+            compact["attempt"] = error.get("attempt")
+        return compact
 
     def _exception_technical(self, exc: Exception) -> dict[str, Any]:
         return {
@@ -1854,8 +1891,12 @@ class JobManager:
         *,
         data: dict[str, Any] | None = None,
     ) -> None:
+        self._ensure_next_event_id_locked(job)
         events = job.setdefault("events", [])
+        event_id = int(job.get("next_event_id") or 1)
+        job["next_event_id"] = event_id + 1
         record = {
+            "id": event_id,
             "event": event,
             "message": _clean_text(message, 1_000),
             "timestamp": utc_now(),
@@ -1865,10 +1906,40 @@ class JobManager:
         if len(events) > MAX_EVENTS:
             del events[: len(events) - MAX_EVENTS]
         for subscriber in list(self._event_subscribers.get(str(job.get("id")), [])):
-            try:
-                subscriber.put_nowait(record)
-            except queue.Full:
-                pass
+            self._put_subscriber_event(subscriber, record)
+
+    def _ensure_next_event_id_locked(self, job: dict[str, Any]) -> None:
+        current = _safe_int(job.get("next_event_id"))
+        if current is not None and current > 0:
+            return
+        max_id = max((_safe_int(event.get("id")) or 0 for event in job.get("events") or []), default=0)
+        job["next_event_id"] = max_id + 1
+
+    def _put_subscriber_event(
+        self,
+        subscriber: queue.Queue[dict[str, Any]],
+        record: dict[str, Any],
+    ) -> None:
+        try:
+            subscriber.put_nowait(record)
+            return
+        except queue.Full:
+            pass
+        try:
+            subscriber.get_nowait()
+        except queue.Empty:
+            pass
+        gap = {
+            "id": record.get("id"),
+            "event": "event_gap",
+            "message": "일부 이벤트가 유실되어 현재 상태를 다시 불러와야 합니다.",
+            "timestamp": utc_now(),
+            "data": {"reason": "subscriber_queue_full"},
+        }
+        try:
+            subscriber.put_nowait(gap)
+        except queue.Full:
+            pass
 
     def _save_locked(self, job: dict[str, Any]) -> None:
         atomic_write_json(self.jobs_dir / f"{job['id']}.json", job)
@@ -1941,6 +2012,7 @@ class JobManager:
                     }
                     data["updated_at"] = utc_now()
                     atomic_write_json(path, data)
+            self._ensure_next_event_id_locked(data)
             self._jobs[job_id] = data
 
 

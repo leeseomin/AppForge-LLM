@@ -10,6 +10,9 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+node_modules/
+frontend/node_modules/
+llm_bridge/node_modules/
 projects/
 .env
 .env.*

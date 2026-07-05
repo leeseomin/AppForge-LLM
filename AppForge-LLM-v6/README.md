@@ -133,7 +133,7 @@ starts `llm_bridge` with Bun and writes its output to
 matching `APPFORGE_LLM_BRIDGE_HOST` and `APPFORGE_LLM_BRIDGE_PORT` values used
 by the Bun service.
 
-Open Provider Settings in the web UI to save an API key, choose a default model, test the provider, and activate it for AppForge. The browser talks only to the FastAPI `/api/llm` proxy; the bridge listens on `http://127.0.0.1:8788` by default. Provider keys are stored in the local bridge config path, or read from provider environment variables such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `OPENROUTER_API_KEY`, and `XAI_API_KEY`.
+Open Provider Settings in the web UI to save an API key, choose a default model, test the provider, and activate it for AppForge. The browser talks only to the FastAPI `/api/llm` proxy; the bridge listens on `http://127.0.0.1:8788` by default. Provider keys are stored in the local bridge config path with file permissions set to `0600`, stored as OS keychain references when `APPFORGE_LLM_SECRET_BACKEND=keychain`, or read from provider environment variables such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `OPENROUTER_API_KEY`, and `XAI_API_KEY`.
 
 The `llm-bridge-agent` driver is the default runtime path. `APPFORGE_DRIVER=auto` is treated as an alias for the same bridge-backed agent path. Other driver values, including `codex`, `claude`, and `generic`, are rejected.
 
@@ -173,6 +173,7 @@ APPFORGE_LLM_BRIDGE_HOST       bridge bind host; default 127.0.0.1
 APPFORGE_LLM_BRIDGE_PORT       bridge port; default 8788
 APPFORGE_LLM_CONFIG_DIR        provider config directory; default ~/.appforge/llm
 APPFORGE_LLM_CONFIG            provider config file path; default providers.json in config dir
+APPFORGE_LLM_SECRET_BACKEND    file or keychain; default file
 ```
 
 ## Existing CLI compatibility

@@ -1019,10 +1019,18 @@ class LLMBridgeAgentDriver(AgentDriver):
         safety = project.get("safety") if isinstance(project.get("safety"), dict) else {}
         payload = dict(arguments)
         if getattr(tool, "network_required", False):
-            payload.setdefault("allow_network", bool(safety.get("allow_network", False)))
+            payload["allow_network"] = bool(safety.get("allow_network", False))
+        else:
+            payload.pop("allow_network", None)
         if getattr(tool, "destructive", False):
-            payload.setdefault("allow_destructive", bool(safety.get("allow_destructive", False)))
-        payload.setdefault("timeout", min(self.max_tool_seconds, 120))
+            payload["allow_destructive"] = bool(safety.get("allow_destructive", False))
+        else:
+            payload.pop("allow_destructive", None)
+        try:
+            requested_timeout = int(payload.get("timeout", self.max_tool_seconds))
+        except (TypeError, ValueError):
+            requested_timeout = self.max_tool_seconds
+        payload["timeout"] = min(requested_timeout, self.max_tool_seconds, 120)
         return tool.run(layout.root, payload)
 
     def _submit_artifact(self, layout: ProjectLayout, arguments: dict[str, Any]) -> ToolResult:

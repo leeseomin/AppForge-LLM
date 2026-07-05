@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue';
 import {
   approveJob,
   buildPreview,
+  getSessionToken,
   retryJob,
   reviseJob,
 } from '../api';
@@ -56,7 +57,10 @@ const totalStages = computed(() => props.job?.stages.length || 0);
 const downloadUrl = computed(() => {
   const job = props.job;
   if (!job || job.status !== 'completed' || !job.download.available || !job.download.url) return '#';
-  return job.download.url;
+  const url = new URL(job.download.url, window.location.origin);
+  const token = getSessionToken();
+  if (token) url.searchParams.set('token', token);
+  return url.toString();
 });
 
 const downloadLabel = computed(() => {

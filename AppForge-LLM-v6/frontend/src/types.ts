@@ -53,6 +53,7 @@ export interface JobStage {
 }
 
 export interface JobEvent {
+  id?: number;
   event: string;
   message: string;
   timestamp: string;

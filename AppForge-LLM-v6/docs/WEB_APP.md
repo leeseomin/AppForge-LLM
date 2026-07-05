@@ -189,6 +189,7 @@ Returns HTTP 409 until the job completes. The path is resolved from server-owned
 - `/favicon.svg` and `/manifest.webmanifest` are served from the built frontend output.
 - Unknown non-API routes fall back to the SPA entry so browser refreshes keep working.
 - Unknown `/api/*` and missing `/assets/*` paths return 404 rather than the SPA shell.
+- The repository keeps the packaged web bundle for source checkout convenience; `make web-bundle-check` rebuilds it and fails if `appforge/resources/web` drifts from `frontend/`.
 
 ## Configuration
 
@@ -211,6 +212,7 @@ Returns HTTP 409 until the job completes. The path is resolved from server-owned
 | `APPFORGE_MODEL` | unset | Model passed to the llm-bridge drivers |
 | `APPFORGE_LLM_BRIDGE_URL` | `http://127.0.0.1:8788` | FastAPI-to-bridge URL |
 | `APPFORGE_LLM_PROVIDER` | unset | Optional provider override for the llm-bridge drivers |
+| `APPFORGE_LLM_SECRET_BACKEND` | `file` | Bridge secret storage backend: `file` or macOS `keychain` |
 | `APPFORGE_ALLOW_NETWORK` | `false` | Dependency downloads and remote audits; enable explicitly when needed |
 | `APPFORGE_ALLOW_DESTRUCTIVE` | `false` | Destructive AppForge tools; keep disabled for normal web use |
 | `APPFORGE_UNSAFE_AGENT` | `false` | Agent sandbox bypass; isolated environments only |
@@ -221,7 +223,7 @@ Returns HTTP 409 until the job completes. The path is resolved from server-owned
 
 Boolean values accept `true/false`, `1/0`, `yes/no`, or `on/off`.
 
-The bridge process also accepts `APPFORGE_LLM_BRIDGE_HOST`, `APPFORGE_LLM_BRIDGE_PORT`, `APPFORGE_LLM_CONFIG_DIR`, and `APPFORGE_LLM_CONFIG`. Provider keys may be stored through the UI or supplied through provider-specific variables such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `OPENROUTER_API_KEY`, and `XAI_API_KEY`.
+The bridge process also accepts `APPFORGE_LLM_BRIDGE_HOST`, `APPFORGE_LLM_BRIDGE_PORT`, `APPFORGE_LLM_CONFIG_DIR`, `APPFORGE_LLM_CONFIG`, and `APPFORGE_LLM_SECRET_BACKEND`. Provider keys may be stored through the UI or supplied through provider-specific variables such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `OPENROUTER_API_KEY`, and `XAI_API_KEY`. The default secret backend is `file`, which writes the local JSON config with `0600` permissions. Set `APPFORGE_LLM_SECRET_BACKEND=keychain` on macOS to store provider API keys and OAuth credentials in the OS keychain while keeping only `keychain:` references in JSON.
 
 ## Session shutdown
 
@@ -266,10 +268,14 @@ Completed jobs remain downloadable while their archive exists. If the archive is
 
 - Default binding is `127.0.0.1`.
 - No CORS policy is enabled.
+- Requests with non-loopback `Host` headers are rejected to reduce DNS rebinding risk.
+- `/api/health` remains public for local readiness checks; other `/api/*` routes require the session token issued in the launch URL.
+- Unsafe methods reject non-local `Origin` or `Referer` values. The Vue client stores the launch token in `sessionStorage`, sends it as `X-AppForge-Token`, and uses query tokens only for SSE and ZIP downloads where browser APIs cannot attach custom headers.
 - The browser uses FastAPI `/api/llm` routes for provider settings; direct browser-to-bridge CORS access is not required.
 - The bridge defaults to loopback `127.0.0.1:8788`; exposing it on a shared interface requires external host and network controls.
 - API and page responses use `Cache-Control: no-store`.
 - Responses include restrictive CSP, frame, referrer, MIME, and permissions headers.
+- Generated app previews are served with CSP `sandbox`, no same-origin iframe permission, and `connect-src 'none'` for direct `/preview/` access.
 - The Vue client renders dynamic text through normal template escaping, not HTML injection.
 - Download paths are never accepted from clients.
 - The archive tool excludes secrets, VCS state, dependencies, caches, and `.appforge/` runtime files.

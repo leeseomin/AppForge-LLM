@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import queue
 import re
 import subprocess
 import sys
@@ -14,7 +15,10 @@ from appforge import llm_bridge
 from appforge.drivers import AgentDriver
 from appforge.models import DriverResult
 from appforge.web import create_app
-from appforge.web_jobs import WebConfig
+from appforge.web_jobs import JobManager, WebConfig
+
+
+SESSION_TOKEN = "test-token"
 
 
 class _FakeBridgeManager:
@@ -48,11 +52,63 @@ def _fixture_config(tmp_path: Path) -> WebConfig:
     )
 
 
+def _client(app, *, raise_server_exceptions: bool = True) -> TestClient:  # type: ignore[no-untyped-def]
+    return TestClient(
+        app,
+        base_url="http://127.0.0.1",
+        headers={"X-AppForge-Token": SESSION_TOKEN},
+        raise_server_exceptions=raise_server_exceptions,
+    )
+
+
+def _minimal_job(job_id: str, *, status: str = "running") -> dict:
+    now = "2026-07-05T00:00:00Z"
+    return {
+        "id": job_id,
+        "version": "2.0",
+        "prompt": "테스트 앱",
+        "status": status,
+        "message": "테스트 중",
+        "created_at": now,
+        "updated_at": now,
+        "started_at": now,
+        "completed_at": now if status in {"completed", "failed", "cancelled"} else None,
+        "pipeline": None,
+        "pipeline_description": None,
+        "driver": None,
+        "project_name": None,
+        "project_path": None,
+        "active_stage": None,
+        "stages": [],
+        "events": [],
+        "error": None,
+        "archive_path": None,
+        "download": {
+            "available": False,
+            "url": None,
+            "filename": None,
+            "size_bytes": None,
+        },
+        "preview": {
+            "available": False,
+            "url": None,
+            "path": None,
+            "built_at": None,
+        },
+    }
+
+
 def test_web_config_defaults_disable_network(monkeypatch) -> None:
     monkeypatch.delenv("APPFORGE_ALLOW_NETWORK", raising=False)
 
     assert WebConfig().allow_network is False
     assert WebConfig.from_env().allow_network is False
+
+
+def test_web_config_llm_router_default_matches_env(monkeypatch) -> None:
+    monkeypatch.delenv("APPFORGE_LLM_ROUTER", raising=False)
+
+    assert WebConfig().llm_router is WebConfig.from_env().llm_router
 
 
 def _mock_ready_bridge(
@@ -184,8 +240,12 @@ def _wait_until_job(client: TestClient, job_id: str, predicate, timeout: float =
 
 def test_minimal_web_ui_and_health(tmp_path: Path, monkeypatch) -> None:
     _mock_ready_bridge(monkeypatch)
-    app = create_app(_fixture_config(tmp_path), llm_bridge_manager=_FakeBridgeManager())
-    with TestClient(app) as client:
+    app = create_app(
+        _fixture_config(tmp_path),
+        llm_bridge_manager=_FakeBridgeManager(),
+        session_token=SESSION_TOKEN,
+    )
+    with _client(app) as client:
         page = client.get("/")
         assert page.status_code == 200
         assert "AppForge-LLM v6" in page.text
@@ -222,8 +282,12 @@ def test_minimal_web_ui_and_health(tmp_path: Path, monkeypatch) -> None:
 def test_web_job_runs_all_stages_and_enables_zip_download(tmp_path: Path, monkeypatch) -> None:
     _mock_ready_bridge(monkeypatch)
     monkeypatch.setattr("appforge.web_jobs.create_driver", lambda *args, **kwargs: FixtureScriptDriver())
-    app = create_app(_fixture_config(tmp_path), llm_bridge_manager=_FakeBridgeManager())
-    with TestClient(app) as client:
+    app = create_app(
+        _fixture_config(tmp_path),
+        llm_bridge_manager=_FakeBridgeManager(),
+        session_token=SESSION_TOKEN,
+    )
+    with _client(app) as client:
         created = client.post(
             "/api/jobs",
             json={
@@ -259,8 +323,8 @@ def test_web_job_cancel_stops_active_driver(tmp_path: Path, monkeypatch) -> None
     driver = BlockingDriver()
     monkeypatch.setattr("appforge.web_jobs.create_driver", lambda *args, **kwargs: driver)
     config = _fixture_config(tmp_path)
-    app = create_app(config, llm_bridge_manager=_FakeBridgeManager())
-    with TestClient(app) as client:
+    app = create_app(config, llm_bridge_manager=_FakeBridgeManager(), session_token=SESSION_TOKEN)
+    with _client(app) as client:
         created = client.post("/api/jobs", json={"prompt": "취소 가능한 간단한 웹앱을 만들어라"})
         assert created.status_code == 202, created.text
         job_id = created.json()["id"]
@@ -292,8 +356,9 @@ def test_session_end_shuts_down_managers_and_schedules_process_stop(tmp_path: Pa
         _fixture_config(tmp_path),
         llm_bridge_manager=bridge_manager,
         shutdown_callback=lambda: callbacks.append("stop"),
+        session_token=SESSION_TOKEN,
     )
-    with TestClient(app) as client:
+    with _client(app) as client:
         response = client.post("/api/session/end")
         assert response.status_code == 200, response.text
         payload = response.json()
@@ -305,6 +370,51 @@ def test_session_end_shuts_down_managers_and_schedules_process_stop(tmp_path: Pa
         while time.monotonic() < deadline and not callbacks:
             time.sleep(0.02)
         assert callbacks == ["stop"]
+
+
+def test_mutating_api_requires_session_token(tmp_path: Path) -> None:
+    app = create_app(
+        _fixture_config(tmp_path),
+        llm_bridge_manager=_FakeBridgeManager(),
+        session_token=SESSION_TOKEN,
+    )
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        response = client.post("/api/session/end")
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "INVALID_SESSION_TOKEN"
+
+
+def test_rejects_non_loopback_host(tmp_path: Path) -> None:
+    app = create_app(
+        _fixture_config(tmp_path),
+        llm_bridge_manager=_FakeBridgeManager(),
+        session_token=SESSION_TOKEN,
+    )
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        response = client.get("/api/health", headers={"host": "attacker.test"})
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "FORBIDDEN_HOST"
+
+
+def test_rejects_cross_origin_post(tmp_path: Path) -> None:
+    app = create_app(
+        _fixture_config(tmp_path),
+        llm_bridge_manager=_FakeBridgeManager(),
+        session_token=SESSION_TOKEN,
+    )
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        response = client.post(
+            "/api/session/end",
+            headers={
+                "origin": "https://evil.example",
+                "X-AppForge-Token": SESSION_TOKEN,
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "FORBIDDEN_ORIGIN"
 
 
 def test_web_job_returns_detailed_llm_setup_error(tmp_path: Path, monkeypatch) -> None:
@@ -335,8 +445,8 @@ def test_web_job_returns_detailed_llm_setup_error(tmp_path: Path, monkeypatch) -
         max_stage_attempts=1,
         stage_timeout=60,
     )
-    app = create_app(config, llm_bridge_manager=_FakeBridgeManager())
-    with TestClient(app) as client:
+    app = create_app(config, llm_bridge_manager=_FakeBridgeManager(), session_token=SESSION_TOKEN)
+    with _client(app) as client:
         health = client.get("/api/health").json()
         assert health["ready"] is False
         assert health["driver"]["action"]
@@ -349,7 +459,7 @@ def test_web_job_returns_detailed_llm_setup_error(tmp_path: Path, monkeypatch) -
         assert job["error"]["title"]
         assert job["error"]["message"]
         assert job["error"]["action"]
-        assert job["error"]["technical"]["driver"]["ready"] is False
+        assert "technical" not in job["error"]
         assert job["download"]["available"] is False
 
 
@@ -357,8 +467,8 @@ def test_web_job_preserves_driver_exit_code_and_stage_details(tmp_path: Path, mo
     _mock_ready_bridge(monkeypatch)
     monkeypatch.setattr("appforge.web_jobs.create_driver", lambda *args, **kwargs: ExitCodeDriver())
     config = _fixture_config(tmp_path)
-    app = create_app(config, llm_bridge_manager=_FakeBridgeManager())
-    with TestClient(app) as client:
+    app = create_app(config, llm_bridge_manager=_FakeBridgeManager(), session_token=SESSION_TOKEN)
+    with _client(app) as client:
         created = client.post("/api/jobs", json={"prompt": "간단한 웹앱을 만들어라"})
         assert created.status_code == 202
         job = _wait_for_terminal(client, created.json()["id"], timeout=10)
@@ -367,8 +477,7 @@ def test_web_job_preserves_driver_exit_code_and_stage_details(tmp_path: Path, mo
         assert error["code"] == "AGENT_PROCESS_FAILED"
         assert error["stage"] == "intake"
         assert error["attempt"] == 1
-        assert error["technical"]["driver"]["exit_code"] == 7
-        assert error["technical"]["failed_checks"]
+        assert "technical" not in error
         assert error["action"]
 
 
@@ -395,8 +504,8 @@ def test_llm_bridge_health_requires_configured_active_provider(tmp_path: Path, m
         driver="llm-bridge",
         llm_bridge_url="http://bridge.test",
     )
-    app = create_app(config, llm_bridge_manager=_FakeBridgeManager())
-    with TestClient(app) as client:
+    app = create_app(config, llm_bridge_manager=_FakeBridgeManager(), session_token=SESSION_TOKEN)
+    with _client(app) as client:
         health = client.get("/api/health").json()
         assert health["ready"] is False
         assert health["driver"]["selected"] is None
@@ -442,8 +551,8 @@ def test_auto_driver_prefers_configured_llm_bridge(tmp_path: Path, monkeypatch) 
         driver="auto",
         llm_bridge_url="http://bridge.test",
     )
-    app = create_app(config, llm_bridge_manager=_FakeBridgeManager())
-    with TestClient(app) as client:
+    app = create_app(config, llm_bridge_manager=_FakeBridgeManager(), session_token=SESSION_TOKEN)
+    with _client(app) as client:
         health = client.get("/api/health").json()
 
     assert health["ready"] is True
@@ -460,8 +569,8 @@ def test_cli_or_command_driver_is_not_available_in_web_app(tmp_path: Path) -> No
             data_dir=tmp_path / f"web-state-{driver}",
             driver=driver,
         )
-        app = create_app(config)
-        with TestClient(app) as client:
+        app = create_app(config, session_token=SESSION_TOKEN)
+        with _client(app) as client:
             health = client.get("/api/health").json()
 
         assert health["ready"] is False
@@ -475,8 +584,8 @@ def test_codex_driver_uses_removed_label(tmp_path: Path) -> None:
         data_dir=tmp_path / "web-state",
         driver="codex",
     )
-    app = create_app(config)
-    with TestClient(app) as client:
+    app = create_app(config, session_token=SESSION_TOKEN)
+    with _client(app) as client:
         health = client.get("/api/health").json()
 
     assert health["ready"] is False
@@ -555,8 +664,8 @@ def test_llm_provider_api_proxies_to_bridge(tmp_path: Path, monkeypatch) -> None
         data_dir=tmp_path / "web-state",
         llm_bridge_url="http://bridge.test",
     )
-    app = create_app(config)
-    with TestClient(app) as client:
+    app = create_app(config, session_token=SESSION_TOKEN)
+    with _client(app) as client:
         assert client.get("/api/llm/providers").json()["providers"][0]["id"] == "openai"
         assert client.get("/api/llm/providers/openai/models").json()["models"][0]["id"] == "gpt-4o-mini"
         saved = client.put(
@@ -609,8 +718,8 @@ def test_llm_provider_api_autostarts_local_bridge_and_retries(tmp_path: Path, mo
         data_dir=tmp_path / "web-state",
         llm_bridge_url="http://127.0.0.1:8788",
     )
-    app = create_app(config, llm_bridge_manager=bridge_manager)
-    with TestClient(app) as client:
+    app = create_app(config, llm_bridge_manager=bridge_manager, session_token=SESSION_TOKEN)
+    with _client(app) as client:
         response = client.get("/api/llm/providers")
 
     assert response.status_code == 200, response.text
@@ -647,8 +756,8 @@ def test_llm_provider_api_reports_bridge_autostart_guidance(tmp_path: Path, monk
         data_dir=tmp_path / "web-state",
         llm_bridge_url="http://127.0.0.1:8788",
     )
-    app = create_app(config, llm_bridge_manager=bridge_manager)
-    with TestClient(app) as client:
+    app = create_app(config, llm_bridge_manager=bridge_manager, session_token=SESSION_TOKEN)
+    with _client(app) as client:
         response = client.get("/api/llm/providers")
 
     assert response.status_code == 502
@@ -680,10 +789,167 @@ def test_llm_provider_api_does_not_autostart_bridge_http_errors(
         data_dir=tmp_path / "web-state",
         llm_bridge_url="http://127.0.0.1:8788",
     )
-    app = create_app(config, llm_bridge_manager=bridge_manager)
-    with TestClient(app) as client:
+    app = create_app(config, llm_bridge_manager=bridge_manager, session_token=SESSION_TOKEN)
+    with _client(app) as client:
         response = client.get("/api/llm/providers/missing/models")
 
     assert response.status_code == 404
     assert response.json()["error"]["message"] == "Unknown provider 'missing'"
     assert bridge_manager.ensure_calls == []
+
+
+def test_unexpected_error_response_is_generic(tmp_path: Path) -> None:
+    config = _fixture_config(tmp_path)
+    manager = JobManager(config)
+
+    def broken_health() -> dict:
+        raise ValueError("secret traceback /Users/lee/private/project.py")
+
+    manager.health = broken_health  # type: ignore[method-assign]
+    app = create_app(
+        config,
+        manager=manager,
+        llm_bridge_manager=_FakeBridgeManager(),
+        session_token=SESSION_TOKEN,
+    )
+    with _client(app, raise_server_exceptions=False) as client:
+        response = client.get("/api/health")
+
+    assert response.status_code == 500
+    assert "ValueError" not in response.text
+    assert "/Users/lee" not in response.text
+    assert "secret traceback" not in response.text
+    assert response.json()["error"]["code"] == "INTERNAL_SERVER_ERROR"
+
+
+def test_public_job_error_excludes_technical_traceback(tmp_path: Path) -> None:
+    config = _fixture_config(tmp_path)
+    manager = JobManager(config)
+    job = _minimal_job("redacted-job", status="failed")
+    job["error"] = {
+        "code": "UNEXPECTED_ERROR",
+        "title": "실패",
+        "message": "요청 실패",
+        "action": "다시 시도하세요.",
+        "technical": {
+            "traceback": "Traceback at /Users/lee/private/project.py",
+            "exception": "ValueError: secret",
+        },
+    }
+    job["stages"] = [
+        {
+            "id": "implementation",
+            "status": "failed",
+            "error": {
+                "code": "STAGE_FAILED",
+                "title": "단계 실패",
+                "message": "단계 실패",
+                "action": "확인하세요.",
+                "technical": {"traceback": "Traceback"},
+            },
+        }
+    ]
+    job["events"] = [
+        {
+            "event": "job_failed",
+            "message": "실패",
+            "timestamp": "2026-07-05T00:00:00Z",
+            "data": {
+                "traceback": "Traceback",
+                "exception": "ValueError",
+                "technical": {"path": "/Users/lee/private/project.py"},
+            },
+        }
+    ]
+    with manager._lock:
+        manager._jobs[str(job["id"])] = job
+
+    app = create_app(
+        config,
+        manager=manager,
+        llm_bridge_manager=_FakeBridgeManager(),
+        session_token=SESSION_TOKEN,
+    )
+    with _client(app) as client:
+        response = client.get(f"/api/jobs/{job['id']}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "technical" not in payload["error"]
+    assert "technical" not in payload["stages"][0]["error"]
+    rendered = str(payload)
+    assert "Traceback" not in rendered
+    assert "ValueError" not in rendered
+    assert "/Users/lee" not in rendered
+
+
+def test_job_event_subscription_replays_after_last_event_id(tmp_path: Path) -> None:
+    manager = JobManager(_fixture_config(tmp_path))
+    job = _minimal_job("event-job")
+    with manager._lock:
+        manager._jobs[str(job["id"])] = job
+        manager._record_event_locked(job, "stage_started", "첫 이벤트")
+        manager._record_event_locked(job, "job_completed", "완료")
+
+    subscriber = manager.subscribe_events(str(job["id"]), last_event_id=1)
+    try:
+        item = subscriber.get_nowait()
+    finally:
+        manager.unsubscribe_events(str(job["id"]), subscriber)
+
+    assert item["id"] == 2
+    assert item["event"] == "job_completed"
+
+
+def test_subscriber_queue_full_emits_gap_event(tmp_path: Path) -> None:
+    manager = JobManager(_fixture_config(tmp_path))
+    subscriber: queue.Queue[dict] = queue.Queue(maxsize=1)
+
+    manager._put_subscriber_event(
+        subscriber,
+        {"id": 1, "event": "stage_started", "message": "첫 이벤트", "timestamp": "now"},
+    )
+    manager._put_subscriber_event(
+        subscriber,
+        {"id": 2, "event": "stage_completed", "message": "두 번째 이벤트", "timestamp": "now"},
+    )
+
+    item = subscriber.get_nowait()
+    assert item["event"] == "event_gap"
+    assert item["id"] == 2
+    assert item["data"]["reason"] == "subscriber_queue_full"
+
+
+def test_preview_response_uses_sandbox_csp(tmp_path: Path) -> None:
+    config = _fixture_config(tmp_path)
+    manager = JobManager(config)
+    preview_root = tmp_path / "preview"
+    preview_root.mkdir()
+    (preview_root / "index.html").write_text(
+        "<script>fetch('/api/health')</script>",
+        encoding="utf-8",
+    )
+    job = _minimal_job("preview-job", status="completed")
+    job["preview"] = {
+        "available": True,
+        "url": "/preview/preview-job/",
+        "path": str(preview_root),
+        "built_at": "2026-07-05T00:00:00Z",
+    }
+    with manager._lock:
+        manager._jobs[str(job["id"])] = job
+
+    app = create_app(
+        config,
+        manager=manager,
+        llm_bridge_manager=_FakeBridgeManager(),
+        session_token=SESSION_TOKEN,
+    )
+    with _client(app) as client:
+        response = client.get("/preview/preview-job/")
+
+    assert response.status_code == 200
+    csp = response.headers["content-security-policy"]
+    assert "sandbox allow-scripts allow-forms" in csp
+    assert "connect-src 'none'" in csp
+    assert "unsafe-eval" not in csp
