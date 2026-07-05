@@ -1,0 +1,617 @@
+import * as registry from "./registry"
+import * as store from "./config"
+import * as catalog from "./catalog"
+import * as oauth from "./oauth"
+import { BridgeLLMCancelled, BridgeLLMError, generate, runOnce, stream, type StreamEvent } from "./llm"
+import { VERSION } from "./version"
+import type {
+  ActiveSelection,
+  AgentToolDefinition,
+  ChatMessageInput,
+  GenerateRequest,
+  GenerationOptions,
+  ProviderStatus,
+  TestRequest,
+  TestResponse,
+} from "./types"
+
+const PORT = Number(process.env.PORT || process.env.APPFORGE_LLM_BRIDGE_PORT || 8788)
+const HOST = process.env.HOST || process.env.APPFORGE_LLM_BRIDGE_HOST || "127.0.0.1"
+
+type Handler = (request: Request, match: RegExpMatchArray) => Promise<Response> | Response
+
+interface Route {
+  method: string
+  pattern: RegExp
+  handler: Handler
+}
+
+const ROUTES: Route[] = [
+  { method: "GET", pattern: /^\/health\/?$/, handler: health },
+  { method: "GET", pattern: /^\/providers\/?$/, handler: listProviders },
+  { method: "POST", pattern: /^\/catalog\/refresh\/?$/, handler: refreshCatalog },
+  { method: "PUT", pattern: /^\/providers\/([^/]+)\/?$/, handler: upsertProvider },
+  { method: "DELETE", pattern: /^\/providers\/([^/]+)\/?$/, handler: removeProvider },
+  { method: "GET", pattern: /^\/providers\/([^/]+)\/models\/?$/, handler: providerModels },
+  { method: "POST", pattern: /^\/providers\/([^/]+)\/test\/?$/, handler: testProvider },
+  { method: "GET", pattern: /^\/active\/?$/, handler: getActive },
+  { method: "PUT", pattern: /^\/active\/?$/, handler: setActive },
+  { method: "POST", pattern: /^\/generate\/?$/, handler: generateHandler },
+  { method: "POST", pattern: /^\/stream\/?$/, handler: streamHandler },
+  { method: "POST", pattern: /^\/agent\/start\/?$/, handler: agentStart },
+  { method: "GET", pattern: /^\/agent\/([^/]+)\/events\/?$/, handler: agentEvents },
+  { method: "POST", pattern: /^\/agent\/([^/]+)\/tool_result\/?$/, handler: agentToolResult },
+  { method: "DELETE", pattern: /^\/agent\/([^/]+)\/?$/, handler: agentDelete },
+  { method: "GET", pattern: /^\/oauth\/providers\/?$/, handler: oauthProviders },
+  { method: "POST", pattern: /^\/oauth\/start\/?$/, handler: oauthStart },
+  { method: "GET", pattern: /^\/oauth\/poll\/([^/]+)\/([^/]+)\/?$/, handler: oauthPoll },
+  { method: "POST", pattern: /^\/oauth\/refresh\/([^/]+)\/?$/, handler: oauthRefresh },
+]
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  })
+}
+
+function errorResponse(message: string, status = 400, code = "BRIDGE_ERROR"): Response {
+  return json({ error: { code, message } }, status)
+}
+
+function cors(response: Response): Response {
+  response.headers.set("access-control-allow-methods", "GET, POST, PUT, DELETE, OPTIONS")
+  response.headers.set("access-control-allow-headers", "content-type, authorization")
+  response.headers.set("vary", "origin")
+  return response
+}
+
+async function readJsonBody(request: Request): Promise<Record<string, unknown>> {
+  if (!request.body) return {}
+  const text = await request.text()
+  if (!text) return {}
+  try {
+    const parsed = JSON.parse(text)
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {}
+  } catch {
+    throw new BridgeHttpError("Invalid JSON body", 400, "INVALID_JSON")
+  }
+}
+
+export class BridgeHttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string,
+  ) {
+    super(message)
+    this.name = "BridgeHttpError"
+  }
+}
+
+interface AgentToolResultEnvelope {
+  result: unknown
+  is_error: boolean
+}
+
+interface PendingToolResult {
+  name: string
+  resolve: (value: AgentToolResultEnvelope) => void
+  reject: (error: Error) => void
+  timeout: ReturnType<typeof setTimeout>
+}
+
+interface AgentSession {
+  id: string
+  createdAt: number
+  system?: string
+  provider?: string
+  model?: string
+  generation?: GenerationOptions
+  responseFormat?: Record<string, unknown>
+  tools: AgentToolDefinition[]
+  messages: ChatMessageInput[]
+  pending: Map<string, PendingToolResult>
+  closed: boolean
+}
+
+const AGENT_SESSION_TTL_MS = 30 * 60 * 1000
+const AGENT_MAX_TURNS = 80
+const agentSessions = new Map<string, AgentSession>()
+
+function randomSessionId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID()
+  return `agent_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
+}
+
+function getAgentSession(id: string): AgentSession | undefined {
+  const session = agentSessions.get(id)
+  if (!session) return undefined
+  if (session.closed || Date.now() - session.createdAt > AGENT_SESSION_TTL_MS) {
+    closeAgentSession(session)
+    return undefined
+  }
+  return session
+}
+
+function closeAgentSession(session: AgentSession): void {
+  session.closed = true
+  agentSessions.delete(session.id)
+  for (const pending of session.pending.values()) {
+    clearTimeout(pending.timeout)
+    pending.reject(new Error("Agent session was closed before the tool result arrived."))
+  }
+  session.pending.clear()
+}
+
+function waitForToolResult(session: AgentSession, callId: string, name: string, signal: AbortSignal): Promise<AgentToolResultEnvelope> {
+  if (signal.aborted) return Promise.reject(new BridgeLLMCancelled())
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      signal.removeEventListener("abort", onAbort)
+      session.pending.delete(callId)
+      clearTimeout(timeout)
+    }
+    const onAbort = () => {
+      cleanup()
+      reject(new BridgeLLMCancelled())
+    }
+    const timeout = setTimeout(() => {
+      cleanup()
+      reject(new Error(`Timed out waiting for tool result '${name}' (${callId}).`))
+    }, AGENT_SESSION_TTL_MS)
+    session.pending.set(callId, {
+      name,
+      resolve: (value) => {
+        cleanup()
+        resolve(value)
+      },
+      reject: (error) => {
+        cleanup()
+        reject(error)
+      },
+      timeout,
+    })
+    signal.addEventListener("abort", onAbort, { once: true })
+  })
+}
+
+function asToolDefinitions(value: unknown): AgentToolDefinition[] {
+  if (!Array.isArray(value)) return []
+  const out: AgentToolDefinition[] = []
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue
+    const raw = item as Record<string, unknown>
+    if (typeof raw.name !== "string" || !raw.name) continue
+    out.push({
+      name: raw.name,
+      description: typeof raw.description === "string" ? raw.description : raw.name,
+      parameters: raw.parameters && typeof raw.parameters === "object" ? (raw.parameters as Record<string, unknown>) : { type: "object" },
+    })
+  }
+  return out
+}
+
+function toolResultPart(call: { id: string; name: string }, envelope: AgentToolResultEnvelope) {
+  return {
+    type: "tool-result",
+    id: call.id,
+    name: call.name,
+    result: {
+      type: envelope.is_error ? "error" : "text",
+      value: typeof envelope.result === "string" ? envelope.result : JSON.stringify(envelope.result),
+    },
+  }
+}
+
+
+async function health(): Promise<Response> {
+  const active = await store.getActive()
+  return cors(
+    json({
+      ok: true,
+      service: "appforge-llm-bridge",
+      version: VERSION,
+      config_path: store.configPath(),
+      catalog_path: catalog.catalogPath(),
+      catalog_loaded: registry.isCatalogLoaded(),
+      active,
+    }),
+  )
+}
+
+async function listProviders(request: Request): Promise<Response> {
+  const url = new URL(request.url)
+  const includeModels = url.searchParams.get("include_models") === "true"
+  const config = await store.load()
+  const entries = await registry.list()
+  const statuses: ProviderStatus[] = entries.map((entry) =>
+    registry.statusOf(entry, config.providers[entry.id], { includeModels }),
+  )
+  return cors(json({ providers: statuses }))
+}
+
+async function refreshCatalog(): Promise<Response> {
+  const loaded = await registry.refreshCatalog()
+  return cors(json({ ok: loaded, catalog_loaded: loaded, catalog_path: catalog.catalogPath() }))
+}
+
+function decodeParam(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
+async function providerModels(_request: Request, match: RegExpMatchArray): Promise<Response> {
+  const id = decodeParam(match[1] ?? "")
+  const entry = await registry.get(id)
+  if (!entry) return cors(errorResponse(`Unknown provider '${id}'`, 404, "UNKNOWN_PROVIDER"))
+  return cors(json({ id, name: entry.name, models: entry.models }))
+}
+
+async function upsertProvider(request: Request, match: RegExpMatchArray): Promise<Response> {
+  const id = decodeParam(match[1] ?? "")
+  const entry = await registry.get(id)
+  if (!entry) return cors(errorResponse(`Unknown provider '${id}'`, 404, "UNKNOWN_PROVIDER"))
+  const body = await readJsonBody(request)
+  await store.setProvider(id, {
+    apiKey: typeof body.apiKey === "string" ? body.apiKey : null,
+    baseURL: typeof body.baseURL === "string" ? body.baseURL : null,
+    defaultModel: typeof body.defaultModel === "string" ? body.defaultModel : null,
+  })
+  const config = await store.load()
+  return cors(json({ status: registry.statusOf(entry, config.providers[id]) }))
+}
+
+async function removeProvider(_request: Request, match: RegExpMatchArray): Promise<Response> {
+  const id = decodeParam(match[1] ?? "")
+  await store.deleteProvider(id)
+  return cors(json({ ok: true, id }))
+}
+
+async function getActive(): Promise<Response> {
+  return cors(json(await store.getActive()))
+}
+
+async function setActive(request: Request): Promise<Response> {
+  const body = await readJsonBody(request)
+  const selection: ActiveSelection = {
+    provider: typeof body.provider === "string" ? body.provider : null,
+    model: typeof body.model === "string" ? body.model : null,
+  }
+  if (selection.provider && !(await registry.get(selection.provider))) {
+    return cors(errorResponse(`Unknown provider '${selection.provider}'`, 404, "UNKNOWN_PROVIDER"))
+  }
+  const result = await store.setActive(selection)
+  return cors(json(result))
+}
+
+async function testProvider(request: Request, match: RegExpMatchArray): Promise<Response> {
+  const id = decodeParam(match[1] ?? "")
+  const entry = await registry.get(id)
+  if (!entry) return cors(errorResponse(`Unknown provider '${id}'`, 404, "UNKNOWN_PROVIDER"))
+  const body = await readJsonBody(request)
+  const payload = body as unknown as TestRequest
+  const stored = await store.getProvider(id)
+  const tempConfig = {
+    apiKey: payload.apiKey ?? stored?.apiKey,
+    baseURL: payload.baseURL ?? stored?.baseURL,
+    defaultModel: stored?.defaultModel,
+  }
+  let resolved
+  try {
+    resolved = await registry.resolveForGeneration(id, payload.model, tempConfig)
+  } catch (error) {
+    const out: TestResponse = { ok: false, error: error instanceof Error ? error.message : String(error) }
+    return cors(json(out))
+  }
+  try {
+    const result = await runOnce({
+      model: resolved.model,
+      system: "You are a connection test. Reply concisely.",
+      prompt: "Reply with the single word: ok",
+      generation: { maxTokens: 16, temperature: 0 },
+    })
+    const out: TestResponse = { ok: true, text: result.text.trim(), provider: id, model: resolved.modelId }
+    return cors(json(out))
+  } catch (error) {
+    const message = error instanceof BridgeLLMError ? error.message : error instanceof Error ? error.message : String(error)
+    const out: TestResponse = { ok: false, error: message, provider: id, model: resolved.modelId }
+    return cors(json(out))
+  }
+}
+
+async function generateHandler(request: Request): Promise<Response> {
+  const body = await readJsonBody(request)
+  const payload = body as unknown as GenerateRequest
+  if (!payload || typeof payload.prompt !== "string" || payload.prompt.length === 0) {
+    return cors(errorResponse("`prompt` is required", 422, "INVALID_REQUEST"))
+  }
+  try {
+    const result = await generate(payload, { signal: request.signal })
+    return cors(json(result))
+  } catch (error) {
+    if (error instanceof BridgeLLMCancelled) {
+      return cors(errorResponse(error.message, 499, "LLM_CANCELLED"))
+    }
+    const message = error instanceof Error ? error.message : String(error)
+    const status = error instanceof BridgeLLMError ? 502 : 400
+    return cors(errorResponse(message, status, "LLM_ERROR"))
+  }
+}
+
+async function streamHandler(request: Request): Promise<Response> {
+  const body = await readJsonBody(request)
+  const payload = body as unknown as GenerateRequest
+  if (!payload || typeof payload.prompt !== "string" || payload.prompt.length === 0) {
+    return cors(errorResponse("`prompt` is required", 422, "INVALID_REQUEST"))
+  }
+
+  const headers = new Headers({
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+  })
+  const streamBody = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const encoder = new TextEncoder()
+      const send = (event: string, data: unknown) => {
+        controller.enqueue(encoder.encode(`event: ${event}\n`))
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
+      }
+      try {
+        const meta = await stream(payload, (event: StreamEvent) => {
+          send(event.type, event)
+        }, { signal: request.signal })
+        send("done", meta)
+      } catch (error) {
+        if (error instanceof BridgeLLMCancelled) {
+          send("cancelled", { message: error.message })
+          return
+        }
+        const message = error instanceof Error ? error.message : String(error)
+        send("error", { message })
+      } finally {
+        controller.close()
+      }
+    },
+  })
+  return new Response(streamBody, { status: 200, headers })
+}
+
+async function agentStart(request: Request): Promise<Response> {
+  const body = await readJsonBody(request)
+  const prompt = typeof body.prompt === "string" ? body.prompt : ""
+  if (!prompt) return cors(errorResponse("`prompt` is required", 422, "INVALID_REQUEST"))
+  const id = randomSessionId()
+  const session: AgentSession = {
+    id,
+    createdAt: Date.now(),
+    system: typeof body.system === "string" ? body.system : undefined,
+    provider: typeof body.provider === "string" ? body.provider : undefined,
+    model: typeof body.model === "string" ? body.model : undefined,
+    generation: body.generation && typeof body.generation === "object" ? (body.generation as GenerationOptions) : undefined,
+    responseFormat: body.responseFormat && typeof body.responseFormat === "object" ? (body.responseFormat as Record<string, unknown>) : undefined,
+    tools: asToolDefinitions(body.tools),
+    messages: [{ role: "user", content: prompt }],
+    pending: new Map(),
+    closed: false,
+  }
+  agentSessions.set(id, session)
+  return cors(json({ session_id: id, id, tools: session.tools.map((tool) => tool.name) }))
+}
+
+async function agentEvents(request: Request, match: RegExpMatchArray): Promise<Response> {
+  const id = decodeParam(match[1] ?? "")
+  const session = getAgentSession(id)
+  if (!session) return cors(errorResponse(`Unknown agent session '${id}'`, 404, "UNKNOWN_AGENT_SESSION"))
+  const headers = new Headers({
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+  })
+  const streamBody = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const encoder = new TextEncoder()
+      const send = (event: string, data: unknown) => {
+        controller.enqueue(encoder.encode(`event: ${event}\n`))
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
+      }
+      try {
+        await runAgentSession(session, send, request.signal)
+      } catch (error) {
+        if (error instanceof BridgeLLMCancelled) {
+          send("cancelled", { type: "cancelled", message: error.message })
+          return
+        }
+        const message = error instanceof Error ? error.message : String(error)
+        send("error", { type: "error", message })
+      } finally {
+        controller.close()
+      }
+    },
+  })
+  return new Response(streamBody, { status: 200, headers })
+}
+
+async function runAgentSession(
+  session: AgentSession,
+  send: (event: string, data: unknown) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  let turns = 0
+  while (!session.closed) {
+    if (signal.aborted) throw new BridgeLLMCancelled()
+    const textParts: string[] = []
+    const toolCalls: Array<{ id: string; name: string; input: unknown }> = []
+    let finishReason = "stop"
+    let usage: Record<string, unknown> = {}
+    const req: GenerateRequest = {
+      provider: session.provider,
+      model: session.model,
+      system: session.system,
+      messages: session.messages,
+      tools: session.tools,
+      toolChoice: session.tools.length > 0 ? "auto" : "none",
+      generation: session.generation,
+      responseFormat: session.responseFormat,
+    }
+    await stream(req, (event: StreamEvent) => {
+      if (event.type === "text-delta" && typeof event.text === "string") {
+        textParts.push(event.text)
+        send("text_delta", { type: "text_delta", text: event.text })
+        return
+      }
+      if (event.type === "tool-call") {
+        const id = String(event.call_id || event.id || "")
+        const name = String(event.name || "")
+        const input = event.arguments ?? event.input ?? {}
+        if (!id || !name) return
+        toolCalls.push({ id, name, input })
+        send("tool_call", { type: "tool_call", call_id: id, id, name, arguments: input })
+        return
+      }
+      if (event.type === "finish" || event.type === "step-finish") {
+        if (typeof event.reason === "string" && event.reason) finishReason = event.reason
+        if (event.usage && typeof event.usage === "object") usage = event.usage
+      }
+    }, { signal })
+    const assistantContent: unknown[] = []
+    const assistantText = textParts.join("")
+    if (assistantText) assistantContent.push({ type: "text", text: assistantText })
+    for (const call of toolCalls) {
+      assistantContent.push({ type: "tool-call", id: call.id, name: call.name, input: call.input })
+    }
+    if (assistantContent.length > 0) {
+      session.messages.push({ role: "assistant", content: assistantContent })
+    }
+    if (toolCalls.length === 0) {
+      send("done", { type: "done", finish_reason: finishReason || "stop", turns, usage })
+      return
+    }
+    turns += toolCalls.length
+    if (turns > AGENT_MAX_TURNS) {
+      send("error", { type: "error", code: "AGENT_TURN_BUDGET_EXCEEDED", message: "Agent tool-call turn budget exceeded." })
+      return
+    }
+    for (const call of toolCalls) {
+      const envelope = await waitForToolResult(session, call.id, call.name, signal)
+      session.messages.push({ role: "tool", content: [toolResultPart(call, envelope)] })
+      send("tool_result", { type: "tool_result", call_id: call.id, name: call.name, ok: !envelope.is_error })
+    }
+  }
+  send("done", { type: "done", finish_reason: "closed", turns, usage: {} })
+}
+
+async function agentToolResult(request: Request, match: RegExpMatchArray): Promise<Response> {
+  const id = decodeParam(match[1] ?? "")
+  const session = getAgentSession(id)
+  if (!session) return cors(errorResponse(`Unknown agent session '${id}'`, 404, "UNKNOWN_AGENT_SESSION"))
+  const body = await readJsonBody(request)
+  const callId = typeof body.call_id === "string" ? body.call_id : typeof body.callId === "string" ? body.callId : ""
+  if (!callId) return cors(errorResponse("`call_id` is required", 422, "INVALID_REQUEST"))
+  const pending = session.pending.get(callId)
+  if (!pending) return cors(errorResponse(`No pending tool call '${callId}'`, 404, "UNKNOWN_TOOL_CALL"))
+  pending.resolve({ result: body.result, is_error: Boolean(body.is_error ?? body.isError) })
+  return cors(json({ ok: true, session_id: id, call_id: callId }))
+}
+
+async function agentDelete(_request: Request, match: RegExpMatchArray): Promise<Response> {
+  const id = decodeParam(match[1] ?? "")
+  const session = getAgentSession(id)
+  if (session) closeAgentSession(session)
+  return cors(json({ ok: true, session_id: id }))
+}
+
+
+async function oauthProviders(): Promise<Response> {
+  return cors(json({ providers: oauth.listOAuthProviders() }))
+}
+
+async function oauthStart(request: Request): Promise<Response> {
+  const body = await readJsonBody(request)
+  const providerId = typeof body.provider === "string" ? body.provider : ""
+  const method = body.method === "browser" || body.method === "device-code" ? body.method : "browser"
+  const enterpriseDomain = typeof body.enterpriseDomain === "string" ? body.enterpriseDomain : undefined
+  if (!oauth.isOAuthProvider(providerId)) {
+    return cors(errorResponse(`No OAuth handler for '${providerId}'`, 404, "UNKNOWN_OAUTH_PROVIDER"))
+  }
+  try {
+    const result = await oauth.startOAuthFlow(providerId, method as "browser" | "device-code", { enterpriseDomain })
+    return cors(json(result))
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return cors(errorResponse(message, 500, "OAUTH_START_FAILED"))
+  }
+}
+
+async function oauthPoll(_request: Request, match: RegExpMatchArray): Promise<Response> {
+  const providerId = decodeParam(match[1] ?? "")
+  const pollId = decodeParam(match[2] ?? "")
+  const result = oauth.pollOAuthFlow(providerId, pollId)
+  if (result.status === "success" && result.credential && result.provider) {
+    try {
+      await store.setOAuthCredential(result.provider, result.credential)
+    } catch {
+      // best-effort persist; the credential is still returned to the caller
+    }
+  }
+  return cors(json(result))
+}
+
+async function oauthRefresh(_request: Request, match: RegExpMatchArray): Promise<Response> {
+  const providerId = decodeParam(match[1] ?? "")
+  if (!oauth.isOAuthProvider(providerId)) {
+    return cors(errorResponse(`No OAuth handler for '${providerId}'`, 404, "UNKNOWN_OAUTH_PROVIDER"))
+  }
+  const existing = await store.getOAuthCredential(providerId)
+  if (!existing) {
+    return cors(errorResponse(`No OAuth credential stored for '${providerId}'`, 404, "NO_OAUTH_CREDENTIAL"))
+  }
+  try {
+    const refreshed = await oauth.refreshOAuthToken(providerId, existing.refresh)
+    await store.setOAuthCredential(providerId, refreshed)
+    return cors(json({ ok: true, provider: providerId, credential: refreshed }))
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return cors(errorResponse(message, 500, "OAUTH_REFRESH_FAILED"))
+  }
+}
+
+async function dispatch(request: Request): Promise<Response> {
+  if (request.method === "OPTIONS") {
+    return cors(new Response(null, { status: 204 }))
+  }
+  const url = new URL(request.url)
+  for (const route of ROUTES) {
+    if (route.method !== request.method) continue
+    const match = route.pattern.exec(url.pathname)
+    if (!match) continue
+    try {
+      const response = await route.handler(request, match)
+      return response
+    } catch (error) {
+      if (error instanceof BridgeHttpError) return cors(errorResponse(error.message, error.status, error.code))
+      const message = error instanceof Error ? error.message : String(error)
+      return cors(errorResponse(message, 500, "INTERNAL"))
+    }
+  }
+  return cors(errorResponse("Not found", 404, "NOT_FOUND"))
+}
+
+export function start(): void {
+  const server = Bun.serve({
+    port: PORT,
+    hostname: HOST,
+    async fetch(request) {
+      return dispatch(request)
+    },
+  })
+  console.log(`[llm-bridge] listening on http://${server.hostname}:${server.port} (config: ${store.configPath()})`)
+}
+
+export function createApp() {
+  return { fetch: dispatch }
+}

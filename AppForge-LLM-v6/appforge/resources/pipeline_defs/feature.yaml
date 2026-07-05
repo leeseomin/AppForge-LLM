@@ -1,0 +1,304 @@
+name: feature
+version: '1.1'
+category: existing-repository
+description: Add a feature to an existing repository after grounded analysis and a
+  minimal change plan with V5 specification, workflow, memory, and loop hardening.
+match:
+  keywords:
+  - existing repo
+  - add feature
+  - feature request
+  - 기존 저장소
+  - 기능 추가
+  - 기존 프로젝트
+orchestration:
+  default_mode: autonomous
+  max_stage_attempts: 3
+stages:
+- name: intake
+  description: Turn the raw request into a bounded product brief without blocking
+    on routine ambiguity.
+  skill: stages/intake.md
+  produces:
+  - product_brief
+  tools:
+  - workspace_tree
+  checkpoint: true
+  approval: false
+  review_focus:
+  - Problem and users are explicit
+  - Constraints and assumptions are separated
+  - Non-goals prevent accidental scope growth
+  success_criteria:
+  - The brief is actionable
+  - Open questions have safe defaults or are true blockers
+  gates: []
+- name: repository_analysis
+  description: Map the existing repository before making changes.
+  skill: stages/repository-analysis.md
+  produces:
+  - repository_analysis
+  tools:
+  - detect_stack
+  - workspace_tree
+  - git_status
+  - search_text
+  checkpoint: true
+  approval: false
+  review_focus:
+  - Entry points and conventions are grounded in files
+  - Baseline commands and failures are captured
+  - Risk areas and likely change surface are identified
+  success_criteria:
+  - The plan can preserve unrelated behavior
+  - Unknowns are narrowed with direct evidence
+  gates:
+  - tool: detect_stack
+    required: true
+  - tool: git_status
+    required: false
+- name: specification
+  description: Translate the accepted request and repository facts into traceable,
+    testable requirements.
+  skill: stages/specification.md
+  produces:
+  - requirements_spec
+  tools:
+  - workspace_tree
+  - search_text
+  checkpoint: true
+  approval: false
+  review_focus:
+  - Requirements are testable and traceable
+  - Assumptions, risks, quality gates, and non-goals are explicit
+  - Acceptance criteria cover unhappy paths and lifecycle boundaries
+  - Assumptions, risks, quality gates, and traceability are explicit
+  success_criteria:
+  - Each requirement has a stable ID
+  - Quality gates and traceability links are sufficient for downstream workflow, memory,
+    loop, and verification work
+  - Specification can drive workflow, memory, loop, implementation, and verification
+    without re-asking routine questions
+  gates: []
+- name: workflow_design
+  description: Map requirements into restartable workflows with states, retries, idempotency,
+    and recovery.
+  skill: stages/workflow-design.md
+  produces:
+  - workflow_spec
+  tools:
+  - detect_stack
+  - workspace_tree
+  - search_text
+  checkpoint: true
+  approval: false
+  review_focus:
+  - Workflow states and transitions are explicit
+  - Retries and duplicate inputs do not repeat consequential effects
+  - Timeouts, compensation, observability, and manual override are concrete
+  - State model, compensation, concurrency, timeout, and traceability are explicit
+  success_criteria:
+  - Each step has success and failure behavior
+  - Workflow steps trace back to requirements and forward to memory and loop contracts
+  - Workflow is ready to feed memory and loop engineering stages
+  gates: []
+- name: memory_engineering
+  description: Define durable, session, cache, audit, and control-plane memory with
+    ownership and lifecycle rules.
+  skill: stages/memory-engineering.md
+  produces:
+  - memory_spec
+  tools:
+  - detect_stack
+  - workspace_tree
+  - search_text
+  checkpoint: true
+  approval: false
+  review_focus:
+  - Sources of truth, readers, writers, retention, and invalidation are explicit
+  - Restart, refresh, retry, migration, and stale-data behavior are designed
+  - Sensitive data and secrets are excluded or protected by documented policy
+  success_criteria:
+  - Every important stateful behavior has a named memory surface
+  - Memory surfaces trace to requirements and workflow steps
+  - Verification can prove lifecycle and recovery behavior
+  gates: []
+- name: loop_engineering
+  description: Define bounded feedback, retry, polling, worker, reconciliation, and
+    human review loops.
+  skill: stages/loop-engineering.md
+  produces:
+  - loop_spec
+  tools:
+  - detect_stack
+  - workspace_tree
+  - search_text
+  checkpoint: true
+  approval: false
+  review_focus:
+  - Every loop has entry, exit, budget, backoff, progress signal, and failure policy
+  - Consequential effects are guarded by idempotency and deduplication
+  - Hot spins, infinite retries, and hidden recurrence are prevented
+  success_criteria:
+  - Loop IDs trace to workflow steps and memory surfaces
+  - Implementation has clear loop guardrails before code begins
+  - Verification has explicit convergence and escape-path checks
+  gates: []
+- name: change_plan
+  description: Plan a minimal, traceable change against the existing architecture.
+  skill: stages/change-plan.md
+  produces:
+  - change_plan
+  tools:
+  - git_diff
+  - search_text
+  - detect_stack
+  checkpoint: true
+  approval: false
+  review_focus:
+  - Every change maps to a requirement
+  - Compatibility and migration are addressed
+  - Verification and rollback are concrete
+  success_criteria:
+  - The plan minimizes touched surface
+  - Definition of done is executable
+  gates: []
+- name: implementation
+  description: Implement the accepted scope completely, including tests and operationally
+    useful documentation.
+  skill: stages/implementation.md
+  produces:
+  - implementation_report
+  tools:
+  - detect_stack
+  - run_command
+  - install_dependencies
+  - git_status
+  - git_diff
+  - write_text
+  - read_text
+  - search_text
+  checkpoint: true
+  approval: false
+  review_focus:
+  - Code matches repository conventions
+  - Requirements are covered by implementation and tests
+  - No placeholder logic or fake success remains
+  success_criteria:
+  - Application starts or library imports
+  - Changed behavior is documented
+  - Known gaps are truthful
+  gates:
+  - tool: detect_stack
+    required: true
+- name: verification
+  description: Run automated and targeted manual checks against every acceptance criterion.
+  skill: stages/verification.md
+  produces:
+  - verification_report
+  tools:
+  - detect_quality_commands
+  - run_tests
+  - run_lint
+  - run_typecheck
+  - run_build
+  - http_probe
+  checkpoint: true
+  approval: false
+  review_focus:
+  - Evidence comes from executed commands
+  - Acceptance criteria are traced
+  - Failures are not hidden or reclassified
+  success_criteria:
+  - Required tests and build pass
+  - Manual checks cover behavior automation cannot
+  gates:
+  - tool: run_tests
+    required: true
+  - tool: run_lint
+    required: false
+  - tool: run_typecheck
+    required: false
+  - tool: run_build
+    required: true
+- name: security
+  description: Threat-model the implemented system and run practical security checks.
+  skill: stages/security.md
+  produces:
+  - security_report
+  tools:
+  - secret_scan
+  - dependency_audit
+  - generate_sbom
+  - search_text
+  checkpoint: true
+  approval: false
+  review_focus:
+  - Trust boundaries and abuse cases are reviewed
+  - Secrets and dependencies are checked
+  - Residual risk is explicit
+  success_criteria:
+  - No likely committed credential remains
+  - Critical findings are fixed or block release
+  gates:
+  - tool: secret_scan
+    required: true
+  - tool: dependency_audit
+    required: false
+  - tool: generate_sbom
+    required: false
+- name: release
+  description: Produce a reproducible, release-ready build and complete release documentation.
+  skill: stages/release.md
+  produces:
+  - release_report
+  tools:
+  - run_build
+  - secret_scan
+  - release_readiness
+  - artifact_inventory
+  - generate_sbom
+  checkpoint: true
+  approval: true
+  review_focus:
+  - Build is reproducible
+  - Install and rollback steps are tested
+  - Known issues are explicit
+  success_criteria:
+  - Required release checks pass
+  - No deployment occurs without explicit approval
+  gates:
+  - tool: run_build
+    required: true
+  - tool: secret_scan
+    required: true
+  - tool: release_readiness
+    required: true
+  - tool: artifact_inventory
+    required: false
+- name: handoff
+  description: Deliver source, quickstart, verification evidence, architecture pointers,
+    and remaining work.
+  skill: stages/handoff.md
+  produces:
+  - handoff_report
+  tools:
+  - release_readiness
+  - archive_workspace
+  - artifact_inventory
+  checkpoint: true
+  approval: false
+  review_focus:
+  - Quickstart is executable
+  - Deliverables and open items are unambiguous
+  - Verification evidence is easy to find
+  success_criteria:
+  - A new engineer can continue
+  - A source archive is produced
+  gates:
+  - tool: release_readiness
+    required: true
+  - tool: archive_workspace
+    required: true
+  - tool: artifact_inventory
+    required: false
