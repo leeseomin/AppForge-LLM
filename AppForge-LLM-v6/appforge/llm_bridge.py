@@ -48,6 +48,21 @@ class BridgeCancelled(BridgeError):
         )
 
 
+def _normalize_response_format(response_format: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Convert OpenAI-style JSON schema hints to the local bridge contract."""
+    if not isinstance(response_format, dict):
+        return response_format
+    if response_format.get("type") != "json_schema":
+        return response_format
+    json_schema = response_format.get("json_schema")
+    if not isinstance(json_schema, dict):
+        return response_format
+    schema = json_schema.get("schema")
+    if not isinstance(schema, dict):
+        return response_format
+    return {"type": "json", "schema": schema}
+
+
 def _request(
     base_url: str,
     method: str,
@@ -337,14 +352,15 @@ def generate(
     cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {"prompt": prompt}
+    normalized_response_format = _normalize_response_format(response_format)
     if system is not None:
         body["system"] = system
     if provider is not None:
         body["provider"] = provider
     if model is not None:
         body["model"] = model
-    if response_format is not None:
-        body["responseFormat"] = response_format
+    if normalized_response_format is not None:
+        body["responseFormat"] = normalized_response_format
     generation: dict[str, Any] = {}
     if max_tokens is not None:
         generation["maxTokens"] = max_tokens
@@ -352,8 +368,6 @@ def generate(
         generation["temperature"] = temperature
     if generation:
         body["generation"] = generation
-    if response_format is not None:
-        body["responseFormat"] = response_format
     return _request(
         base_url,
         "POST",
@@ -378,14 +392,15 @@ def stream(
     cancel_event: threading.Event | None = None,
 ) -> Iterator[dict[str, Any]]:
     body: dict[str, Any] = {"prompt": prompt}
+    normalized_response_format = _normalize_response_format(response_format)
     if system is not None:
         body["system"] = system
     if provider is not None:
         body["provider"] = provider
     if model is not None:
         body["model"] = model
-    if response_format is not None:
-        body["responseFormat"] = response_format
+    if normalized_response_format is not None:
+        body["responseFormat"] = normalized_response_format
     generation: dict[str, Any] = {}
     if max_tokens is not None:
         generation["maxTokens"] = max_tokens
@@ -393,8 +408,6 @@ def stream(
         generation["temperature"] = temperature
     if generation:
         body["generation"] = generation
-    if response_format is not None:
-        body["responseFormat"] = response_format
     yield from _sse_request(base_url, "POST", "/stream", body=body, timeout=timeout, cancel_event=cancel_event)
 
 
@@ -412,18 +425,17 @@ def agent_start(
     cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {"prompt": prompt, "tools": tools or []}
+    normalized_response_format = _normalize_response_format(response_format)
     if system is not None:
         body["system"] = system
     if provider is not None:
         body["provider"] = provider
     if model is not None:
         body["model"] = model
-    if response_format is not None:
-        body["responseFormat"] = response_format
+    if normalized_response_format is not None:
+        body["responseFormat"] = normalized_response_format
     if generation:
         body["generation"] = generation
-    if response_format is not None:
-        body["responseFormat"] = response_format
     return _request(base_url, "POST", "/agent/start", body=body, timeout=timeout, cancel_event=cancel_event)
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 
 from appforge import llm_bridge
@@ -78,3 +79,65 @@ def test_generate_cancels_in_flight_bridge_http_request(monkeypatch) -> None:
     assert connection.shutdown_called.is_set()
     assert len(errors) == 1
     assert isinstance(errors[0], llm_bridge.BridgeCancelled)
+
+
+def test_generate_normalizes_json_schema_response_format(monkeypatch) -> None:
+    requests: list[dict] = []
+
+    def fake_request(
+        base_url: str,
+        method: str,
+        path: str,
+        *,
+        body=None,
+        timeout: float = 30.0,
+        cancel_event=None,
+    ) -> dict:
+        requests.append(
+            {
+                "base_url": base_url,
+                "method": method,
+                "path": path,
+                "body": json.loads(json.dumps(body)),
+                "timeout": timeout,
+                "cancel_event": cancel_event,
+            }
+        )
+        return {"text": "{}"}
+
+    monkeypatch.setattr(llm_bridge, "_request", fake_request)
+
+    llm_bridge.generate(
+        "http://bridge.test",
+        prompt="Return JSON",
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "appforge_intake_envelope",
+                "strict": False,
+                "schema": {
+                    "type": "object",
+                    "required": ["artifacts", "stage_result", "files"],
+                    "properties": {
+                        "artifacts": {"type": "object"},
+                        "stage_result": {"type": "object"},
+                        "files": {"type": "object"},
+                    },
+                },
+            },
+        },
+    )
+
+    assert requests[0]["path"] == "/generate"
+    assert requests[0]["body"]["responseFormat"] == {
+        "type": "json",
+        "schema": {
+            "type": "object",
+            "required": ["artifacts", "stage_result", "files"],
+            "properties": {
+                "artifacts": {"type": "object"},
+                "stage_result": {"type": "object"},
+                "files": {"type": "object"},
+            },
+        },
+    }
