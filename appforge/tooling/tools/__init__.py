@@ -1,1 +1,0 @@
-"""Auto-discovered OpenAppForge tools."""
