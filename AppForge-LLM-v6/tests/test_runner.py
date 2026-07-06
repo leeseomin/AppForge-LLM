@@ -147,6 +147,89 @@ def test_llm_bridge_driver_maps_cancelled_request_to_cancel_result(tmp_path, mon
     assert result.stderr == "Cancelled by user."
 
 
+def test_llm_bridge_agent_recovers_after_text_only_turn(tmp_path, monkeypatch) -> None:
+    layout = initialize_project(
+        "Build a tiny web game",
+        projects_dir=tmp_path,
+        name="bridge-agent-text-only",
+        pipeline_name="web-app-lite",
+    )
+    sessions: list[str] = []
+
+    def fake_agent_start(*args, **kwargs):  # type: ignore[no-untyped-def]
+        sessions.append(str(kwargs["prompt"]))
+        return {"session_id": f"session-{len(sessions)}"}
+
+    def fake_agent_events(*args, **kwargs):  # type: ignore[no-untyped-def]
+        session_id = str(args[1])
+        if session_id == "session-1":
+            yield {"type": "text_delta", "text": "I will create index.html next."}
+            yield {"type": "done", "usage": {"total_tokens": 10}}
+            return
+        yield {
+            "type": "tool_call",
+            "call_id": "write-1",
+            "name": "write_text",
+            "arguments": {"path": "index.html", "content": "<!doctype html><title>Game</title>"},
+        }
+        yield {
+            "type": "tool_call",
+            "call_id": "artifact-1",
+            "name": "submit_artifact",
+            "arguments": {
+                "name": "implementation_report",
+                "payload": {
+                    "schema_version": "1.0",
+                    "summary": "Implemented a tiny web game.",
+                    "features_completed": ["Playable browser surface"],
+                    "files_changed": ["index.html"],
+                    "commands_run": [],
+                    "decisions": ["Use a single static HTML file"],
+                    "known_gaps": [],
+                    "requirements_covered": ["Create a tiny web game"],
+                },
+            },
+        }
+        yield {
+            "type": "tool_call",
+            "call_id": "result-1",
+            "name": "submit_stage_result",
+            "arguments": {
+                "payload": {
+                    "stage": "implementation",
+                    "status": "completed",
+                    "summary": "Implementation completed.",
+                    "files_changed": ["index.html"],
+                    "commands_run": [],
+                    "checks": [],
+                    "decisions": [],
+                    "unresolved": [],
+                },
+            },
+        }
+        yield {"type": "done", "usage": {"total_tokens": 10}}
+
+    monkeypatch.setattr(llm_bridge, "agent_start", fake_agent_start)
+    monkeypatch.setattr(llm_bridge, "agent_events", fake_agent_events)
+    monkeypatch.setattr(llm_bridge, "agent_tool_result", lambda *args, **kwargs: {})
+    monkeypatch.setattr(llm_bridge, "agent_stop", lambda *args, **kwargs: {})
+
+    result = LLMBridgeAgentDriver(bridge_url="http://bridge.test").run(
+        "stage packet",
+        layout=layout,
+        stage="implementation",
+        attempt=1,
+        timeout=120,
+    )
+
+    assert result.success is True
+    assert len(sessions) == 2
+    assert "ended without required tool submissions" in sessions[1]
+    assert (layout.root / "index.html").is_file()
+    assert (layout.artifacts / "implementation_report.json").is_file()
+    assert (layout.control / "stage-result.json").is_file()
+
+
 def test_llm_bridge_envelope_writes_artifacts_stage_result_and_files(tmp_path) -> None:
     layout = initialize_project(
         "Build a small web app",

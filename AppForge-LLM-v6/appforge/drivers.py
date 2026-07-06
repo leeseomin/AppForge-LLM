@@ -686,7 +686,6 @@ class LLMBridgeAgentDriver(AgentDriver):
         submitted_artifacts: set[str] = set()
         stage_result_submitted = False
         turns = 0
-        session_id: str | None = None
         repeated_tool_calls: dict[str, int] = {}
         usage_tokens = 0
 
@@ -729,109 +728,136 @@ class LLMBridgeAgentDriver(AgentDriver):
             generation: dict[str, Any] = {}
             if self.max_tokens is not None:
                 generation["maxTokens"] = self.max_tokens
-            session = llm_bridge.agent_start(
-                self.bridge_url,
-                prompt=guidance,
-                system=system,
-                provider=self.provider,
-                model=self.model,
-                generation=generation or None,
-                tools=tools,
-                timeout=max(timeout, 60),
-                cancel_event=cancel_event,
-            )
-            session_id = str(session.get("session_id") or session.get("id") or "")
-            if not session_id:
-                return fail("LLM bridge agent did not return a session id.", code=1)
-            for event in llm_bridge.agent_events(
-                self.bridge_url,
-                session_id,
-                timeout=max(timeout, 60),
-                cancel_event=cancel_event,
-            ):
-                if cancel_event is not None and cancel_event.is_set():
-                    return fail("Cancelled by user.", code=130)
-                etype = str(event.get("type") or event.get("event") or "")
-                if etype in {"text_delta", "text-delta"}:
-                    text = str(event.get("text") or "")
-                    transcript.append(text)
-                    self._emit({"type": "llm_text", "stage": stage, "delta": text})
-                    continue
-                if etype == "tool_call":
-                    turns += 1
-                    if turns > self.max_turns:
-                        return fail(
-                            "AGENT_TURN_BUDGET_EXCEEDED: tool-call turn budget exceeded.",
-                            stdout=_redact_text("".join(transcript)),
-                        )
-                    call_id = str(event.get("call_id") or event.get("id") or "")
-                    name = str(event.get("name") or "")
-                    arguments = event.get("arguments")
-                    if not isinstance(arguments, dict):
-                        arguments = event.get("input") if isinstance(event.get("input"), dict) else {}
-                    arguments_dict = dict(arguments or {})
-                    self._emit({"type": "tool_call", "stage": stage, "name": name})
-                    key = tool_key(name, arguments_dict)
-                    repeated_tool_calls[key] = repeated_tool_calls.get(key, 0) + 1
-                    if repeated_tool_calls[key] >= 3:
-                        warning = ToolResult(
-                            success=False,
-                            error=(
-                                "Repeated identical tool call detected. Re-read the prior tool result, "
-                                "change the arguments or strategy, and avoid a loop."
-                            ),
-                            data={"code": "REPEATED_IDENTICAL_TOOL_CALL", "tool": name},
-                        )
-                        result_text = _json_tool_result(warning)
-                        new_changed, artifacts, is_error = set(), set(), True
-                        self._append_tool_log(
-                            tool_log_path,
-                            {
-                                "stage": stage,
-                                "tool": name,
-                                "arguments": arguments_dict,
-                                "result": warning.to_dict(),
-                                "is_error": True,
-                                "loop_guard": True,
-                            },
-                        )
-                    else:
-                        result_text, new_changed, artifacts, is_error = self._execute_agent_tool(
-                            layout,
-                            stage=stage,
-                            name=name,
-                            arguments=arguments_dict,
-                            project=project,
-                            tool_log_path=tool_log_path,
-                        )
-                    changed.update(new_changed)
-                    submitted_artifacts.update(artifacts)
-                    if name == "submit_stage_result" and not is_error:
-                        stage_result_submitted = True
-                    llm_bridge.agent_tool_result(
+            active_prompt = guidance
+            max_agent_sessions = 2
+            for session_number in range(1, max_agent_sessions + 1):
+                session_id: str | None = None
+                try:
+                    session = llm_bridge.agent_start(
                         self.bridge_url,
-                        session_id,
-                        call_id=call_id,
-                        result=result_text,
-                        is_error=is_error,
+                        prompt=active_prompt,
+                        system=system,
+                        provider=self.provider,
+                        model=self.model,
+                        generation=generation or None,
+                        tools=tools,
                         timeout=max(timeout, 60),
                         cancel_event=cancel_event,
                     )
-                    continue
-                if etype == "done":
-                    usage = event.get("usage") if isinstance(event.get("usage"), dict) else {}
-                    for key in ("total_tokens", "totalTokens", "input_tokens", "output_tokens", "prompt_tokens", "completion_tokens"):
-                        value = usage.get(key) if isinstance(usage, dict) else None
-                        if isinstance(value, (int, float)):
-                            usage_tokens += int(value)
-                    if usage_tokens > self.max_usage_tokens:
-                        return fail(
-                            "AGENT_TOKEN_BUDGET_EXCEEDED: reported bridge usage exceeded the stage token budget.",
-                            stdout=_redact_text("".join(transcript)),
-                        )
+                    session_id = str(session.get("session_id") or session.get("id") or "")
+                    if not session_id:
+                        return fail("LLM bridge agent did not return a session id.", code=1)
+                    for event in llm_bridge.agent_events(
+                        self.bridge_url,
+                        session_id,
+                        timeout=max(timeout, 60),
+                        cancel_event=cancel_event,
+                    ):
+                        if cancel_event is not None and cancel_event.is_set():
+                            return fail("Cancelled by user.", code=130)
+                        etype = str(event.get("type") or event.get("event") or "")
+                        if etype in {"text_delta", "text-delta"}:
+                            text = str(event.get("text") or "")
+                            transcript.append(text)
+                            self._emit({"type": "llm_text", "stage": stage, "delta": text})
+                            continue
+                        if etype == "tool_call":
+                            turns += 1
+                            if turns > self.max_turns:
+                                return fail(
+                                    "AGENT_TURN_BUDGET_EXCEEDED: tool-call turn budget exceeded.",
+                                    stdout=_redact_text("".join(transcript)),
+                                )
+                            call_id = str(event.get("call_id") or event.get("id") or "")
+                            name = str(event.get("name") or "")
+                            arguments = event.get("arguments")
+                            if not isinstance(arguments, dict):
+                                arguments = event.get("input") if isinstance(event.get("input"), dict) else {}
+                            arguments_dict = dict(arguments or {})
+                            self._emit({"type": "tool_call", "stage": stage, "name": name})
+                            key = tool_key(name, arguments_dict)
+                            repeated_tool_calls[key] = repeated_tool_calls.get(key, 0) + 1
+                            if repeated_tool_calls[key] >= 3:
+                                warning = ToolResult(
+                                    success=False,
+                                    error=(
+                                        "Repeated identical tool call detected. Re-read the prior tool result, "
+                                        "change the arguments or strategy, and avoid a loop."
+                                    ),
+                                    data={"code": "REPEATED_IDENTICAL_TOOL_CALL", "tool": name},
+                                )
+                                result_text = _json_tool_result(warning)
+                                new_changed, artifacts, is_error = set(), set(), True
+                                self._append_tool_log(
+                                    tool_log_path,
+                                    {
+                                        "stage": stage,
+                                        "tool": name,
+                                        "arguments": arguments_dict,
+                                        "result": warning.to_dict(),
+                                        "is_error": True,
+                                        "loop_guard": True,
+                                    },
+                                )
+                            else:
+                                result_text, new_changed, artifacts, is_error = self._execute_agent_tool(
+                                    layout,
+                                    stage=stage,
+                                    name=name,
+                                    arguments=arguments_dict,
+                                    project=project,
+                                    tool_log_path=tool_log_path,
+                                )
+                            changed.update(new_changed)
+                            submitted_artifacts.update(artifacts)
+                            if name == "submit_stage_result" and not is_error:
+                                stage_result_submitted = True
+                            llm_bridge.agent_tool_result(
+                                self.bridge_url,
+                                session_id,
+                                call_id=call_id,
+                                result=result_text,
+                                is_error=is_error,
+                                timeout=max(timeout, 60),
+                                cancel_event=cancel_event,
+                            )
+                            continue
+                        if etype == "done":
+                            usage = event.get("usage") if isinstance(event.get("usage"), dict) else {}
+                            for key in ("total_tokens", "totalTokens", "input_tokens", "output_tokens", "prompt_tokens", "completion_tokens"):
+                                value = usage.get(key) if isinstance(usage, dict) else None
+                                if isinstance(value, (int, float)):
+                                    usage_tokens += int(value)
+                            if usage_tokens > self.max_usage_tokens:
+                                return fail(
+                                    "AGENT_TOKEN_BUDGET_EXCEEDED: reported bridge usage exceeded the stage token budget.",
+                                    stdout=_redact_text("".join(transcript)),
+                                )
+                            break
+                        if etype == "error":
+                            return fail(str(event.get("message") or event.get("error") or "LLM bridge agent error."), code=1)
+                finally:
+                    if session_id:
+                        try:
+                            llm_bridge.agent_stop(self.bridge_url, session_id, timeout=5.0)
+                        except Exception:
+                            pass
+                missing = [
+                    artifact for artifact in stage_spec.produces if artifact not in submitted_artifacts
+                ]
+                if not missing or session_number >= max_agent_sessions:
                     break
-                if etype == "error":
-                    return fail(str(event.get("message") or event.get("error") or "LLM bridge agent error."), code=1)
+                transcript.append(
+                    "\n\n[AppForge recovery] Previous bridge session ended without required tool submissions; starting a continuation session.\n"
+                )
+                active_prompt = self._agent_recovery_prompt(
+                    original_prompt=prompt,
+                    stage_spec=stage_spec,
+                    missing_artifacts=missing,
+                    changed=sorted(changed),
+                    submitted_artifacts=sorted(submitted_artifacts),
+                    transcript="".join(transcript),
+                )
         except llm_bridge.BridgeCancelled:
             return fail("Cancelled by user.", code=130)
         except llm_bridge.BridgeError as exc:
@@ -840,12 +866,6 @@ class LLMBridgeAgentDriver(AgentDriver):
             return fail(str(exc), code=2)
         except Exception as exc:
             return fail(f"LLM bridge agent failed: {type(exc).__name__}: {exc}", code=1)
-        finally:
-            if session_id:
-                try:
-                    llm_bridge.agent_stop(self.bridge_url, session_id, timeout=5.0)
-                except Exception:
-                    pass
 
         missing = [artifact for artifact in stage_spec.produces if artifact not in submitted_artifacts]
         if missing:
@@ -892,6 +912,38 @@ class LLMBridgeAgentDriver(AgentDriver):
             f"```json\n{json.dumps(contract, ensure_ascii=False, indent=2)}\n```\n\n"
             "# Original stage packet\n\n"
             f"{prompt}"
+        )
+
+    def _agent_recovery_prompt(
+        self,
+        *,
+        original_prompt: str,
+        stage_spec: Any,
+        missing_artifacts: list[str],
+        changed: list[str],
+        submitted_artifacts: list[str],
+        transcript: str,
+    ) -> str:
+        return (
+            "# AppForge continuation after incomplete tool session\n\n"
+            "The previous bridge session ended without required tool submissions. "
+            "Continue in the same workspace. Do not describe what you will do; immediately "
+            "use tools to finish the stage.\n\n"
+            "## Required now\n"
+            f"- Missing required artifacts: {', '.join(missing_artifacts)}\n"
+            "- Use write_text for source files that still need to be created or fixed.\n"
+            "- Use submit_artifact(name, payload) for every missing artifact.\n"
+            "- Use submit_stage_result({payload}) after artifacts and file edits are complete.\n"
+            "- Do not end with prose only.\n\n"
+            "## Current submitted state\n"
+            f"- Files changed so far: {changed or ['<none>']}\n"
+            f"- Artifacts submitted so far: {submitted_artifacts or ['<none>']}\n\n"
+            "## Contract reminder\n"
+            f"Required artifacts for stage `{stage_spec.name}`: {list(stage_spec.produces)}\n\n"
+            "## Previous transcript tail\n"
+            f"{truncate(transcript, 4_000)}\n\n"
+            "# Original stage packet\n\n"
+            f"{original_prompt}"
         )
 
     def _build_agent_tools(self, stage_spec: Any) -> list[dict[str, Any]]:
