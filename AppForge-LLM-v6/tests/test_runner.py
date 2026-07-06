@@ -230,6 +230,66 @@ def test_llm_bridge_agent_recovers_after_text_only_turn(tmp_path, monkeypatch) -
     assert (layout.control / "stage-result.json").is_file()
 
 
+def test_llm_bridge_agent_falls_back_to_envelope_after_incomplete_sessions(tmp_path, monkeypatch) -> None:
+    layout = initialize_project(
+        "Build a tiny Three.js flight sim",
+        projects_dir=tmp_path,
+        name="bridge-agent-envelope-fallback",
+        pipeline_name="web-app-lite",
+    )
+    sessions: list[str] = []
+
+    def fake_agent_start(*args, **kwargs):  # type: ignore[no-untyped-def]
+        sessions.append(str(kwargs["prompt"]))
+        return {"session_id": f"session-{len(sessions)}"}
+
+    def fake_agent_events(*args, **kwargs):  # type: ignore[no-untyped-def]
+        yield {"type": "text_delta", "text": "I will create the project files next."}
+        yield {"type": "done", "usage": {"total_tokens": 10}}
+
+    response = json.dumps(
+        {
+            "artifacts": {
+                "implementation_report": _valid_implementation_report(["index.html"])
+            },
+            "stage_result": {
+                "stage": "implementation",
+                "status": "completed",
+                "summary": "Implemented fallback-generated app.",
+                "files_changed": ["index.html"],
+                "commands_run": [],
+                "checks": [],
+                "decisions": [],
+                "unresolved": [],
+            },
+            "files": {
+                "index.html": "<!doctype html><title>Flight Sim</title>",
+            },
+        }
+    )
+
+    monkeypatch.setattr(llm_bridge, "agent_start", fake_agent_start)
+    monkeypatch.setattr(llm_bridge, "agent_events", fake_agent_events)
+    monkeypatch.setattr(llm_bridge, "agent_tool_result", lambda *args, **kwargs: {})
+    monkeypatch.setattr(llm_bridge, "agent_stop", lambda *args, **kwargs: {})
+    monkeypatch.setattr(llm_bridge, "generate", lambda *args, **kwargs: {"text": response})
+
+    result = LLMBridgeAgentDriver(bridge_url="http://bridge.test").run(
+        "stage packet",
+        layout=layout,
+        stage="implementation",
+        attempt=1,
+        timeout=120,
+    )
+
+    assert result.success is True
+    assert len(sessions) == 2
+    assert "fallback" in result.stdout
+    assert (layout.root / "index.html").is_file()
+    assert (layout.artifacts / "implementation_report.json").is_file()
+    assert (layout.control / "stage-result.json").is_file()
+
+
 def test_llm_bridge_envelope_writes_artifacts_stage_result_and_files(tmp_path) -> None:
     layout = initialize_project(
         "Build a small web app",
@@ -511,6 +571,19 @@ def _valid_stage_result() -> dict[str, object]:
         "checks": [],
         "decisions": [],
         "unresolved": [],
+    }
+
+
+def _valid_implementation_report(files_changed: list[str]) -> dict[str, object]:
+    return {
+        "schema_version": "1.0",
+        "summary": "Implemented a browser app.",
+        "features_completed": ["Playable browser surface"],
+        "files_changed": files_changed,
+        "commands_run": [],
+        "decisions": ["Use a minimal static app for reliable fallback generation"],
+        "known_gaps": [],
+        "requirements_covered": ["Build a tiny Three.js flight sim"],
     }
 
 

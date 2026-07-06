@@ -869,8 +869,43 @@ class LLMBridgeAgentDriver(AgentDriver):
 
         missing = [artifact for artifact in stage_spec.produces if artifact not in submitted_artifacts]
         if missing:
+            transcript.append(
+                "\n\n[AppForge fallback] Tool-use sessions ended without required artifact submissions; "
+                "trying single-shot JSON envelope generation.\n"
+            )
+            fallback = self._single_shot.run(
+                self._agent_envelope_fallback_prompt(
+                    original_prompt=prompt,
+                    stage_spec=stage_spec,
+                    missing_artifacts=missing,
+                    changed=sorted(changed),
+                    submitted_artifacts=sorted(submitted_artifacts),
+                    transcript="".join(transcript),
+                ),
+                layout=layout,
+                stage=stage,
+                attempt=attempt,
+                timeout=timeout,
+                cancel_event=cancel_event,
+            )
+            atomic_write_text(final_path, _redact_text("".join(transcript)))
+            if fallback.success:
+                return DriverResult(
+                    success=True,
+                    exit_code=0,
+                    stdout=(
+                        f"LLM bridge agent completed {stage} via single-shot envelope fallback: "
+                        f"{fallback.stdout}"
+                    ),
+                    stderr="",
+                    duration_seconds=duration(),
+                    command=["llm-bridge", "/agent", "fallback-generate"],
+                    final_message_path=str(final_path),
+                )
             return fail(
-                "LLM bridge agent finished without submitting required artifacts: " + ", ".join(missing),
+                "LLM bridge agent finished without submitting required artifacts: "
+                + ", ".join(missing)
+                + f"; single-shot envelope fallback failed: {fallback.stderr}",
                 stdout=_redact_text("".join(transcript)),
             )
         if not stage_result_submitted:
@@ -935,6 +970,35 @@ class LLMBridgeAgentDriver(AgentDriver):
             "- Use submit_artifact(name, payload) for every missing artifact.\n"
             "- Use submit_stage_result({payload}) after artifacts and file edits are complete.\n"
             "- Do not end with prose only.\n\n"
+            "## Current submitted state\n"
+            f"- Files changed so far: {changed or ['<none>']}\n"
+            f"- Artifacts submitted so far: {submitted_artifacts or ['<none>']}\n\n"
+            "## Contract reminder\n"
+            f"Required artifacts for stage `{stage_spec.name}`: {list(stage_spec.produces)}\n\n"
+            "## Previous transcript tail\n"
+            f"{truncate(transcript, 4_000)}\n\n"
+            "# Original stage packet\n\n"
+            f"{original_prompt}"
+        )
+
+    def _agent_envelope_fallback_prompt(
+        self,
+        *,
+        original_prompt: str,
+        stage_spec: Any,
+        missing_artifacts: list[str],
+        changed: list[str],
+        submitted_artifacts: list[str],
+        transcript: str,
+    ) -> str:
+        return (
+            "# AppForge fallback after incomplete tool-use sessions\n\n"
+            "The multi-turn tool-use sessions ended before submitting all required artifacts. "
+            "Produce a complete single-shot JSON envelope now. Include any source files still "
+            "needed under `files`, include every missing artifact under `artifacts`, and include "
+            "a completed `stage_result`. Do not return prose.\n\n"
+            "## Required artifacts still missing\n"
+            f"{missing_artifacts}\n\n"
             "## Current submitted state\n"
             f"- Files changed so far: {changed or ['<none>']}\n"
             f"- Artifacts submitted so far: {submitted_artifacts or ['<none>']}\n\n"
