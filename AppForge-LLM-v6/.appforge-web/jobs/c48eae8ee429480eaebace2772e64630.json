@@ -1,13 +1,13 @@
 {
-  "id": "37141298f2a84e3284d6fff8e1ed6674",
+  "id": "c48eae8ee429480eaebace2772e64630",
   "version": "2.0",
   "prompt": "비행기 시뮬웹앱게임 threejs",
   "status": "failed",
   "message": "Stage intake produced the same failing signature again on attempt 2.",
-  "created_at": "2026-07-06T02:56:08+00:00",
-  "updated_at": "2026-07-06T03:03:02+00:00",
-  "started_at": "2026-07-06T02:56:08+00:00",
-  "completed_at": "2026-07-06T03:03:02+00:00",
+  "created_at": "2026-07-06T03:03:07+00:00",
+  "updated_at": "2026-07-06T03:03:21+00:00",
+  "started_at": "2026-07-06T03:03:07+00:00",
+  "completed_at": "2026-07-06T03:03:21+00:00",
   "pipeline": "web-app-lite",
   "pipeline_description": "Lightweight browser application track that folds requirements, workflow, memory, loop, architecture, and UX planning into one engineering spec before implementation.",
   "routing": {
@@ -42,8 +42,8 @@
   "resume_existing": true,
   "only_stage": "intake",
   "driver": "llm-bridge-agent",
-  "project_name": "비행기-시뮬웹앱게임-threejs-37141298",
-  "project_path": "/Users/lee/Music/AI/cursor/AppForge-LLM/AppForge-LLM-v6/projects/비행기-시뮬웹앱게임-threejs-37141298",
+  "project_name": "비행기-시뮬웹앱게임-threejs-c48eae8e",
+  "project_path": "/Users/lee/Music/AI/cursor/AppForge-LLM/AppForge-LLM-v6/projects/비행기-시뮬웹앱게임-threejs-c48eae8e",
   "active_stage": "intake",
   "stages": [
     {
@@ -54,8 +54,8 @@
       "status": "completed",
       "detail": "LLM 브릿지 · deepseek 사용 준비 완료",
       "attempt": 0,
-      "started_at": "2026-07-06T02:56:08+00:00",
-      "completed_at": "2026-07-06T03:03:02+00:00",
+      "started_at": "2026-07-06T03:03:07+00:00",
+      "completed_at": "2026-07-06T03:03:21+00:00",
       "error": null
     },
     {
@@ -64,10 +64,10 @@
       "description": "자동 파이프라인과 안전한 작업공간을 준비합니다.",
       "kind": "system",
       "status": "completed",
-      "detail": "프로젝트 `비행기-시뮬웹앱게임-threejs-37141298` 준비 완료",
+      "detail": "프로젝트 `비행기-시뮬웹앱게임-threejs-c48eae8e` 준비 완료",
       "attempt": 0,
-      "started_at": "2026-07-06T02:56:08+00:00",
-      "completed_at": "2026-07-06T03:03:02+00:00",
+      "started_at": "2026-07-06T03:03:07+00:00",
+      "completed_at": "2026-07-06T03:03:21+00:00",
       "error": null
     },
     {
@@ -78,8 +78,8 @@
       "status": "failed",
       "detail": "Stage intake produced the same failing signature again on attempt 2.",
       "attempt": 2,
-      "started_at": "2026-07-06T02:56:08+00:00",
-      "completed_at": "2026-07-06T03:03:02+00:00",
+      "started_at": "2026-07-06T03:03:07+00:00",
+      "completed_at": "2026-07-06T03:03:21+00:00",
       "error": {
         "code": "REPEATED_FAILURE_LOOP",
         "title": "반복 실패 루프를 감지했습니다",
@@ -175,220 +175,220 @@
       "id": 1,
       "event": "job_queued",
       "message": "작업이 실행 대기열에 등록되었습니다.",
-      "timestamp": "2026-07-06T02:56:08+00:00",
+      "timestamp": "2026-07-06T03:03:07+00:00",
       "data": {}
     },
     {
       "id": 2,
       "event": "job_dequeued",
       "message": "작업이 대기열에서 실행을 시작합니다.",
-      "timestamp": "2026-07-06T02:56:08+00:00",
+      "timestamp": "2026-07-06T03:03:07+00:00",
       "data": {}
     },
     {
       "id": 3,
       "event": "job_started",
       "message": "작업 실행을 시작했습니다.",
-      "timestamp": "2026-07-06T02:56:08+00:00",
+      "timestamp": "2026-07-06T03:03:07+00:00",
       "data": {}
     },
     {
       "id": 4,
       "event": "pipeline_started",
       "message": "pipeline_started",
-      "timestamp": "2026-07-06T02:56:08+00:00",
+      "timestamp": "2026-07-06T03:03:07+00:00",
       "data": {
         "event": "pipeline_started",
         "stage": "intake",
         "attempt": null,
-        "timestamp": "2026-07-06T02:56:08+00:00"
+        "timestamp": "2026-07-06T03:03:07+00:00"
       }
     },
     {
       "id": 5,
       "event": "stage_started",
       "message": "요청 정리 시작",
-      "timestamp": "2026-07-06T02:56:08+00:00",
+      "timestamp": "2026-07-06T03:03:07+00:00",
       "data": {
         "event": "stage_started",
         "stage": "intake",
         "attempt": null,
-        "timestamp": "2026-07-06T02:56:08+00:00"
+        "timestamp": "2026-07-06T03:03:07+00:00"
       }
     },
     {
       "id": 6,
       "event": "attempt_started",
       "message": "요청 정리 시도 시작 (1번째 시도)",
-      "timestamp": "2026-07-06T02:56:08+00:00",
+      "timestamp": "2026-07-06T03:03:07+00:00",
       "data": {
         "event": "attempt_started",
         "stage": "intake",
         "attempt": 1,
-        "timestamp": "2026-07-06T02:56:08+00:00"
+        "timestamp": "2026-07-06T03:03:07+00:00"
       }
     },
     {
       "id": 7,
       "event": "agent_started",
       "message": "요청 정리 에이전트 실행 (1번째 시도)",
-      "timestamp": "2026-07-06T02:56:08+00:00",
+      "timestamp": "2026-07-06T03:03:07+00:00",
       "data": {
         "event": "agent_started",
         "stage": "intake",
         "attempt": 1,
-        "timestamp": "2026-07-06T02:56:08+00:00"
+        "timestamp": "2026-07-06T03:03:07+00:00"
       }
     },
     {
       "id": 8,
       "event": "agent_completed",
       "message": "요청 정리 에이전트 실행 종료 (1번째 시도)",
-      "timestamp": "2026-07-06T02:56:08+00:00",
+      "timestamp": "2026-07-06T03:03:07+00:00",
       "data": {
         "event": "agent_completed",
         "stage": "intake",
         "attempt": 1,
-        "timestamp": "2026-07-06T02:56:08+00:00"
+        "timestamp": "2026-07-06T03:03:07+00:00"
       }
     },
     {
       "id": 9,
       "event": "validation_started",
       "message": "요청 정리 검증 시작 (1번째 시도)",
-      "timestamp": "2026-07-06T02:56:08+00:00",
+      "timestamp": "2026-07-06T03:03:07+00:00",
       "data": {
         "event": "validation_started",
         "stage": "intake",
         "attempt": 1,
-        "timestamp": "2026-07-06T02:56:08+00:00"
+        "timestamp": "2026-07-06T03:03:07+00:00"
       }
     },
     {
       "id": 10,
       "event": "attempt_failed",
       "message": "요청 정리 시도 실패 (1번째 시도)",
-      "timestamp": "2026-07-06T02:56:08+00:00",
+      "timestamp": "2026-07-06T03:03:07+00:00",
       "data": {
         "event": "attempt_failed",
         "stage": "intake",
         "attempt": 1,
-        "timestamp": "2026-07-06T02:56:08+00:00"
+        "timestamp": "2026-07-06T03:03:07+00:00"
       }
     },
     {
       "id": 11,
       "event": "stage_retrying",
       "message": "요청 정리 자동 재시도 준비",
-      "timestamp": "2026-07-06T02:56:08+00:00",
+      "timestamp": "2026-07-06T03:03:07+00:00",
       "data": {
         "event": "stage_retrying",
         "stage": "intake",
         "attempt": 1,
-        "timestamp": "2026-07-06T02:56:08+00:00"
+        "timestamp": "2026-07-06T03:03:07+00:00"
       }
     },
     {
       "id": 12,
       "event": "attempt_started",
       "message": "요청 정리 시도 시작 (2번째 시도)",
-      "timestamp": "2026-07-06T02:56:08+00:00",
+      "timestamp": "2026-07-06T03:03:07+00:00",
       "data": {
         "event": "attempt_started",
         "stage": "intake",
         "attempt": 2,
-        "timestamp": "2026-07-06T02:56:08+00:00"
+        "timestamp": "2026-07-06T03:03:07+00:00"
       }
     },
     {
       "id": 13,
       "event": "agent_started",
       "message": "요청 정리 에이전트 실행 (2번째 시도)",
-      "timestamp": "2026-07-06T02:56:08+00:00",
+      "timestamp": "2026-07-06T03:03:07+00:00",
       "data": {
         "event": "agent_started",
         "stage": "intake",
         "attempt": 2,
-        "timestamp": "2026-07-06T02:56:08+00:00"
+        "timestamp": "2026-07-06T03:03:07+00:00"
       }
     },
     {
       "id": 14,
       "event": "agent_completed",
       "message": "요청 정리 에이전트 실행 종료 (2번째 시도)",
-      "timestamp": "2026-07-06T02:56:08+00:00",
+      "timestamp": "2026-07-06T03:03:08+00:00",
       "data": {
         "event": "agent_completed",
         "stage": "intake",
         "attempt": 2,
-        "timestamp": "2026-07-06T02:56:08+00:00"
+        "timestamp": "2026-07-06T03:03:08+00:00"
       }
     },
     {
       "id": 15,
       "event": "validation_started",
       "message": "요청 정리 검증 시작 (2번째 시도)",
-      "timestamp": "2026-07-06T02:56:08+00:00",
+      "timestamp": "2026-07-06T03:03:08+00:00",
       "data": {
         "event": "validation_started",
         "stage": "intake",
         "attempt": 2,
-        "timestamp": "2026-07-06T02:56:08+00:00"
+        "timestamp": "2026-07-06T03:03:08+00:00"
       }
     },
     {
       "id": 16,
       "event": "loop_guard_triggered",
       "message": "요청 정리 반복 실패 루프 감지",
-      "timestamp": "2026-07-06T02:56:08+00:00",
+      "timestamp": "2026-07-06T03:03:08+00:00",
       "data": {
         "event": "loop_guard_triggered",
         "stage": "intake",
         "attempt": 2,
-        "timestamp": "2026-07-06T02:56:08+00:00"
+        "timestamp": "2026-07-06T03:03:08+00:00"
       }
     },
     {
       "id": 17,
       "event": "attempt_failed",
       "message": "요청 정리 시도 실패 (2번째 시도)",
-      "timestamp": "2026-07-06T02:56:08+00:00",
+      "timestamp": "2026-07-06T03:03:08+00:00",
       "data": {
         "event": "attempt_failed",
         "stage": "intake",
         "attempt": 2,
-        "timestamp": "2026-07-06T02:56:08+00:00"
+        "timestamp": "2026-07-06T03:03:08+00:00"
       }
     },
     {
       "id": 18,
       "event": "stage_failed",
       "message": "요청 정리 실패",
-      "timestamp": "2026-07-06T02:56:08+00:00",
+      "timestamp": "2026-07-06T03:03:08+00:00",
       "data": {
         "event": "stage_failed",
         "stage": "intake",
         "attempt": 2,
-        "timestamp": "2026-07-06T02:56:08+00:00"
+        "timestamp": "2026-07-06T03:03:08+00:00"
       }
     },
     {
       "id": 19,
       "event": "pipeline_failed",
       "message": "파이프라인 실패",
-      "timestamp": "2026-07-06T02:56:08+00:00",
+      "timestamp": "2026-07-06T03:03:08+00:00",
       "data": {
         "event": "pipeline_failed",
         "stage": "intake",
         "attempt": null,
-        "timestamp": "2026-07-06T02:56:08+00:00"
+        "timestamp": "2026-07-06T03:03:08+00:00"
       }
     },
     {
       "id": 20,
       "event": "job_failed",
       "message": "Stage intake produced the same failing signature again on attempt 2.",
-      "timestamp": "2026-07-06T02:56:08+00:00",
+      "timestamp": "2026-07-06T03:03:08+00:00",
       "data": {
         "code": "REPEATED_FAILURE_LOOP",
         "stage": "intake"
@@ -398,7 +398,7 @@
       "id": 21,
       "event": "stage_retry_requested",
       "message": "사용자가 단계 재시도를 요청했습니다.",
-      "timestamp": "2026-07-06T02:56:35+00:00",
+      "timestamp": "2026-07-06T03:03:21+00:00",
       "data": {
         "stage": "intake"
       }
@@ -407,438 +407,213 @@
       "id": 22,
       "event": "job_dequeued",
       "message": "작업이 대기열에서 실행을 시작합니다.",
-      "timestamp": "2026-07-06T02:56:35+00:00",
+      "timestamp": "2026-07-06T03:03:21+00:00",
       "data": {}
     },
     {
       "id": 23,
       "event": "job_started",
       "message": "작업 실행을 시작했습니다.",
-      "timestamp": "2026-07-06T02:56:35+00:00",
+      "timestamp": "2026-07-06T03:03:21+00:00",
       "data": {}
     },
     {
       "id": 24,
       "event": "pipeline_started",
       "message": "pipeline_started",
-      "timestamp": "2026-07-06T02:56:35+00:00",
+      "timestamp": "2026-07-06T03:03:21+00:00",
       "data": {
         "event": "pipeline_started",
         "stage": "intake",
         "attempt": null,
-        "timestamp": "2026-07-06T02:56:35+00:00"
+        "timestamp": "2026-07-06T03:03:21+00:00"
       }
     },
     {
       "id": 25,
       "event": "stage_started",
       "message": "요청 정리 시작",
-      "timestamp": "2026-07-06T02:56:35+00:00",
+      "timestamp": "2026-07-06T03:03:21+00:00",
       "data": {
         "event": "stage_started",
         "stage": "intake",
         "attempt": null,
-        "timestamp": "2026-07-06T02:56:35+00:00"
+        "timestamp": "2026-07-06T03:03:21+00:00"
       }
     },
     {
       "id": 26,
       "event": "attempt_started",
       "message": "요청 정리 시도 시작 (1번째 시도)",
-      "timestamp": "2026-07-06T02:56:35+00:00",
+      "timestamp": "2026-07-06T03:03:21+00:00",
       "data": {
         "event": "attempt_started",
         "stage": "intake",
         "attempt": 1,
-        "timestamp": "2026-07-06T02:56:35+00:00"
+        "timestamp": "2026-07-06T03:03:21+00:00"
       }
     },
     {
       "id": 27,
       "event": "agent_started",
       "message": "요청 정리 에이전트 실행 (1번째 시도)",
-      "timestamp": "2026-07-06T02:56:35+00:00",
+      "timestamp": "2026-07-06T03:03:21+00:00",
       "data": {
         "event": "agent_started",
         "stage": "intake",
         "attempt": 1,
-        "timestamp": "2026-07-06T02:56:35+00:00"
+        "timestamp": "2026-07-06T03:03:21+00:00"
       }
     },
     {
       "id": 28,
       "event": "agent_completed",
       "message": "요청 정리 에이전트 실행 종료 (1번째 시도)",
-      "timestamp": "2026-07-06T02:56:35+00:00",
+      "timestamp": "2026-07-06T03:03:21+00:00",
       "data": {
         "event": "agent_completed",
         "stage": "intake",
         "attempt": 1,
-        "timestamp": "2026-07-06T02:56:35+00:00"
+        "timestamp": "2026-07-06T03:03:21+00:00"
       }
     },
     {
       "id": 29,
       "event": "validation_started",
       "message": "요청 정리 검증 시작 (1번째 시도)",
-      "timestamp": "2026-07-06T02:56:35+00:00",
+      "timestamp": "2026-07-06T03:03:21+00:00",
       "data": {
         "event": "validation_started",
         "stage": "intake",
         "attempt": 1,
-        "timestamp": "2026-07-06T02:56:35+00:00"
+        "timestamp": "2026-07-06T03:03:21+00:00"
       }
     },
     {
       "id": 30,
       "event": "attempt_failed",
       "message": "요청 정리 시도 실패 (1번째 시도)",
-      "timestamp": "2026-07-06T02:56:35+00:00",
+      "timestamp": "2026-07-06T03:03:21+00:00",
       "data": {
         "event": "attempt_failed",
         "stage": "intake",
         "attempt": 1,
-        "timestamp": "2026-07-06T02:56:35+00:00"
+        "timestamp": "2026-07-06T03:03:21+00:00"
       }
     },
     {
       "id": 31,
       "event": "stage_retrying",
       "message": "요청 정리 자동 재시도 준비",
-      "timestamp": "2026-07-06T02:56:35+00:00",
+      "timestamp": "2026-07-06T03:03:21+00:00",
       "data": {
         "event": "stage_retrying",
         "stage": "intake",
         "attempt": 1,
-        "timestamp": "2026-07-06T02:56:35+00:00"
+        "timestamp": "2026-07-06T03:03:21+00:00"
       }
     },
     {
       "id": 32,
       "event": "attempt_started",
       "message": "요청 정리 시도 시작 (2번째 시도)",
-      "timestamp": "2026-07-06T02:56:35+00:00",
+      "timestamp": "2026-07-06T03:03:21+00:00",
       "data": {
         "event": "attempt_started",
         "stage": "intake",
         "attempt": 2,
-        "timestamp": "2026-07-06T02:56:35+00:00"
+        "timestamp": "2026-07-06T03:03:21+00:00"
       }
     },
     {
       "id": 33,
       "event": "agent_started",
       "message": "요청 정리 에이전트 실행 (2번째 시도)",
-      "timestamp": "2026-07-06T02:56:35+00:00",
+      "timestamp": "2026-07-06T03:03:21+00:00",
       "data": {
         "event": "agent_started",
         "stage": "intake",
         "attempt": 2,
-        "timestamp": "2026-07-06T02:56:35+00:00"
+        "timestamp": "2026-07-06T03:03:21+00:00"
       }
     },
     {
       "id": 34,
       "event": "agent_completed",
       "message": "요청 정리 에이전트 실행 종료 (2번째 시도)",
-      "timestamp": "2026-07-06T02:56:35+00:00",
+      "timestamp": "2026-07-06T03:03:21+00:00",
       "data": {
         "event": "agent_completed",
         "stage": "intake",
         "attempt": 2,
-        "timestamp": "2026-07-06T02:56:35+00:00"
+        "timestamp": "2026-07-06T03:03:21+00:00"
       }
     },
     {
       "id": 35,
       "event": "validation_started",
       "message": "요청 정리 검증 시작 (2번째 시도)",
-      "timestamp": "2026-07-06T02:56:35+00:00",
+      "timestamp": "2026-07-06T03:03:21+00:00",
       "data": {
         "event": "validation_started",
         "stage": "intake",
         "attempt": 2,
-        "timestamp": "2026-07-06T02:56:35+00:00"
+        "timestamp": "2026-07-06T03:03:21+00:00"
       }
     },
     {
       "id": 36,
       "event": "loop_guard_triggered",
       "message": "요청 정리 반복 실패 루프 감지",
-      "timestamp": "2026-07-06T02:56:35+00:00",
+      "timestamp": "2026-07-06T03:03:21+00:00",
       "data": {
         "event": "loop_guard_triggered",
         "stage": "intake",
         "attempt": 2,
-        "timestamp": "2026-07-06T02:56:35+00:00"
+        "timestamp": "2026-07-06T03:03:21+00:00"
       }
     },
     {
       "id": 37,
       "event": "attempt_failed",
       "message": "요청 정리 시도 실패 (2번째 시도)",
-      "timestamp": "2026-07-06T02:56:35+00:00",
+      "timestamp": "2026-07-06T03:03:21+00:00",
       "data": {
         "event": "attempt_failed",
         "stage": "intake",
         "attempt": 2,
-        "timestamp": "2026-07-06T02:56:35+00:00"
+        "timestamp": "2026-07-06T03:03:21+00:00"
       }
     },
     {
       "id": 38,
       "event": "stage_failed",
       "message": "요청 정리 실패",
-      "timestamp": "2026-07-06T02:56:35+00:00",
+      "timestamp": "2026-07-06T03:03:21+00:00",
       "data": {
         "event": "stage_failed",
         "stage": "intake",
         "attempt": 2,
-        "timestamp": "2026-07-06T02:56:35+00:00"
+        "timestamp": "2026-07-06T03:03:21+00:00"
       }
     },
     {
       "id": 39,
       "event": "pipeline_failed",
       "message": "파이프라인 실패",
-      "timestamp": "2026-07-06T02:56:35+00:00",
+      "timestamp": "2026-07-06T03:03:21+00:00",
       "data": {
         "event": "pipeline_failed",
         "stage": "intake",
         "attempt": null,
-        "timestamp": "2026-07-06T02:56:35+00:00"
+        "timestamp": "2026-07-06T03:03:21+00:00"
       }
     },
     {
       "id": 40,
       "event": "job_failed",
       "message": "Stage intake produced the same failing signature again on attempt 2.",
-      "timestamp": "2026-07-06T02:56:35+00:00",
-      "data": {
-        "code": "REPEATED_FAILURE_LOOP",
-        "stage": "intake"
-      }
-    },
-    {
-      "id": 41,
-      "event": "stage_retry_requested",
-      "message": "사용자가 단계 재시도를 요청했습니다.",
-      "timestamp": "2026-07-06T03:03:02+00:00",
-      "data": {
-        "stage": "intake"
-      }
-    },
-    {
-      "id": 42,
-      "event": "job_dequeued",
-      "message": "작업이 대기열에서 실행을 시작합니다.",
-      "timestamp": "2026-07-06T03:03:02+00:00",
-      "data": {}
-    },
-    {
-      "id": 43,
-      "event": "job_started",
-      "message": "작업 실행을 시작했습니다.",
-      "timestamp": "2026-07-06T03:03:02+00:00",
-      "data": {}
-    },
-    {
-      "id": 44,
-      "event": "pipeline_started",
-      "message": "pipeline_started",
-      "timestamp": "2026-07-06T03:03:02+00:00",
-      "data": {
-        "event": "pipeline_started",
-        "stage": "intake",
-        "attempt": null,
-        "timestamp": "2026-07-06T03:03:02+00:00"
-      }
-    },
-    {
-      "id": 45,
-      "event": "stage_started",
-      "message": "요청 정리 시작",
-      "timestamp": "2026-07-06T03:03:02+00:00",
-      "data": {
-        "event": "stage_started",
-        "stage": "intake",
-        "attempt": null,
-        "timestamp": "2026-07-06T03:03:02+00:00"
-      }
-    },
-    {
-      "id": 46,
-      "event": "attempt_started",
-      "message": "요청 정리 시도 시작 (1번째 시도)",
-      "timestamp": "2026-07-06T03:03:02+00:00",
-      "data": {
-        "event": "attempt_started",
-        "stage": "intake",
-        "attempt": 1,
-        "timestamp": "2026-07-06T03:03:02+00:00"
-      }
-    },
-    {
-      "id": 47,
-      "event": "agent_started",
-      "message": "요청 정리 에이전트 실행 (1번째 시도)",
-      "timestamp": "2026-07-06T03:03:02+00:00",
-      "data": {
-        "event": "agent_started",
-        "stage": "intake",
-        "attempt": 1,
-        "timestamp": "2026-07-06T03:03:02+00:00"
-      }
-    },
-    {
-      "id": 48,
-      "event": "agent_completed",
-      "message": "요청 정리 에이전트 실행 종료 (1번째 시도)",
-      "timestamp": "2026-07-06T03:03:02+00:00",
-      "data": {
-        "event": "agent_completed",
-        "stage": "intake",
-        "attempt": 1,
-        "timestamp": "2026-07-06T03:03:02+00:00"
-      }
-    },
-    {
-      "id": 49,
-      "event": "validation_started",
-      "message": "요청 정리 검증 시작 (1번째 시도)",
-      "timestamp": "2026-07-06T03:03:02+00:00",
-      "data": {
-        "event": "validation_started",
-        "stage": "intake",
-        "attempt": 1,
-        "timestamp": "2026-07-06T03:03:02+00:00"
-      }
-    },
-    {
-      "id": 50,
-      "event": "attempt_failed",
-      "message": "요청 정리 시도 실패 (1번째 시도)",
-      "timestamp": "2026-07-06T03:03:02+00:00",
-      "data": {
-        "event": "attempt_failed",
-        "stage": "intake",
-        "attempt": 1,
-        "timestamp": "2026-07-06T03:03:02+00:00"
-      }
-    },
-    {
-      "id": 51,
-      "event": "stage_retrying",
-      "message": "요청 정리 자동 재시도 준비",
-      "timestamp": "2026-07-06T03:03:02+00:00",
-      "data": {
-        "event": "stage_retrying",
-        "stage": "intake",
-        "attempt": 1,
-        "timestamp": "2026-07-06T03:03:02+00:00"
-      }
-    },
-    {
-      "id": 52,
-      "event": "attempt_started",
-      "message": "요청 정리 시도 시작 (2번째 시도)",
-      "timestamp": "2026-07-06T03:03:02+00:00",
-      "data": {
-        "event": "attempt_started",
-        "stage": "intake",
-        "attempt": 2,
-        "timestamp": "2026-07-06T03:03:02+00:00"
-      }
-    },
-    {
-      "id": 53,
-      "event": "agent_started",
-      "message": "요청 정리 에이전트 실행 (2번째 시도)",
-      "timestamp": "2026-07-06T03:03:02+00:00",
-      "data": {
-        "event": "agent_started",
-        "stage": "intake",
-        "attempt": 2,
-        "timestamp": "2026-07-06T03:03:02+00:00"
-      }
-    },
-    {
-      "id": 54,
-      "event": "agent_completed",
-      "message": "요청 정리 에이전트 실행 종료 (2번째 시도)",
-      "timestamp": "2026-07-06T03:03:02+00:00",
-      "data": {
-        "event": "agent_completed",
-        "stage": "intake",
-        "attempt": 2,
-        "timestamp": "2026-07-06T03:03:02+00:00"
-      }
-    },
-    {
-      "id": 55,
-      "event": "validation_started",
-      "message": "요청 정리 검증 시작 (2번째 시도)",
-      "timestamp": "2026-07-06T03:03:02+00:00",
-      "data": {
-        "event": "validation_started",
-        "stage": "intake",
-        "attempt": 2,
-        "timestamp": "2026-07-06T03:03:02+00:00"
-      }
-    },
-    {
-      "id": 56,
-      "event": "loop_guard_triggered",
-      "message": "요청 정리 반복 실패 루프 감지",
-      "timestamp": "2026-07-06T03:03:02+00:00",
-      "data": {
-        "event": "loop_guard_triggered",
-        "stage": "intake",
-        "attempt": 2,
-        "timestamp": "2026-07-06T03:03:02+00:00"
-      }
-    },
-    {
-      "id": 57,
-      "event": "attempt_failed",
-      "message": "요청 정리 시도 실패 (2번째 시도)",
-      "timestamp": "2026-07-06T03:03:02+00:00",
-      "data": {
-        "event": "attempt_failed",
-        "stage": "intake",
-        "attempt": 2,
-        "timestamp": "2026-07-06T03:03:02+00:00"
-      }
-    },
-    {
-      "id": 58,
-      "event": "stage_failed",
-      "message": "요청 정리 실패",
-      "timestamp": "2026-07-06T03:03:02+00:00",
-      "data": {
-        "event": "stage_failed",
-        "stage": "intake",
-        "attempt": 2,
-        "timestamp": "2026-07-06T03:03:02+00:00"
-      }
-    },
-    {
-      "id": 59,
-      "event": "pipeline_failed",
-      "message": "파이프라인 실패",
-      "timestamp": "2026-07-06T03:03:02+00:00",
-      "data": {
-        "event": "pipeline_failed",
-        "stage": "intake",
-        "attempt": null,
-        "timestamp": "2026-07-06T03:03:02+00:00"
-      }
-    },
-    {
-      "id": 60,
-      "event": "job_failed",
-      "message": "Stage intake produced the same failing signature again on attempt 2.",
-      "timestamp": "2026-07-06T03:03:02+00:00",
+      "timestamp": "2026-07-06T03:03:21+00:00",
       "data": {
         "code": "REPEATED_FAILURE_LOOP",
         "stage": "intake"
@@ -857,7 +632,7 @@
         "name": "llm-bridge-agent",
         "success": false,
         "exit_code": 1,
-        "duration_seconds": 0.0627,
+        "duration_seconds": 0.0632,
         "stdout": "",
         "stderr": "Expected { readonly \"type\": \"text\", ... } | { readonly \"type\": \"json\", ... } | { readonly \"type\": \"tool\", ... }, got {\"type\":\"json_schema\",\"json_schema\":{\"name\":\"appforge_intake_envelope\",\"strict\":false,\"schema\":{\"type\":\"object\",\"required\":[\"artifacts\",\"stage_result\",\"files\"],\"properties\":{\"artifacts\":{\"type\":\"object\",\"required\":[\"product_brief\"],\"additionalProperties\":true},\"stage_result\":{\"type\":\"object\",\"additionalProperties\":true},\"files\":{\"type\":\"object\",\"additionalProperties\":{\"type\":\"string\"}}},\"additionalProperties\":true}}}\n  at [\"responseFormat\"]",
         "command": [
@@ -877,7 +652,7 @@
           "kind": "artifact",
           "name": "product_brief",
           "required": true,
-          "reason": "Missing artifact file: /Users/lee/Music/AI/cursor/AppForge-LLM/AppForge-LLM-v6/projects/비행기-시뮬웹앱게임-threejs-37141298/.appforge/artifacts/product_brief.json"
+          "reason": "Missing artifact file: /Users/lee/Music/AI/cursor/AppForge-LLM/AppForge-LLM-v6/projects/비행기-시뮬웹앱게임-threejs-c48eae8e/.appforge/artifacts/product_brief.json"
         }
       ],
       "review_findings": [
@@ -890,12 +665,12 @@
         {
           "severity": "critical",
           "criterion": "product_brief",
-          "finding": "Missing artifact file: /Users/lee/Music/AI/cursor/AppForge-LLM/AppForge-LLM-v6/projects/비행기-시뮬웹앱게임-threejs-37141298/.appforge/artifacts/product_brief.json",
+          "finding": "Missing artifact file: /Users/lee/Music/AI/cursor/AppForge-LLM/AppForge-LLM-v6/projects/비행기-시뮬웹앱게임-threejs-c48eae8e/.appforge/artifacts/product_brief.json",
           "proposed_fix": "Correct the product_brief failure, rerun it, and update the stage artifact truthfully."
         }
       ],
       "previous_code": "AGENT_PROCESS_FAILED",
-      "loop_signature": "{\"code\": \"AGENT_PROCESS_FAILED\", \"driver_exit_code\": 1, \"failed_checks\": [{\"kind\": \"completion_record\", \"name\": \"stage-result\", \"reason\": \"Missing completion record: .appforge/stage-result.json\", \"required\": true}, {\"kind\": \"artifact\", \"name\": \"product_brief\", \"reason\": \"Missing artifact file: /Users/lee/Music/AI/cursor/AppForge-LLM/AppForge-LLM-v6/projects/비행기-시뮬웹앱게임-threejs-37141298/.appforge/artifacts/product_brief.json\", \"required\": true}], \"review_findings\": [{\"criterion\": \"stage-result\", \"finding\": \"Missing completion record: .appforge/stage-result.json\", \"severity\": \"critical\"}, {\"criterion\": \"product_brief\", \"finding\": \"Missing artifact file: /Users/lee/Music/AI/cursor/AppForge-LLM/AppForge-LLM-v6/projects/비행기-시뮬웹앱게임-threejs-37141298/.appforge/artifacts/product_brief.json\", \"severity\": \"critical\"}], \"stage_result_error\": \"Missing completion record: .appforge/stage-result.json\"}",
+      "loop_signature": "{\"code\": \"AGENT_PROCESS_FAILED\", \"driver_exit_code\": 1, \"failed_checks\": [{\"kind\": \"completion_record\", \"name\": \"stage-result\", \"reason\": \"Missing completion record: .appforge/stage-result.json\", \"required\": true}, {\"kind\": \"artifact\", \"name\": \"product_brief\", \"reason\": \"Missing artifact file: /Users/lee/Music/AI/cursor/AppForge-LLM/AppForge-LLM-v6/projects/비행기-시뮬웹앱게임-threejs-c48eae8e/.appforge/artifacts/product_brief.json\", \"required\": true}], \"review_findings\": [{\"criterion\": \"stage-result\", \"finding\": \"Missing completion record: .appforge/stage-result.json\", \"severity\": \"critical\"}, {\"criterion\": \"product_brief\", \"finding\": \"Missing artifact file: /Users/lee/Music/AI/cursor/AppForge-LLM/AppForge-LLM-v6/projects/비행기-시뮬웹앱게임-threejs-c48eae8e/.appforge/artifacts/product_brief.json\", \"severity\": \"critical\"}], \"stage_result_error\": \"Missing completion record: .appforge/stage-result.json\"}",
       "next_retry_mode": "regenerate",
       "repair_mode": "regenerate"
     }
@@ -913,5 +688,5 @@
     "path": null,
     "built_at": null
   },
-  "next_event_id": 61
+  "next_event_id": 41
 }

@@ -15,6 +15,7 @@ from appforge.drivers import (
     LLMBridgeAgentDriver,
     LLMBridgeDriver,
     _apply_bridge_envelope,
+    _bridge_envelope_response_format,
     _build_bridge_prompt,
     create_driver,
 )
@@ -105,6 +106,15 @@ def test_llm_bridge_prompt_includes_stage_artifact_schema(tmp_path) -> None:
     assert "External LLM bridge execution contract" in prompt
     assert "product_brief" in prompt
     assert "original stage packet" in prompt
+
+
+def test_llm_bridge_envelope_response_format_matches_bridge_contract() -> None:
+    response_format = _bridge_envelope_response_format("intake", ("product_brief",))
+
+    assert response_format["type"] == "json"
+    assert "json_schema" not in response_format
+    assert response_format["schema"]["required"] == ["artifacts", "stage_result", "files"]
+    assert response_format["schema"]["properties"]["artifacts"]["required"] == ["product_brief"]
 
 
 def test_llm_bridge_driver_maps_cancelled_request_to_cancel_result(tmp_path, monkeypatch) -> None:

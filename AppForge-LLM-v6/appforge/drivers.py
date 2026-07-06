@@ -299,27 +299,23 @@ def _bridge_envelope_response_format(stage_name: str, produces: tuple[str, ...])
     response is applied.
     """
     return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": f"appforge_{stage_name.replace('-', '_')}_envelope",
-            "strict": False,
-            "schema": {
-                "type": "object",
-                "required": ["artifacts", "stage_result", "files"],
-                "properties": {
-                    "artifacts": {
-                        "type": "object",
-                        "required": list(produces),
-                        "additionalProperties": True,
-                    },
-                    "stage_result": {"type": "object", "additionalProperties": True},
-                    "files": {
-                        "type": "object",
-                        "additionalProperties": {"type": "string"},
-                    },
+        "type": "json",
+        "schema": {
+            "type": "object",
+            "required": ["artifacts", "stage_result", "files"],
+            "properties": {
+                "artifacts": {
+                    "type": "object",
+                    "required": list(produces),
+                    "additionalProperties": True,
                 },
-                "additionalProperties": True,
+                "stage_result": {"type": "object", "additionalProperties": True},
+                "files": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                },
             },
+            "additionalProperties": True,
         },
     }
 
