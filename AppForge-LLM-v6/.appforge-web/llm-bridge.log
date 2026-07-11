@@ -1,3 +1,0 @@
-$ bun run src/index.ts
-[llm-bridge] listening on http://127.0.0.1:8788 (config: /Users/lee/.appforge/llm/providers.json)
-[Bun.serve]: request timed out after 10 seconds. Pass `idleTimeout` to configure.
