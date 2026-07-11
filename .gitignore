@@ -15,3 +15,6 @@ projects/
 .env.*
 !.env.example
 .DS_Store
+
+# AppForge-LLM v7 is tracked as source, not as a release bundle.
+/AppForge-LLM-v7.zip

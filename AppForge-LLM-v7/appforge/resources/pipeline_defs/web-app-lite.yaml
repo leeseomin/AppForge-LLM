@@ -1,0 +1,141 @@
+name: web-app-lite
+version: '1.0'
+category: greenfield
+description: Lightweight browser application track that folds requirements, workflow, memory, loop, architecture, and UX planning into one engineering spec before implementation.
+match:
+  keywords:
+  - web app lite
+  - simple app
+  - todo app
+  - small web app
+  - prototype web app
+  - 간단한 앱
+  - 작은 웹앱
+  - 투두앱
+  - 메모 앱
+orchestration:
+  default_mode: autonomous
+  max_stage_attempts: 3
+stages:
+- name: intake
+  description: Turn the raw request into a bounded product brief without blocking on routine ambiguity.
+  skill: stages/intake.md
+  produces:
+  - product_brief
+  tools:
+  - workspace_tree
+  checkpoint: true
+  approval: false
+  review_focus:
+  - Problem and users are explicit
+  - Constraints and safe defaults are separated
+  - Scope stays small enough for the lite track
+  success_criteria:
+  - The brief is actionable
+  - Open questions have safe defaults or true blockers
+  gates: []
+- name: engineering_spec
+  description: Collapse small-app requirements, screens, state/data, loop, architecture, UX, and verification planning into one implementation-ready spec.
+  skill: stages/engineering-spec.md
+  produces:
+  - engineering_spec
+  tools:
+  - workspace_tree
+  - search_text
+  - detect_stack
+  checkpoint: true
+  approval: false
+  review_focus:
+  - Requirements are testable and traceable
+  - Screen, state, data, and loop decisions are concrete
+  - Verification plan is executable without hidden assumptions
+  success_criteria:
+  - The spec can drive implementation without re-asking routine questions
+  - Acceptance criteria and verification steps are explicit
+  gates: []
+- name: implementation
+  description: Implement the accepted lite scope completely, including tests and useful documentation.
+  skill: stages/implementation.md
+  produces:
+  - implementation_report
+  tools:
+  - detect_stack
+  - run_command
+  - install_dependencies
+  - git_status
+  - git_diff
+  - write_text
+  - read_text
+  - search_text
+  - run_tests
+  - run_build
+  checkpoint: true
+  approval: false
+  review_focus:
+  - Code matches repository conventions
+  - Engineering spec requirements are covered
+  - No placeholder logic or fake success remains
+  success_criteria:
+  - Application starts or library imports
+  - Changed behavior is documented
+  - Known gaps are truthful
+  gates:
+  - tool: detect_stack
+    required: true
+- name: verification
+  description: Run automated and targeted manual checks against the engineering spec acceptance criteria.
+  skill: stages/verification.md
+  produces:
+  - verification_report
+  tools:
+  - detect_quality_commands
+  - run_tests
+  - run_lint
+  - run_typecheck
+  - run_build
+  - secret_scan
+  checkpoint: true
+  approval: false
+  review_focus:
+  - Evidence comes from executed commands
+  - Acceptance criteria are traced
+  - Security basics are checked in this lighter track
+  success_criteria:
+  - Required tests and build pass when commands exist
+  - No likely committed credential remains
+  gates:
+  - tool: run_tests
+    required: true
+  - tool: run_lint
+    required: false
+  - tool: run_typecheck
+    required: false
+  - tool: run_build
+    required: true
+  - tool: secret_scan
+    required: true
+- name: handoff
+  description: Deliver source, quickstart, verification evidence, and remaining work.
+  skill: stages/handoff.md
+  produces:
+  - handoff_report
+  tools:
+  - release_readiness
+  - archive_workspace
+  - artifact_inventory
+  checkpoint: true
+  approval: false
+  review_focus:
+  - Quickstart is executable
+  - Deliverables and open items are unambiguous
+  - Verification evidence is easy to find
+  success_criteria:
+  - A new engineer can continue
+  - A source archive is produced
+  gates:
+  - tool: release_readiness
+    required: true
+  - tool: archive_workspace
+    required: true
+  - tool: artifact_inventory
+    required: false
