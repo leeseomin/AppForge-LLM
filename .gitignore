@@ -1,32 +1,49 @@
-.venv/
-venv/
+# Python environment, bytecode, and packaging output
+/.venv/
+/venv/
 __pycache__/
 *.py[cod]
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-coverage/
-htmlcov/
-build/
-dist/
 *.egg-info/
+/build/
+/dist/
+
+# Python test and analysis output
+/.pytest_cache/
+/.mypy_cache/
+/.ruff_cache/
+/.coverage
+/.coverage.*
+/coverage/
+/coverage.xml
+/htmlcov/
+
+# JavaScript / TypeScript
 node_modules/
-frontend/node_modules/
-llm_bridge/node_modules/
-projects/
-.appforge-web/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+
+# Lockfiles and appforge/resources/web/ are intentionally tracked.
+
+# AppForge local runtime and generated workspaces
+/projects/
+/.appforge-web/
+
+# AppForge transient control data
+# Artifacts, checkpoints, project/state metadata, request.md, and COMPLETED.md stay trackable.
+/.appforge/logs/
+/.appforge/prompts/
+/.appforge/reports/
+/.appforge/memory/
+/.appforge/stage-result.json
+
+# Local secrets
 .env
 .env.*
 !.env.example
+
+# Generated utility exports
+/*-source-code.md
+
+# OS metadata
 .DS_Store
-
-npm-debug.log*
-
-# OpenAppForge generated/runtime files
-.appforge/logs/
-.appforge/prompts/
-.appforge/reports/
-.appforge/memory/
-.appforge/current-stage.md
-.appforge/stage-result.json
