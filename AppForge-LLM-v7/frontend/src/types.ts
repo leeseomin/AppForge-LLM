@@ -247,11 +247,13 @@ export interface OAuthPollResult {
   status: 'pending' | 'success' | 'failed';
   provider?: string;
   error?: string;
-  credential?: {
-    type: 'oauth';
-    refresh: string;
-    access: string;
-    expires: number;
-    accountId?: string;
-  };
+  accountId?: string;
+  expires?: number;
+}
+
+export interface OAuthRefreshResult {
+  ok: true;
+  provider: string;
+  accountId?: string;
+  expires: number;
 }

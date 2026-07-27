@@ -2,6 +2,7 @@ import * as registry from "./registry"
 import * as store from "./config"
 import * as catalog from "./catalog"
 import * as oauth from "./oauth"
+import { publicOAuthPollResult, publicOAuthRefreshResult } from "./oauth/public"
 import { BridgeLLMCancelled, BridgeLLMError, generate, runOnce, stream, type StreamEvent } from "./llm"
 import { VERSION } from "./version"
 import type {
@@ -10,6 +11,7 @@ import type {
   ChatMessageInput,
   GenerateRequest,
   GenerationOptions,
+  OAuthCredential,
   ProviderStatus,
   TestRequest,
   TestResponse,
@@ -746,14 +748,21 @@ async function oauthPoll(_request: Request, match: RegExpMatchArray): Promise<Re
   const providerId = decodeParam(match[1] ?? "")
   const pollId = decodeParam(match[2] ?? "")
   const result = oauth.pollOAuthFlow(providerId, pollId)
-  if (result.status === "success" && result.credential && result.provider) {
+  if (result.status === "success") {
+    if (!result.credential) {
+      return cors(errorResponse("OAuth completed without a credential.", 502, "OAUTH_RESULT_INVALID"))
+    }
     try {
-      await store.setOAuthCredential(result.provider, result.credential)
+      await store.setOAuthCredential(providerId, result.credential)
     } catch {
-      // best-effort persist; the credential is still returned to the caller
+      return cors(errorResponse(
+        "OAuth credential could not be stored securely.",
+        500,
+        "OAUTH_CREDENTIAL_STORAGE_FAILED",
+      ))
     }
   }
-  return cors(json(result))
+  return cors(json(publicOAuthPollResult(result, providerId)))
 }
 
 async function oauthRefresh(_request: Request, match: RegExpMatchArray): Promise<Response> {
@@ -765,14 +774,23 @@ async function oauthRefresh(_request: Request, match: RegExpMatchArray): Promise
   if (!existing) {
     return cors(errorResponse(`No OAuth credential stored for '${providerId}'`, 404, "NO_OAUTH_CREDENTIAL"))
   }
+  let refreshed: OAuthCredential
   try {
-    const refreshed = await oauth.refreshOAuthToken(providerId, existing.refresh)
-    await store.setOAuthCredential(providerId, refreshed)
-    return cors(json({ ok: true, provider: providerId, credential: refreshed }))
+    refreshed = await oauth.refreshOAuthToken(providerId, existing.refresh)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     return cors(errorResponse(message, 500, "OAUTH_REFRESH_FAILED"))
   }
+  try {
+    await store.setOAuthCredential(providerId, refreshed)
+  } catch {
+    return cors(errorResponse(
+      "Refreshed OAuth credential could not be stored securely.",
+      500,
+      "OAUTH_CREDENTIAL_STORAGE_FAILED",
+    ))
+  }
+  return cors(json(publicOAuthRefreshResult(providerId, refreshed)))
 }
 
 async function dispatch(request: Request): Promise<Response> {

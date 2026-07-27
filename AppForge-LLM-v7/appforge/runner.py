@@ -45,6 +45,7 @@ class PipelineRunner:
         driver: AgentDriver,
         *,
         auto_approve: bool = True,
+        approved_stage: str | None = None,
         allow_network: bool = False,
         allow_destructive: bool = False,
         max_stage_attempts: int | None = None,
@@ -57,6 +58,7 @@ class PipelineRunner:
         self.project = load_project(layout)
         self.pipeline: PipelineSpec = load_pipeline(str(self.project["pipeline"]))
         self.auto_approve = auto_approve
+        self.approved_stage = approved_stage
         self.allow_network = allow_network
         self.allow_destructive = allow_destructive
         self.max_stage_attempts = max_stage_attempts or self.pipeline.max_stage_attempts
@@ -142,7 +144,8 @@ class PipelineRunner:
 
         existing = read_checkpoint(self.layout, stage_name)
         if existing and existing.get("status") == "awaiting_human":
-            if not self.auto_approve:
+            approved_by_user = self.approved_stage == stage_name
+            if not self.auto_approve and not approved_by_user:
                 failure = {
                     "code": "HUMAN_APPROVAL_REQUIRED",
                     "message": f"Stage {stage_name} awaits approval",
@@ -169,15 +172,19 @@ class PipelineRunner:
                 driver=existing.get("driver") or {},
                 metadata={
                     **(existing.get("metadata") or {}),
-                    "auto_approved_at": utc_now(),
+                    "approved_at": utc_now(),
+                    "approval_source": "automatic" if self.auto_approve else "human",
                 },
             )
+            if approved_by_user:
+                self.approved_stage = None
             completed.append(stage_name)
             self._emit(
                 "stage_completed",
                 stage=stage_name,
                 attempt=int(existing.get("attempt", 1)),
-                auto_approved=True,
+                auto_approved=self.auto_approve,
+                approved_by_user=approved_by_user,
             )
             if only_stage:
                 self._emit("pipeline_completed", completed_stages=completed)

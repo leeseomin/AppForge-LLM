@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import re
 import threading
@@ -755,6 +756,7 @@ class LLMBridgeAgentDriver(AgentDriver):
         changed: set[str] = set()
         submitted_artifacts: set[str] = set()
         stage_result_submitted = False
+        stage_result_invalidated = False
         turns = 0
         repeated_tool_calls: dict[str, int] = {}
         usage_tokens = 0
@@ -920,11 +922,16 @@ class LLMBridgeAgentDriver(AgentDriver):
                                     arguments=arguments_dict,
                                     project=project,
                                     tool_log_path=tool_log_path,
+                                    observed_changes=changed,
                                 )
-                            changed.update(new_changed)
-                            submitted_artifacts.update(artifacts)
                             if name == "submit_stage_result" and not is_error:
                                 stage_result_submitted = True
+                                stage_result_invalidated = False
+                            elif stage_result_submitted and new_changed:
+                                stage_result_submitted = False
+                                stage_result_invalidated = True
+                            changed.update(new_changed)
+                            submitted_artifacts.update(artifacts)
                             llm_bridge.agent_tool_result(
                                 self.bridge_url,
                                 session_id,
@@ -1095,6 +1102,11 @@ class LLMBridgeAgentDriver(AgentDriver):
                 stdout=_redact_text("".join(transcript)),
             )
         if not stage_result_submitted:
+            if stage_result_invalidated:
+                return fail(
+                    "STAGE_RESULT_STALE: workspace or artifact changes occurred after "
+                    "submit_stage_result; resubmit the stage result after all changes are complete."
+                )
             stage_result = _default_stage_result(stage, sorted(changed))
             stage_result["commands_run"] = [
                 {"command": "llm-bridge /agent", "result": f"Agent completed with {turns} tool calls."}
@@ -1222,7 +1234,10 @@ class LLMBridgeAgentDriver(AgentDriver):
         names = {tool["name"] for tool in exposed}
         for internal in _INTERNAL_AGENT_TOOLS:
             if internal["name"] not in names:
-                exposed.append(dict(internal))
+                tool_spec = copy.deepcopy(internal)
+                if tool_spec["name"] == "submit_artifact":
+                    tool_spec["parameters"]["properties"]["name"]["enum"] = list(stage_spec.produces)
+                exposed.append(tool_spec)
         return exposed
 
     def _append_tool_log(self, tool_log_path: Path, payload: dict[str, Any]) -> None:
@@ -1240,6 +1255,7 @@ class LLMBridgeAgentDriver(AgentDriver):
         arguments: dict[str, Any],
         project: dict[str, Any],
         tool_log_path: Path,
+        observed_changes: set[str] | None = None,
     ) -> tuple[str, set[str], set[str], bool]:
         started = time.monotonic()
         changed: set[str] = set()
@@ -1247,7 +1263,13 @@ class LLMBridgeAgentDriver(AgentDriver):
         is_error = False
         try:
             if name == "submit_artifact":
-                result = self._submit_artifact(layout, arguments)
+                pipeline = load_pipeline(str(project["pipeline"]))
+                allowed_artifacts = set(pipeline.stage(stage).produces)
+                result = self._submit_artifact(
+                    layout,
+                    arguments,
+                    allowed_artifacts=allowed_artifacts,
+                )
                 rel = str(result.data.get("path") or "")
                 if rel:
                     changed.add(rel)
@@ -1255,7 +1277,12 @@ class LLMBridgeAgentDriver(AgentDriver):
                 if result.success and artifact:
                     artifacts.add(artifact)
             elif name == "submit_stage_result":
-                result = self._submit_stage_result(layout, stage, arguments)
+                result = self._submit_stage_result(
+                    layout,
+                    stage,
+                    arguments,
+                    observed_changes=observed_changes or set(),
+                )
                 if result.success:
                     changed.add(f".appforge/{STAGE_RESULT_FILE_NAME}")
             elif name in {"read_text", "write_text"}:
@@ -1335,10 +1362,24 @@ class LLMBridgeAgentDriver(AgentDriver):
         payload["timeout"] = min(requested_timeout, self.max_tool_seconds, 120)
         return tool.run(layout.root, payload)
 
-    def _submit_artifact(self, layout: ProjectLayout, arguments: dict[str, Any]) -> ToolResult:
+    def _submit_artifact(
+        self,
+        layout: ProjectLayout,
+        arguments: dict[str, Any],
+        *,
+        allowed_artifacts: set[str],
+    ) -> ToolResult:
         name = str(arguments.get("name") or "")
         if not name:
             return ToolResult(success=False, error="artifact name is required")
+        if name not in allowed_artifacts:
+            return ToolResult(
+                success=False,
+                error=(
+                    f"artifact {name!r} is not allowed for this stage; "
+                    f"expected one of: {', '.join(sorted(allowed_artifacts)) or '<none>'}"
+                ),
+            )
         try:
             payload = _read_json_object_arg(arguments.get("payload"), field="payload")
             validate_artifact(name, payload)
@@ -1348,10 +1389,20 @@ class LLMBridgeAgentDriver(AgentDriver):
         atomic_write_json(path, payload)
         return ToolResult(success=True, data={"artifact": name, "path": _relpath(path, layout), "valid": True})
 
-    def _submit_stage_result(self, layout: ProjectLayout, stage: str, arguments: dict[str, Any]) -> ToolResult:
+    def _submit_stage_result(
+        self,
+        layout: ProjectLayout,
+        stage: str,
+        arguments: dict[str, Any],
+        *,
+        observed_changes: set[str],
+    ) -> ToolResult:
         try:
             payload = _read_json_object_arg(arguments.get("payload"), field="payload")
-            payload = _normalize_stage_result(stage, payload, [])
+            reviewable_changes = sorted(
+                path for path in observed_changes if not path.startswith(".appforge/")
+            )
+            payload = _normalize_stage_result(stage, payload, reviewable_changes)
             jsonschema.validate(payload, _stage_result_schema())
         except (DriverError, jsonschema.ValidationError) as exc:
             return ToolResult(success=False, error=f"stage_result schema validation failed: {getattr(exc, 'message', str(exc))}")

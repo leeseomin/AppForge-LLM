@@ -12,6 +12,200 @@ from .tooling.registry import ToolRegistry
 from .util import read_json
 
 
+def _object_items(payload: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    value = payload.get(key)
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _unique_ids(
+    items: list[dict[str, Any]],
+    *,
+    field: str,
+    label: str,
+    errors: list[str],
+) -> set[str]:
+    identifiers: set[str] = set()
+    for index, item in enumerate(items):
+        identifier = str(item.get(field) or "").strip()
+        if not identifier:
+            errors.append(f"{label}[{index}] has no {field}")
+        elif identifier in identifiers:
+            errors.append(f"duplicate {label} id {identifier!r}")
+        else:
+            identifiers.add(identifier)
+    return identifiers
+
+
+def _read_artifact_object(
+    layout: ProjectLayout,
+    name: str,
+    errors: list[str],
+) -> dict[str, Any]:
+    payload = read_json(layout.artifacts / f"{name}.json")
+    if not isinstance(payload, dict):
+        errors.append(f"required upstream artifact {name!r} is missing or invalid")
+        return {}
+    return payload
+
+
+def _requirement_ids(payload: dict[str, Any], errors: list[str]) -> set[str]:
+    requirements = [
+        *_object_items(payload, "functional_requirements"),
+        *_object_items(payload, "non_functional_requirements"),
+    ]
+    return _unique_ids(
+        requirements,
+        field="id",
+        label="requirement",
+        errors=errors,
+    )
+
+
+def _requirements_semantics(payload: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    requirement_ids = _requirement_ids(payload, errors)
+    _unique_ids(
+        _object_items(payload, "quality_gates"),
+        field="id",
+        label="quality gate",
+        errors=errors,
+    )
+    _unique_ids(
+        _object_items(payload, "risks"),
+        field="id",
+        label="risk",
+        errors=errors,
+    )
+    traced: set[str] = set()
+    for index, link in enumerate(_object_items(payload, "traceability")):
+        endpoints = {
+            str(link.get("from") or "").strip(),
+            str(link.get("to") or "").strip(),
+        }
+        referenced = endpoints & requirement_ids
+        if not referenced:
+            errors.append(
+                f"traceability[{index}] references no known requirement id"
+            )
+        traced.update(referenced)
+    for identifier in sorted(requirement_ids - traced):
+        errors.append(f"requirement {identifier!r} has no traceability link")
+    return errors
+
+
+def _workflow_semantics(layout: ProjectLayout, payload: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    requirements = _read_artifact_object(layout, "requirements_spec", errors)
+    requirement_ids = _requirement_ids(requirements, errors)
+    step_ids = _unique_ids(
+        _object_items(payload, "steps"),
+        field="id",
+        label="workflow step",
+        errors=errors,
+    )
+    traced_requirements: set[str] = set()
+    traced_steps: set[str] = set()
+    for index, link in enumerate(_object_items(payload, "traceability")):
+        requirement = str(link.get("requirement") or "").strip()
+        workflow_step = str(link.get("workflow_step") or "").strip()
+        if requirement not in requirement_ids:
+            errors.append(
+                f"traceability[{index}] references unknown requirement {requirement!r}"
+            )
+        else:
+            traced_requirements.add(requirement)
+        if workflow_step not in step_ids:
+            errors.append(
+                f"traceability[{index}] references unknown workflow step {workflow_step!r}"
+            )
+        else:
+            traced_steps.add(workflow_step)
+    for identifier in sorted(requirement_ids - traced_requirements):
+        errors.append(f"requirement {identifier!r} is not mapped to a workflow step")
+    for identifier in sorted(step_ids - traced_steps):
+        errors.append(f"workflow step {identifier!r} is not mapped to a requirement")
+    return errors
+
+
+def _memory_semantics(layout: ProjectLayout, payload: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    requirements = _read_artifact_object(layout, "requirements_spec", errors)
+    requirement_ids = _requirement_ids(requirements, errors)
+    surface_ids = _unique_ids(
+        _object_items(payload, "memory_surfaces"),
+        field="id",
+        label="memory surface",
+        errors=errors,
+    )
+    traced_surfaces: set[str] = set()
+    for index, link in enumerate(_object_items(payload, "traceability")):
+        requirement = str(link.get("requirement") or "").strip()
+        surface = str(link.get("memory_surface") or "").strip()
+        if requirement not in requirement_ids:
+            errors.append(
+                f"traceability[{index}] references unknown requirement {requirement!r}"
+            )
+        if surface not in surface_ids:
+            errors.append(
+                f"traceability[{index}] references unknown memory surface {surface!r}"
+            )
+        else:
+            traced_surfaces.add(surface)
+    for identifier in sorted(surface_ids - traced_surfaces):
+        errors.append(f"memory surface {identifier!r} has no requirement trace")
+    return errors
+
+
+def _loop_semantics(layout: ProjectLayout, payload: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    workflow = _read_artifact_object(layout, "workflow_spec", errors)
+    step_ids = _unique_ids(
+        _object_items(workflow, "steps"),
+        field="id",
+        label="workflow step",
+        errors=errors,
+    )
+    loop_ids = _unique_ids(
+        _object_items(payload, "loops"),
+        field="id",
+        label="loop",
+        errors=errors,
+    )
+    traced_loops: set[str] = set()
+    for index, link in enumerate(_object_items(payload, "traceability")):
+        workflow_step = str(link.get("workflow_step") or "").strip()
+        loop = str(link.get("loop") or "").strip()
+        if workflow_step not in step_ids:
+            errors.append(
+                f"traceability[{index}] references unknown workflow step {workflow_step!r}"
+            )
+        if loop not in loop_ids:
+            errors.append(f"traceability[{index}] references unknown loop {loop!r}")
+        else:
+            traced_loops.add(loop)
+    for identifier in sorted(loop_ids - traced_loops):
+        errors.append(f"loop {identifier!r} has no workflow-step trace")
+    return errors
+
+
+def validate_artifact_semantics(
+    layout: ProjectLayout,
+    name: str,
+    payload: dict[str, Any],
+) -> list[str]:
+    if name == "requirements_spec":
+        return _requirements_semantics(payload)
+    if name == "workflow_spec":
+        return _workflow_semantics(layout, payload)
+    if name == "memory_spec":
+        return _memory_semantics(layout, payload)
+    if name == "loop_spec":
+        return _loop_semantics(layout, payload)
+    return []
+
+
 def validate_stage_result(layout: ProjectLayout, stage: StageSpec) -> tuple[bool, dict[str, Any], str | None]:
     path = layout.control / STAGE_RESULT_FILE_NAME
     if not path.exists():
@@ -39,7 +233,13 @@ def validate_stage_artifacts(layout: ProjectLayout, stage: StageSpec) -> tuple[b
     for artifact in stage.produces:
         path = layout.artifacts / f"{artifact}.json"
         try:
-            validate_artifact_file(artifact, path)
+            payload = validate_artifact_file(artifact, path)
+            semantic_errors = validate_artifact_semantics(layout, artifact, payload)
+            if semantic_errors:
+                raise ArtifactValidationError(
+                    f"{artifact} semantic validation failed: "
+                    + "; ".join(semantic_errors)
+                )
             results.append({"kind": "artifact", "name": artifact, "required": True, "passed": True, "path": str(path)})
             artifact_paths[artifact] = str(path)
         except ArtifactValidationError as exc:

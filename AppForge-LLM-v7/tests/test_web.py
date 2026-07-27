@@ -9,13 +9,15 @@ import time
 import zipfile
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from appforge import llm_bridge
 from appforge.drivers import AgentDriver
-from appforge.models import DriverResult
+from appforge.models import DriverResult, ToolResult
+from appforge.projects import initialize_project
 from appforge.web import create_app
-from appforge.web_jobs import JobManager, WebConfig
+from appforge.web_jobs import JobManager, WebConfig, WebJobError
 
 
 SESSION_TOKEN = "test-token"
@@ -212,6 +214,38 @@ class ExitCodeDriver(AgentDriver):
         return DriverResult(False, 7, "", "fixture exit", 0.01, ["exit-code-fixture"], str(final_path))
 
 
+class FailOnceFixtureDriver(FixtureScriptDriver):
+    name = "fail-once-fixture"
+
+    def __init__(self, failed_stage: str) -> None:
+        super().__init__()
+        self.failed_stage = failed_stage
+        self.calls: list[str] = []
+
+    def run(self, prompt, *, layout, stage, attempt, timeout, cancel_event=None):  # type: ignore[no-untyped-def]
+        self.calls.append(stage)
+        if stage == self.failed_stage and self.calls.count(stage) == 1:
+            final_path = layout.logs / f"{stage}-attempt-{attempt}-fail-once-final.txt"
+            final_path.write_text("", encoding="utf-8")
+            return DriverResult(
+                False,
+                7,
+                "",
+                "intentional first-attempt failure",
+                0.01,
+                ["fail-once-fixture"],
+                str(final_path),
+            )
+        return super().run(
+            prompt,
+            layout=layout,
+            stage=stage,
+            attempt=attempt,
+            timeout=timeout,
+            cancel_event=cancel_event,
+        )
+
+
 def _wait_for_terminal(client: TestClient, job_id: str, timeout: float = 45.0) -> dict:
     deadline = time.monotonic() + timeout
     last: dict = {}
@@ -331,6 +365,173 @@ def test_web_job_runs_all_stages_and_enables_zip_download(tmp_path: Path, monkey
             names = archive.namelist()
         assert "README.md" in names
         assert not any(name.startswith(".appforge/") for name in names)
+
+
+def test_retry_failed_stage_completes_remaining_pipeline_before_packaging(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _mock_ready_bridge(monkeypatch)
+    driver = FailOnceFixtureDriver("implementation")
+    monkeypatch.setattr("appforge.web_jobs.create_driver", lambda *args, **kwargs: driver)
+    app = create_app(
+        _fixture_config(tmp_path),
+        llm_bridge_manager=_FakeBridgeManager(),
+        session_token=SESSION_TOKEN,
+    )
+    with _client(app) as client:
+        created = client.post(
+            "/api/jobs",
+            json={
+                "prompt": "중간 실패 후 재시도되는 MVP 프로토타입을 만들어라.",
+                "pipeline": "prototype",
+            },
+        )
+        assert created.status_code == 202, created.text
+        job_id = created.json()["id"]
+
+        failed = _wait_for_terminal(client, job_id)
+        assert failed["status"] == "failed"
+        assert failed["error"]["stage"] == "implementation"
+        assert failed["download"]["available"] is False
+
+        retried = client.post(f"/api/jobs/{job_id}/retry")
+        assert retried.status_code == 202, retried.text
+        completed = _wait_for_terminal(client, job_id)
+
+    assert completed["status"] == "completed", completed.get("error")
+    assert completed["download"]["available"] is True
+    assert all(stage["status"] == "completed" for stage in completed["stages"])
+    assert driver.calls.count("implementation") == 2
+    assert "verification" in driver.calls
+    assert "handoff" in driver.calls
+
+
+def test_guided_approval_is_consumed_by_only_the_current_stage(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _mock_ready_bridge(monkeypatch)
+    driver = FixtureScriptDriver()
+    monkeypatch.setattr("appforge.web_jobs.create_driver", lambda *args, **kwargs: driver)
+    app = create_app(
+        _fixture_config(tmp_path),
+        llm_bridge_manager=_FakeBridgeManager(),
+        session_token=SESSION_TOKEN,
+    )
+    approval_stages = ["architecture", "experience", "release"]
+
+    with _client(app) as client:
+        created = client.post(
+            "/api/jobs",
+            json={
+                "prompt": "단계별 승인이 필요한 웹앱을 만들어라.",
+                "pipeline": "web-app",
+                "mode": "guided",
+            },
+        )
+        assert created.status_code == 202, created.text
+        job_id = created.json()["id"]
+
+        for expected_stage in approval_stages:
+            awaiting = _wait_until_job(
+                client,
+                job_id,
+                lambda job: job["status"] in {"awaiting_approval", "completed", "failed"},
+            )
+            assert awaiting["status"] == "awaiting_approval", awaiting.get("error")
+            assert awaiting["active_stage"] == expected_stage
+            approved = client.post(f"/api/jobs/{job_id}/approve")
+            assert approved.status_code == 202, approved.text
+
+        completed = _wait_for_terminal(client, job_id)
+
+    assert completed["status"] == "completed", completed.get("error")
+    assert completed["download"]["available"] is True
+
+
+def test_archive_is_regenerated_from_current_workspace(
+    tmp_path: Path,
+) -> None:
+    manager = JobManager(_fixture_config(tmp_path))
+    layout = initialize_project(
+        "Create a fresh archive",
+        projects_dir=tmp_path / "projects",
+        name="archive-freshness",
+        pipeline_name="prototype",
+    )
+    source = layout.root / "app.txt"
+    source.write_text("old\n", encoding="utf-8")
+
+    first = manager._ensure_archive(layout)
+    source.write_text("new\n", encoding="utf-8")
+    second = manager._ensure_archive(layout)
+
+    assert second != first
+    with zipfile.ZipFile(second) as archive:
+        assert archive.read("app.txt").decode("utf-8") == "new\n"
+
+
+def test_preview_build_failure_does_not_reuse_stale_output(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    manager = JobManager(_fixture_config(tmp_path))
+    layout = initialize_project(
+        "Build a preview",
+        projects_dir=tmp_path / "projects",
+        name="preview-freshness",
+        pipeline_name="prototype",
+    )
+    stale_dist = layout.root / "dist"
+    stale_dist.mkdir()
+    (stale_dist / "index.html").write_text("<p>stale</p>\n", encoding="utf-8")
+    job = _minimal_job("preview-failure", status="completed")
+    job["project_path"] = str(layout.root)
+    job["preview"] = {
+        "available": True,
+        "url": "/preview/preview-failure/",
+        "path": str(stale_dist),
+        "built_at": "2026-07-01T00:00:00Z",
+    }
+    with manager._lock:
+        manager._jobs[str(job["id"])] = job
+    monkeypatch.setattr(
+        "appforge.web_jobs.RunBuildTool.run",
+        lambda *args, **kwargs: ToolResult(success=False, error="intentional build failure"),
+    )
+
+    with pytest.raises(WebJobError) as captured:
+        manager.build_preview(str(job["id"]))
+
+    assert captured.value.code == "PREVIEW_BUILD_FAILED"
+    assert manager.get_job(str(job["id"]))["preview"]["available"] is False
+
+
+def test_revision_copy_skips_symbolic_links(tmp_path: Path) -> None:
+    manager = JobManager(_fixture_config(tmp_path))
+    source = tmp_path / "source-workspace"
+    source.mkdir()
+    (source / "app.txt").write_text("workspace\n", encoding="utf-8")
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("must-not-copy\n", encoding="utf-8")
+    try:
+        (source / "external-link.txt").symlink_to(outside)
+        (source / "internal-link.txt").symlink_to(source / "app.txt")
+    except OSError:
+        pytest.skip("symbolic links are not available in this test environment")
+    target = tmp_path / "revision-workspace"
+
+    manager._copy_workspace_for_revision(source, target)
+
+    assert (target / "app.txt").read_text(encoding="utf-8") == "workspace\n"
+    assert not (target / "external-link.txt").exists()
+    assert not (target / "internal-link.txt").exists()
+    assert all(
+        "must-not-copy" not in path.read_text(encoding="utf-8", errors="ignore")
+        for path in target.rglob("*")
+        if path.is_file()
+    )
 
 
 def test_web_job_cancel_stops_active_driver(tmp_path: Path, monkeypatch) -> None:

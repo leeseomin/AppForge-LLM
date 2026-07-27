@@ -21,7 +21,7 @@ from appforge.drivers import (
 )
 from appforge.models import DriverResult
 from appforge.pipelines import load_pipeline
-from appforge.projects import initialize_project
+from appforge.projects import initialize_project, load_project
 from appforge.runner import PipelineRunner
 
 
@@ -106,6 +106,39 @@ def test_llm_bridge_prompt_includes_stage_artifact_schema(tmp_path) -> None:
     assert "External LLM bridge execution contract" in prompt
     assert "product_brief" in prompt
     assert "original stage packet" in prompt
+
+
+def test_agent_submit_artifact_tool_exposes_only_current_stage_outputs() -> None:
+    driver = LLMBridgeAgentDriver(bridge_url="http://bridge.test")
+    stage = load_pipeline("web-app-lite").stage("implementation")
+
+    tools = driver._build_agent_tools(stage)
+    submit = next(tool for tool in tools if tool["name"] == "submit_artifact")
+
+    assert submit["parameters"]["properties"]["name"]["enum"] == ["implementation_report"]
+
+
+def test_agent_rejects_artifact_not_produced_by_current_stage(tmp_path) -> None:
+    layout = initialize_project(
+        "Build a small web app",
+        projects_dir=tmp_path,
+        name="artifact-boundary",
+        pipeline_name="web-app-lite",
+    )
+    driver = LLMBridgeAgentDriver(bridge_url="http://bridge.test")
+
+    _result, _changed, artifacts, is_error = driver._execute_agent_tool(
+        layout,
+        stage="implementation",
+        name="submit_artifact",
+        arguments={"name": "product_brief", "payload": _valid_product_brief()},
+        project=load_project(layout),
+        tool_log_path=layout.logs / "artifact-boundary-tools.jsonl",
+    )
+
+    assert is_error is True
+    assert artifacts == set()
+    assert not (layout.artifacts / "product_brief.json").exists()
 
 
 def test_llm_bridge_envelope_response_format_matches_bridge_contract() -> None:
@@ -423,6 +456,144 @@ def test_llm_bridge_agent_recovers_after_text_only_turn(tmp_path, monkeypatch) -
     assert (layout.root / "index.html").is_file()
     assert (layout.artifacts / "implementation_report.json").is_file()
     assert (layout.control / "stage-result.json").is_file()
+
+
+def test_agent_stage_result_includes_observed_file_changes(tmp_path, monkeypatch) -> None:
+    layout = initialize_project(
+        "Build a tiny web game",
+        projects_dir=tmp_path,
+        name="bridge-agent-observed-changes",
+        pipeline_name="web-app-lite",
+    )
+
+    monkeypatch.setattr(llm_bridge, "agent_start", lambda *args, **kwargs: {"session_id": "session-1"})
+
+    def fake_agent_events(*args, **kwargs):  # type: ignore[no-untyped-def]
+        yield {
+            "type": "tool_call",
+            "call_id": "write-observed",
+            "name": "write_text",
+            "arguments": {"path": "src/app.js", "content": "export const ready = true;\n"},
+        }
+        yield {
+            "type": "tool_call",
+            "call_id": "artifact-observed",
+            "name": "submit_artifact",
+            "arguments": {
+                "name": "implementation_report",
+                "payload": _valid_implementation_report(["src/app.js"]),
+            },
+        }
+        yield {
+            "type": "tool_call",
+            "call_id": "result-observed",
+            "name": "submit_stage_result",
+            "arguments": {
+                "payload": {
+                    "stage": "implementation",
+                    "status": "completed",
+                    "summary": "Implementation completed.",
+                    "files_changed": [],
+                    "commands_run": [],
+                    "checks": [],
+                    "decisions": [],
+                    "unresolved": [],
+                },
+            },
+        }
+        yield {"type": "done", "usage": {"total_tokens": 10}}
+
+    monkeypatch.setattr(llm_bridge, "agent_events", fake_agent_events)
+    monkeypatch.setattr(llm_bridge, "agent_tool_result", lambda *args, **kwargs: {})
+    monkeypatch.setattr(llm_bridge, "agent_stop", lambda *args, **kwargs: {})
+
+    result = LLMBridgeAgentDriver(bridge_url="http://bridge.test").run(
+        "stage packet",
+        layout=layout,
+        stage="implementation",
+        attempt=1,
+        timeout=120,
+    )
+    stage_result = json.loads((layout.control / "stage-result.json").read_text(encoding="utf-8"))
+
+    assert result.success is True
+    assert "src/app.js" in stage_result["files_changed"]
+
+
+def test_agent_must_resubmit_stage_result_after_later_file_change(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    layout = initialize_project(
+        "Build a tiny web game",
+        projects_dir=tmp_path,
+        name="bridge-agent-stale-stage-result",
+        pipeline_name="web-app-lite",
+    )
+    sessions = 0
+
+    def fake_agent_start(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal sessions
+        sessions += 1
+        return {"session_id": f"session-{sessions}"}
+
+    def fake_agent_events(*args, **kwargs):  # type: ignore[no-untyped-def]
+        if str(args[1]) == "session-1":
+            yield {
+                "type": "tool_call",
+                "call_id": "write-before-result",
+                "name": "write_text",
+                "arguments": {"path": "src/app.js", "content": "export const version = 1;\n"},
+            }
+            yield {
+                "type": "tool_call",
+                "call_id": "artifact-before-result",
+                "name": "submit_artifact",
+                "arguments": {
+                    "name": "implementation_report",
+                    "payload": _valid_implementation_report(["src/app.js"]),
+                },
+            }
+            yield {
+                "type": "tool_call",
+                "call_id": "stale-result",
+                "name": "submit_stage_result",
+                "arguments": {
+                    "payload": {
+                        "stage": "implementation",
+                        "status": "completed",
+                        "summary": "Implementation completed.",
+                        "files_changed": ["src/app.js"],
+                        "commands_run": [],
+                        "checks": [],
+                        "decisions": [],
+                        "unresolved": [],
+                    },
+                },
+            }
+            yield {
+                "type": "tool_call",
+                "call_id": "write-after-result",
+                "name": "write_text",
+                "arguments": {"path": "src/app.js", "content": "export const version = 2;\n"},
+            }
+        yield {"type": "done", "usage": {"total_tokens": 10}}
+
+    monkeypatch.setattr(llm_bridge, "agent_start", fake_agent_start)
+    monkeypatch.setattr(llm_bridge, "agent_events", fake_agent_events)
+    monkeypatch.setattr(llm_bridge, "agent_tool_result", lambda *args, **kwargs: {})
+    monkeypatch.setattr(llm_bridge, "agent_stop", lambda *args, **kwargs: {})
+
+    result = LLMBridgeAgentDriver(bridge_url="http://bridge.test").run(
+        "stage packet",
+        layout=layout,
+        stage="implementation",
+        attempt=1,
+        timeout=120,
+    )
+
+    assert result.success is False
+    assert "resubmit" in result.stderr
 
 
 def test_llm_bridge_agent_falls_back_to_envelope_after_incomplete_sessions(tmp_path, monkeypatch) -> None:

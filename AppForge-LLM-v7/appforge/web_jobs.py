@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .checkpoints import next_stage
 from .drivers import DriverError, create_driver
 from .constants import IGNORED_DIRS, PROJECT_FILE_NAME, STATE_FILE_NAME, STAGE_RESULT_FILE_NAME
 from .models import PipelineSpec, ProjectLayout, StageSpec
@@ -453,6 +454,7 @@ class JobManager:
             "routing": routing,
             "mode": mode,
             "auto_approve": mode == "autonomous",
+            "approved_stage": None,
             "parent_job_id": parent_job_id,
             "revision_index": revision_index,
             "revision_request": revision_request,
@@ -610,7 +612,8 @@ class JobManager:
             job["message"] = "승인이 기록되어 다음 단계 실행을 대기하고 있습니다."
             job["updated_at"] = utc_now()
             job["resume_existing"] = True
-            job["auto_approve"] = True
+            job["auto_approve"] = str(job.get("mode") or "autonomous") == "autonomous"
+            job["approved_stage"] = job.get("active_stage")
             job["approval"] = {"approved_at": utc_now(), "stage": job.get("active_stage")}
             self._cancel_events[job_id] = threading.Event()
             self._record_event_locked(job, "job_approved", "승인이 기록되어 파이프라인을 계속합니다.")
@@ -641,7 +644,8 @@ class JobManager:
             job["completed_at"] = None
             job["error"] = None
             job["resume_existing"] = True
-            job["auto_approve"] = True
+            job["auto_approve"] = str(job.get("mode") or "autonomous") == "autonomous"
+            job["approved_stage"] = None
             job["only_stage"] = str(stage_id)
             stage_record = self._find_stage_locked(job, str(stage_id))
             if stage_record is not None:
@@ -860,7 +864,25 @@ class JobManager:
 
     def build_preview(self, job_id: str) -> dict[str, Any]:
         layout = self._job_layout(job_id)
+        with self._lock:
+            job = self._require_job_locked(job_id)
+            job["preview"] = {
+                "available": False,
+                "url": None,
+                "path": None,
+                "built_at": None,
+            }
+            job["updated_at"] = utc_now()
+            self._save_locked(job)
         result = RunBuildTool().run(layout.root, {"allow_network": self.config.allow_network, "timeout": self.config.stage_timeout})
+        if not result.success:
+            raise WebJobError(
+                "PREVIEW_BUILD_FAILED",
+                result.error or "정적 프리뷰 빌드가 실패했습니다.",
+                action="빌드 로그와 프로젝트의 build 명령을 확인하세요.",
+                status_code=409,
+                context={"build_result": result.to_dict()},
+            )
         candidates = [
             layout.root / "dist",
             layout.root / "build",
@@ -1010,6 +1032,7 @@ class JobManager:
                 workspace_ref = str(job.get("workspace_ref") or "")
                 only_stage = str(job.get("only_stage") or "") or None
                 auto_approve = bool(job.get("auto_approve"))
+                approved_stage = str(job.get("approved_stage") or "") or None
             try:
                 if resume_existing and project_path_value:
                     layout = ProjectLayout.from_root(Path(project_path_value))
@@ -1072,6 +1095,7 @@ class JobManager:
                 layout,
                 selected_driver,
                 auto_approve=auto_approve,
+                approved_stage=approved_stage,
                 allow_network=self.config.allow_network,
                 allow_destructive=self.config.allow_destructive,
                 max_stage_attempts=self.config.max_stage_attempts,
@@ -1080,6 +1104,11 @@ class JobManager:
                 cancel_event=cancel_event,
             )
             summary = runner.run(only_stage=only_stage)
+            if approved_stage:
+                self._update_job(job_id, approved_stage=None)
+            if summary.success and only_stage:
+                self._update_job(job_id, only_stage=None)
+                summary = runner.run()
             if summary.status == "awaiting_human":
                 self._await_approval_job(job_id, summary)
                 return
@@ -1101,6 +1130,17 @@ class JobManager:
                 )
                 return
 
+            remaining_stage = next_stage(layout, runner.pipeline)
+            if remaining_stage is not None:
+                error = self._make_error(
+                    "PIPELINE_INCOMPLETE",
+                    f"{self._stage_title(remaining_stage)} 단계가 아직 완료되지 않았습니다.",
+                    action="완료되지 않은 단계부터 파이프라인을 다시 실행하세요.",
+                    stage=remaining_stage,
+                    technical={"remaining_stage": remaining_stage},
+                )
+                self._fail_job(job_id, error, stage=remaining_stage)
+                return
             if cancel_event.is_set():
                 self._cancel_job_state(job_id, stage=summary.failed_stage or summary.awaiting_stage)
                 return
@@ -1215,39 +1255,38 @@ class JobManager:
         if target.exists():
             raise FileExistsError(f"수정 작업공간이 이미 존재합니다: {target}")
 
-        def ignore(_dir: str, names: list[str]) -> set[str]:
+        def ignore(directory: str, names: list[str]) -> set[str]:
             blocked = {".appforge", ".git", ".hg", ".svn", "node_modules", ".venv", "venv", "dist", "build", "coverage", "__pycache__"}
-            return {name for name in names if name in blocked or name.endswith(".pyc")}
+            current = Path(directory)
+            return {
+                name
+                for name in names
+                if name in blocked
+                or name.endswith(".pyc")
+                or (current / name).is_symlink()
+            }
 
-        shutil.copytree(source, target, ignore=ignore, symlinks=False)
+        shutil.copytree(source, target, ignore=ignore, symlinks=True)
 
     def _ensure_archive(self, layout: ProjectLayout) -> Path:
-        archives = sorted(
-            layout.reports.glob("*-source.zip"),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
-        if not archives:
-            result = ArchiveWorkspaceTool().run(layout.root, {})
-            if not result.success:
-                raise WebJobError(
-                    "ARCHIVE_CREATION_FAILED",
-                    result.error or "소스 ZIP 생성 도구가 실패했습니다.",
-                    action="쓰기 권한, 디스크 공간과 제외 규칙을 확인하세요.",
-                    context={"tool_result": result.to_dict()},
-                )
-            archives = sorted(
-                layout.reports.glob("*-source.zip"),
-                key=lambda path: path.stat().st_mtime,
-                reverse=True,
-            )
-        if not archives:
+        archive_name = f"{layout.root.name}-{uuid.uuid4().hex[:12]}-source.zip"
+        result = ArchiveWorkspaceTool().run(layout.root, {"name": archive_name})
+        if not result.success:
             raise WebJobError(
                 "ARCHIVE_CREATION_FAILED",
-                "소스 ZIP 생성 단계가 성공으로 끝났지만 파일이 만들어지지 않았습니다.",
-                action=".appforge/reports 경로의 쓰기 권한과 서버 로그를 확인하세요.",
+                result.error or "소스 ZIP 생성 도구가 실패했습니다.",
+                action="쓰기 권한, 디스크 공간과 제외 규칙을 확인하세요.",
+                context={"tool_result": result.to_dict()},
             )
-        archive = archives[0].resolve()
+        archive_value = result.data.get("archive")
+        if not isinstance(archive_value, str) or not archive_value:
+            raise WebJobError(
+                "ARCHIVE_CREATION_FAILED",
+                "소스 ZIP 생성 단계가 성공으로 끝났지만 생성 경로가 기록되지 않았습니다.",
+                action=".appforge/reports 경로의 쓰기 권한과 서버 로그를 확인하세요.",
+                context={"tool_result": result.to_dict()},
+            )
+        archive = safe_resolve(layout.root, archive_value)
         reports = layout.reports.resolve()
         if reports not in archive.parents:
             raise WebJobError(

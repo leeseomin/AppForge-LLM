@@ -36,6 +36,85 @@ def sample(schema: dict[str, Any], name: str = "value") -> Any:
     return value if len(value) >= min_length else value + ("x" * (min_length - len(value)))
 
 
+def cohere_planning_artifact(
+    workspace: Path,
+    artifact: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    if artifact == "requirements_spec":
+        requirement_ids: list[str] = []
+        for index, item in enumerate(payload["functional_requirements"], start=1):
+            item["id"] = f"FR-{index:03d}"
+            requirement_ids.append(item["id"])
+        for index, item in enumerate(payload["non_functional_requirements"], start=1):
+            item["id"] = f"NFR-{index:03d}"
+            requirement_ids.append(item["id"])
+        for index, item in enumerate(payload["quality_gates"], start=1):
+            item["id"] = f"QG-{index:03d}"
+        for index, item in enumerate(payload["risks"], start=1):
+            item["id"] = f"RISK-{index:03d}"
+        payload["traceability"] = [
+            {
+                "from": "product_brief",
+                "to": requirement_id,
+                "relationship": "defines",
+            }
+            for requirement_id in requirement_ids
+        ]
+    elif artifact == "workflow_spec":
+        for index, item in enumerate(payload["steps"], start=1):
+            item["id"] = f"STEP-{index:03d}"
+        requirements = json.loads(
+            (workspace / ".appforge" / "artifacts" / "requirements_spec.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        requirement_ids = [
+            item["id"]
+            for key in ("functional_requirements", "non_functional_requirements")
+            for item in requirements[key]
+        ]
+        payload["traceability"] = [
+            {
+                "requirement": requirement_id,
+                "workflow_step": payload["steps"][0]["id"],
+            }
+            for requirement_id in requirement_ids
+        ]
+    elif artifact == "memory_spec":
+        for index, item in enumerate(payload["memory_surfaces"], start=1):
+            item["id"] = f"MEM-{index:03d}"
+        requirements = json.loads(
+            (workspace / ".appforge" / "artifacts" / "requirements_spec.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        requirement_id = requirements["functional_requirements"][0]["id"]
+        payload["traceability"] = [
+            {
+                "requirement": requirement_id,
+                "memory_surface": item["id"],
+            }
+            for item in payload["memory_surfaces"]
+        ]
+    elif artifact == "loop_spec":
+        for index, item in enumerate(payload["loops"], start=1):
+            item["id"] = f"LOOP-{index:03d}"
+        workflow = json.loads(
+            (workspace / ".appforge" / "artifacts" / "workflow_spec.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        payload["traceability"] = [
+            {
+                "workflow_step": workflow["steps"][0]["id"],
+                "loop": item["id"],
+            }
+            for item in payload["loops"]
+        ]
+    return payload
+
+
 def write_fixture_app(workspace: Path) -> None:
     (workspace / "src").mkdir(exist_ok=True)
     (workspace / "test").mkdir(exist_ok=True)
@@ -85,9 +164,12 @@ def main() -> int:
         "memory_engineering": "memory_spec",
         "loop_engineering": "loop_spec",
         "prototype_plan": "prototype_plan",
+        "architecture": "architecture_spec",
         "experience": "experience_spec",
         "implementation": "implementation_report",
         "verification": "verification_report",
+        "security": "security_report",
+        "release": "release_report",
         "demo": "demo_report",
         "handoff": "handoff_report",
     }
@@ -98,6 +180,7 @@ def main() -> int:
     schema_path = framework_root / "appforge" / "resources" / "schemas" / "artifacts" / f"{artifact}.schema.json"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     payload = sample(schema, artifact)
+    payload = cohere_planning_artifact(workspace, artifact, payload)
     artifact_dir = workspace / ".appforge" / "artifacts"
     artifact_dir.mkdir(parents=True, exist_ok=True)
     (artifact_dir / f"{artifact}.json").write_text(

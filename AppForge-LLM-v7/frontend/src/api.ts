@@ -11,6 +11,7 @@ import type {
   OAuthProvidersPayload,
   OAuthStartResult,
   OAuthPollResult,
+  OAuthRefreshResult,
   ProviderModelsPayload,
   ProvidersPayload,
   QuickConnectResult,
@@ -195,8 +196,8 @@ export function pollOAuth(provider: string, pollId: string): Promise<OAuthPollRe
   return request<OAuthPollResult>(`/api/llm/oauth/poll/${encodeURIComponent(provider)}/${encodeURIComponent(pollId)}`);
 }
 
-export function refreshOAuth(provider: string): Promise<{ ok: boolean }> {
-  return request(`/api/llm/oauth/refresh/${encodeURIComponent(provider)}`, { method: 'POST' });
+export function refreshOAuth(provider: string): Promise<OAuthRefreshResult> {
+  return request<OAuthRefreshResult>(`/api/llm/oauth/refresh/${encodeURIComponent(provider)}`, { method: 'POST' });
 }
 
 
