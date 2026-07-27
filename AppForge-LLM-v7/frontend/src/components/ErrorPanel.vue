@@ -50,9 +50,8 @@ async function copyErrorDetails() {
     <div class="error-heading">
       <span class="error-symbol" aria-hidden="true">!</span>
       <div>
-        <div class="error-meta">
-          <span>{{ props.error.code || 'ERROR' }}</span>
-          <span v-if="props.error.stage">· {{ props.error.stage }}</span>
+        <div v-if="props.error.stage_label || props.error.attempt" class="error-meta">
+          <span v-if="props.error.stage_label">{{ props.error.stage_label }}</span>
           <span v-if="props.error.attempt">· {{ props.error.attempt }}번째 시도</span>
         </div>
         <h3 id="errorTitle">{{ props.error.title || '작업을 완료하지 못했습니다' }}</h3>
@@ -65,7 +64,7 @@ async function copyErrorDetails() {
     </div>
     <div v-if="props.canRetry" class="error-actions">
       <button class="primary-button compact" type="button" @click="emit('retry', props.error.stage)">
-        이 스테이지부터 재시도
+        이 단계부터 재시도
       </button>
       <button class="secondary-button" type="button" @click="emit('retry', props.error.stage)">
         자동 수리 시도

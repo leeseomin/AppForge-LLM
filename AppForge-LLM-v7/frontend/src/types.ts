@@ -33,6 +33,7 @@ export interface CompactError {
   title?: string;
   message?: string;
   action?: string;
+  stage_label?: string | null;
 }
 
 export interface JobStage {
@@ -122,6 +123,7 @@ export interface ApiErrorPayload {
   message: string;
   action?: string;
   stage?: string | null;
+  stage_label?: string | null;
   attempt?: number | null;
   technical?: Record<string, unknown>;
   context?: Record<string, unknown>;

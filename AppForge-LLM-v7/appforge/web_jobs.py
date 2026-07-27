@@ -79,7 +79,7 @@ STAGE_COPY: dict[str, tuple[str, str]] = {
 ERROR_TITLES = {
     "AGENT_NOT_AVAILABLE": "LLM 실행 환경을 찾을 수 없습니다",
     "DRIVER_ERROR": "LLM 실행 환경을 시작하지 못했습니다",
-    "AGENT_PROCESS_FAILED": "LLM 실행이 실패했습니다",
+    "AGENT_PROCESS_FAILED": "앱 제작을 완료하지 못했습니다",
     "STAGE_RESULT_INVALID": "단계 완료 기록이 올바르지 않습니다",
     "STAGE_CHECK_FAILED": "필수 검증을 통과하지 못했습니다",
     "STAGE_REVIEW_FAILED": "단계 검토를 통과하지 못했습니다",
@@ -1779,19 +1779,43 @@ class JobManager:
 
     def _error_from_runner_failure(self, failure: dict[str, Any]) -> dict[str, Any]:
         code = str(failure.get("code") or "STAGE_FAILED")
+        stage = str(failure.get("stage")) if failure.get("stage") else None
+        diagnostic_message = str(
+            failure.get("message") or "단계 실행이 실패했습니다."
+        )
+        diagnostic_action = str(
+            failure.get("action")
+            or "오류 세부정보를 확인하고 같은 요청을 다시 실행하세요."
+        )
         technical = {
             key: value
             for key, value in failure.items()
             if key not in {"code", "message", "action", "stage", "attempt"}
         }
+        message = diagnostic_message
+        action = diagnostic_action
+        if code == "AGENT_PROCESS_FAILED":
+            stage_title = self._stage_title(stage) if stage else "앱 제작"
+            message = (
+                f"{stage_title} 중 문제가 발생해 작업을 완료하지 못했습니다."
+            )
+            if stage:
+                action = (
+                    f"잠시 후 {stage_title} 단계부터 다시 시도해 주세요. "
+                    "같은 문제가 반복되면 오류 세부정보를 확인해 주세요."
+                )
+            else:
+                action = (
+                    "잠시 후 다시 시도해 주세요. 같은 문제가 반복되면 "
+                    "오류 세부정보를 확인해 주세요."
+                )
+            technical["diagnostic_message"] = diagnostic_message
+            technical["diagnostic_action"] = diagnostic_action
         return self._make_error(
             code,
-            str(failure.get("message") or "단계 실행이 실패했습니다."),
-            action=str(
-                failure.get("action")
-                or "오류 세부정보를 확인하고 같은 요청을 다시 실행하세요."
-            ),
-            stage=str(failure.get("stage")) if failure.get("stage") else None,
+            message,
+            action=action,
+            stage=stage,
             attempt=_safe_int(failure.get("attempt")),
             technical=technical,
         )
@@ -1804,7 +1828,9 @@ class JobManager:
             "action": _clean_text(str(error.get("action") or ""), 1_000),
         }
         if error.get("stage") is not None:
-            compact["stage"] = error.get("stage")
+            stage = str(error.get("stage"))
+            compact["stage"] = stage
+            compact["stage_label"] = self._stage_title(stage)
         if error.get("attempt") is not None:
             compact["attempt"] = error.get("attempt")
         return compact

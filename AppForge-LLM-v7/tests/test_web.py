@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import queue
 import re
 import subprocess
@@ -328,6 +329,23 @@ def test_web_ui_run_mode_picker_is_collapsed_by_default() -> None:
     assert "완전 자율 실행" in summary
 
 
+def test_web_ui_error_panel_hides_internal_error_identifiers() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "frontend"
+        / "src"
+        / "components"
+        / "ErrorPanel.vue"
+    ).read_text(encoding="utf-8")
+    template = source.split("<template>", 1)[1]
+
+    assert "props.error.stage_label" in template
+    assert "{{ props.error.code" not in template
+    assert "{{ props.error.stage }}" not in template
+    assert "이 단계부터 재시도" in template
+    assert "이 스테이지부터 재시도" not in template
+
+
 def test_web_job_runs_all_stages_and_enables_zip_download(tmp_path: Path, monkeypatch) -> None:
     _mock_ready_bridge(monkeypatch)
     monkeypatch.setattr("appforge.web_jobs.create_driver", lambda *args, **kwargs: FixtureScriptDriver())
@@ -393,6 +411,14 @@ def test_retry_failed_stage_completes_remaining_pipeline_before_packaging(
         failed = _wait_for_terminal(client, job_id)
         assert failed["status"] == "failed"
         assert failed["error"]["stage"] == "implementation"
+        assert failed["error"]["stage_label"] == "앱 구현"
+        assert failed["error"]["title"] == "앱 제작을 완료하지 못했습니다"
+        assert failed["error"]["message"] == "앱 구현 중 문제가 발생해 작업을 완료하지 못했습니다."
+        assert failed["message"] == failed["error"]["message"]
+        public_failure = json.dumps(failed, ensure_ascii=False).casefold()
+        assert "coding agent" not in public_failure
+        assert "exit code" not in public_failure
+        assert "intentional first-attempt failure" not in public_failure
         assert failed["download"]["available"] is False
 
         retried = client.post(f"/api/jobs/{job_id}/retry")
@@ -687,14 +713,24 @@ def test_web_job_preserves_driver_exit_code_and_stage_details(tmp_path: Path, mo
     with _client(app) as client:
         created = client.post("/api/jobs", json={"prompt": "간단한 웹앱을 만들어라"})
         assert created.status_code == 202
-        job = _wait_for_terminal(client, created.json()["id"], timeout=10)
+        job_id = created.json()["id"]
+        job = _wait_for_terminal(client, job_id, timeout=10)
         assert job["status"] == "failed"
         error = job["error"]
         assert error["code"] == "AGENT_PROCESS_FAILED"
         assert error["stage"] == "intake"
+        assert error["stage_label"] == "요청 정리"
         assert error["attempt"] == 1
         assert "technical" not in error
         assert error["action"]
+
+    stored = json.loads((config.data_dir / "jobs" / f"{job_id}.json").read_text(encoding="utf-8"))
+    technical = stored["error"]["technical"]
+    assert technical["driver"]["exit_code"] == 7
+    assert technical["diagnostic_message"] == (
+        "The coding agent exited with code 7 during stage intake."
+    )
+    assert "Review the agent output below" in technical["diagnostic_action"]
 
 
 def test_llm_bridge_health_requires_configured_active_provider(tmp_path: Path, monkeypatch) -> None:
