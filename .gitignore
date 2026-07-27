@@ -6,15 +6,27 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .coverage
+coverage/
 htmlcov/
 build/
 dist/
 *.egg-info/
+node_modules/
+frontend/node_modules/
+llm_bridge/node_modules/
 projects/
+.appforge-web/
 .env
 .env.*
 !.env.example
 .DS_Store
 
-# AppForge-LLM v7 is tracked as source, not as a release bundle.
-/AppForge-LLM-v7.zip
+npm-debug.log*
+
+# OpenAppForge generated/runtime files
+.appforge/logs/
+.appforge/prompts/
+.appforge/reports/
+.appforge/memory/
+.appforge/current-stage.md
+.appforge/stage-result.json
