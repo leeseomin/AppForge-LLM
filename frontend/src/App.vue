@@ -486,50 +486,65 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="background-grid" aria-hidden="true"></div>
-  <main class="app-shell">
-    <TopBar
-      :health="health"
-      :server-error="serverError"
-      :can-cancel="isActiveJob"
-      :cancelling="cancelling"
-      :ending-session="endingSession"
-      @refresh="refreshHealth"
-      @open-history="openHistory"
-      @open-settings="openProviderSettings"
-      @cancel="cancelActiveJob"
-      @end-session="endCurrentSession"
-    />
-
-    <section class="hero" aria-labelledby="heroTitle">
-      <h1 id="heroTitle">프롬프트 하나로 자율적으로 앱 생성.</h1>
-    </section>
-
-    <HealthBanner id="readinessNotice" :health="health" :server-error="serverError" />
-
-    <div class="workspace-layout">
-      <ComposerCard
-        v-model="prompt"
-        :prompt-max-chars="promptMaxChars"
-        :ready="canStart"
-        :busy="isActiveJob"
-        :submitting="submitting"
-        :mode="runMode"
-        :settings="jobSettings"
-        @update:mode="runMode = $event"
-        @update:settings="jobSettings = $event"
-        @submit="submitJob"
+  <div class="app-shell">
+    <aside class="sidebar">
+      <TopBar
+        :health="health"
+        :server-error="serverError"
+        :can-cancel="isActiveJob"
+        :cancelling="cancelling"
+        :ending-session="endingSession"
+        @refresh="refreshHealth"
+        @open-history="openHistory"
+        @open-settings="openProviderSettings"
+        @cancel="cancelActiveJob"
+        @end-session="endCurrentSession"
       />
-      <JobPanel :job="job" @job-updated="handleJobUpdated" @new-request="startNewRequest" @toast="showToast" />
-    </div>
+    </aside>
 
-    <footer class="footer-note">
-      <span aria-hidden="true">●</span>
-      <p>
-        로컬 작업공간에서 실행됩니다. 백엔드 파이프라인 로직은 동일하게 유지하며,
-        배포와 운영 데이터 변경은 자동으로 수행하지 않습니다.
-      </p>
-    </footer>
-  </main>
+    <main class="content">
+      <section class="hero" aria-labelledby="heroTitle">
+        <div>
+          <p class="eyebrow">LOCAL AI WORKBENCH</p>
+          <h1 id="heroTitle">프롬프트 하나로 자율적으로 앱 생성.</h1>
+          <p class="hero-copy">
+            아이디어를 설명하면 요구사항 정리부터 구현, 검증, 패키징까지 하나의 작업 흐름으로 진행합니다.
+          </p>
+        </div>
+        <div class="hero-flow" aria-label="앱 제작 단계">
+          <span><b>01</b>기획</span>
+          <span><b>02</b>구현</span>
+          <span><b>03</b>검증</span>
+        </div>
+      </section>
+
+      <HealthBanner id="readinessNotice" :health="health" :server-error="serverError" />
+
+      <div class="workspace-layout">
+        <ComposerCard
+          v-model="prompt"
+          :prompt-max-chars="promptMaxChars"
+          :ready="canStart"
+          :busy="isActiveJob"
+          :submitting="submitting"
+          :mode="runMode"
+          :settings="jobSettings"
+          @update:mode="runMode = $event"
+          @update:settings="jobSettings = $event"
+          @submit="submitJob"
+        />
+        <JobPanel :job="job" @job-updated="handleJobUpdated" @new-request="startNewRequest" @toast="showToast" />
+      </div>
+
+      <footer class="footer-note">
+        <span aria-hidden="true">●</span>
+        <p>
+          로컬 작업공간에서 실행됩니다. 백엔드 파이프라인 로직은 동일하게 유지하며,
+          배포와 운영 데이터 변경은 자동으로 수행하지 않습니다.
+        </p>
+      </footer>
+    </main>
+  </div>
   <ProviderSettings
     v-if="settingsOpen"
     @close="closeProviderSettings"

@@ -371,4 +371,32 @@ function onDownloadClick(event: MouseEvent) {
       </button>
     </div>
   </section>
+
+  <section v-else class="job-panel empty-job-panel" aria-labelledby="emptyJobTitle">
+    <div class="empty-job-copy">
+      <p class="section-kicker">BUILD PIPELINE</p>
+      <h2 id="emptyJobTitle">제작 과정이 여기에 표시됩니다.</h2>
+      <p>
+        왼쪽에 만들 앱을 설명하고 실행하면 계획부터 검증까지 각 단계와 결과를 실시간으로 확인할 수 있습니다.
+      </p>
+    </div>
+    <ol class="empty-pipeline" aria-label="예정된 제작 흐름">
+      <li>
+        <span>01</span>
+        <div><strong>요구사항과 구조 설계</strong><small>목표, 화면, 데이터 흐름을 정리합니다.</small></div>
+      </li>
+      <li>
+        <span>02</span>
+        <div><strong>구현과 자동 검증</strong><small>코드를 만들고 테스트와 품질 검사를 수행합니다.</small></div>
+      </li>
+      <li>
+        <span>03</span>
+        <div><strong>프리뷰와 소스 패키지</strong><small>결과를 확인하고 전체 소스를 내려받습니다.</small></div>
+      </li>
+    </ol>
+    <div class="empty-job-note">
+      <span aria-hidden="true">✓</span>
+      <p>작업 중에는 단계별 상태, 최근 이벤트, 토큰 사용량이 자동으로 갱신됩니다.</p>
+    </div>
+  </section>
 </template>

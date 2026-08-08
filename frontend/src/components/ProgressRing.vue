@@ -6,7 +6,7 @@ const props = defineProps<{
 }>();
 
 const normalized = computed(() => Math.min(100, Math.max(0, Math.round(props.value || 0))));
-const background = computed(() => `conic-gradient(var(--accent-strong) ${normalized.value * 3.6}deg, rgba(255,255,255,.1) 0deg)`);
+const background = computed(() => `conic-gradient(var(--accent-strong) ${normalized.value * 3.6}deg, var(--progress-track) 0deg)`);
 </script>
 
 <template>

@@ -24,13 +24,18 @@ const emit = defineEmits<{
       <span class="brand-mark" aria-hidden="true">AF</span>
       <span class="brand-copy">
         <strong>AppForge</strong>
-        <small>AI App Builder</small>
+        <small>Local AI App Builder</small>
       </span>
     </a>
 
-    <div class="topbar-actions">
-      <button class="ghost-button" type="button" @click="emit('openHistory')">작업 기록</button>
-      <button class="ghost-button" type="button" @click="emit('openSettings')">LLM 연결</button>
+    <nav class="topbar-actions" aria-label="작업 메뉴">
+      <p class="sidebar-label">Workspace</p>
+      <button class="ghost-button" type="button" @click="emit('openHistory')">
+        <span>작업 기록</span><span aria-hidden="true">↗</span>
+      </button>
+      <button class="ghost-button is-accent" type="button" @click="emit('openSettings')">
+        <span>LLM 연결</span><span aria-hidden="true">＋</span>
+      </button>
       <button
         v-if="props.canCancel"
         class="ghost-button danger"
@@ -38,10 +43,10 @@ const emit = defineEmits<{
         :disabled="props.cancelling"
         @click="emit('cancel')"
       >
-        {{ props.cancelling ? '취소 중' : '취소' }}
+        <span>{{ props.cancelling ? '취소 중' : '현재 작업 취소' }}</span><span aria-hidden="true">×</span>
       </button>
       <button class="ghost-button" type="button" @click="emit('refresh')">
-        상태 새로고침
+        <span>상태 새로고침</span><span aria-hidden="true">↻</span>
       </button>
       <button
         class="ghost-button danger"
@@ -49,8 +54,11 @@ const emit = defineEmits<{
         :disabled="props.endingSession"
         @click="emit('endSession')"
       >
-        {{ props.endingSession ? '종료 중' : '세션 종료' }}
+        <span>{{ props.endingSession ? '종료 중' : '세션 종료' }}</span><span aria-hidden="true">⏻</span>
       </button>
+    </nav>
+
+    <div class="sidebar-status">
       <div
         class="server-badge"
         :class="{
@@ -68,6 +76,7 @@ const emit = defineEmits<{
         <span v-else-if="props.health">실행기 설정 필요</span>
         <span v-else>실행 환경 확인 중</span>
       </div>
+      <p>AppForge v7 · 로컬 우선 실행 환경</p>
     </div>
   </header>
 </template>
