@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { useI18n } from '../i18n';
 import type { ApiErrorPayload } from '../types';
+
+const { t } = useI18n();
 
 const props = defineProps<{
   error: ApiErrorPayload | null;
@@ -16,7 +19,7 @@ const technicalText = computed(() => {
   const technical = props.error?.technical || {};
   return Object.keys(technical).length
     ? JSON.stringify(technical, null, 2)
-    : '추가 기술 정보가 없습니다.';
+    : t('error.noTechnical');
 });
 
 const hasTechnical = computed(() => {
@@ -38,9 +41,9 @@ async function copyErrorDetails() {
 
   try {
     await navigator.clipboard.writeText(text);
-    emit('copied', '오류 세부정보를 복사했습니다.');
+    emit('copied', t('error.copied'));
   } catch (_error) {
-    emit('copied', '클립보드 권한이 없어 복사하지 못했습니다. 기술 세부정보를 직접 선택해 주세요.');
+    emit('copied', t('error.copyFailed'));
   }
 }
 </script>
@@ -52,29 +55,29 @@ async function copyErrorDetails() {
       <div>
         <div v-if="props.error.stage_label || props.error.attempt" class="error-meta">
           <span v-if="props.error.stage_label">{{ props.error.stage_label }}</span>
-          <span v-if="props.error.attempt">· {{ props.error.attempt }}번째 시도</span>
+          <span v-if="props.error.attempt">· {{ t('error.attempt', { attempt: props.error.attempt }) }}</span>
         </div>
-        <h3 id="errorTitle">{{ props.error.title || '작업을 완료하지 못했습니다' }}</h3>
+        <h3 id="errorTitle">{{ props.error.title || t('error.title') }}</h3>
       </div>
     </div>
-    <p class="error-message">{{ props.error.message || '오류 메시지가 제공되지 않았습니다.' }}</p>
+    <p class="error-message">{{ props.error.message || t('error.noMessage') }}</p>
     <div v-if="props.error.action" class="error-action">
-      <strong>해결 방법</strong>
+      <strong>{{ t('error.solution') }}</strong>
       <p>{{ props.error.action }}</p>
     </div>
     <div v-if="props.canRetry" class="error-actions">
       <button class="primary-button compact" type="button" @click="emit('retry', props.error.stage)">
-        이 단계부터 재시도
+        {{ t('error.retryStage') }}
       </button>
       <button class="secondary-button" type="button" @click="emit('retry', props.error.stage)">
-        자동 수리 시도
+        {{ t('error.autoRepair') }}
       </button>
     </div>
     <details v-if="hasTechnical" class="technical-details">
-      <summary>기술 세부정보 보기</summary>
+      <summary>{{ t('error.details') }}</summary>
       <div class="technical-toolbar">
-        <span>에이전트 출력·검증 실패·명령 정보</span>
-        <button type="button" @click="copyErrorDetails">복사</button>
+        <span>{{ t('error.detailsLabel') }}</span>
+        <button type="button" @click="copyErrorDetails">{{ t('common.copy') }}</button>
       </div>
       <pre tabindex="0">{{ technicalText }}</pre>
     </details>

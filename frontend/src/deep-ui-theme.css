@@ -248,11 +248,53 @@ pre:focus-visible {
 /* Page header */
 
 .hero {
+  position: relative;
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
   gap: 28px;
   padding: 4px 4px 26px;
+}
+
+.hero-aside {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 14px;
+  justify-items: end;
+}
+
+.language-switch {
+  display: inline-grid;
+  grid-template-columns: repeat(2, auto);
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.58);
+  box-shadow: 0 8px 22px rgba(20, 33, 61, 0.06);
+}
+
+.language-switch button {
+  min-height: 34px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--text-soft);
+  background: transparent;
+  font-size: 0.76rem;
+  font-weight: 800;
+  transition: color 180ms ease, background 180ms ease, box-shadow 180ms ease;
+}
+
+.language-switch button:hover:not(.selected) {
+  color: var(--text);
+  background: rgba(20, 33, 61, 0.045);
+}
+
+.language-switch button.selected {
+  color: #fffaf4;
+  background: linear-gradient(135deg, #bd503c, #96382b);
+  box-shadow: 0 6px 14px rgba(178, 71, 54, 0.18);
 }
 
 .eyebrow,
@@ -941,6 +983,12 @@ pre,
     align-self: stretch;
   }
 
+  .hero-aside {
+    width: 100%;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+  }
+
   .hero-flow span {
     min-width: 0;
   }
@@ -1058,6 +1106,15 @@ pre,
 
   .hero {
     padding: 2px 0 20px;
+  }
+
+  .hero-aside {
+    grid-template-columns: 1fr;
+    justify-items: stretch;
+  }
+
+  .language-switch {
+    justify-self: start;
   }
 
   .hero h1 {

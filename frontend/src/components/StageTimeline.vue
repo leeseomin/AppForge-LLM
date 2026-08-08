@@ -1,5 +1,8 @@
 <script setup lang="ts">
+import { useI18n } from '../i18n';
 import type { JobStage } from '../types';
+
+const { locale, t } = useI18n();
 
 const props = defineProps<{
   stages: JobStage[];
@@ -10,15 +13,15 @@ const emit = defineEmits<{
   openArtifact: [name: string];
 }>();
 
-const statusLabels: Record<string, string> = {
-  pending: '대기',
-  running: '실행 중',
-  validating: '검증 중',
-  retrying: '자동 재시도',
-  awaiting_approval: '승인 대기',
-  completed: '완료',
-  failed: '실패',
-};
+function statusLabel(status: string) {
+  if (status === 'running') return t('stage.running');
+  if (status === 'validating') return t('stage.validating');
+  if (status === 'retrying') return t('stage.retrying');
+  if (status === 'awaiting_approval') return t('stage.awaitingApproval');
+  if (status === 'completed') return t('stage.completed');
+  if (status === 'failed') return t('stage.failed');
+  return t('stage.pending');
+}
 
 function stageIcon(stage: JobStage, index: number) {
   if (stage.status === 'completed') return '✓';
@@ -38,7 +41,9 @@ function canOpenArtifact(stage: JobStage) {
 }
 
 function formatTokens(value?: number) {
-  return Number.isFinite(value) ? `${Number(value).toLocaleString('ko-KR')} tokens` : '';
+  return Number.isFinite(value)
+    ? t('common.tokens', { value: Number(value).toLocaleString(locale.value === 'ko' ? 'ko-KR' : 'en-US') })
+    : '';
 }
 
 function formatCost(value?: number) {
@@ -47,7 +52,7 @@ function formatCost(value?: number) {
 </script>
 
 <template>
-  <ol class="stage-list" aria-label="진행 단계">
+  <ol class="stage-list" :aria-label="t('stage.listLabel')">
     <li
       v-for="(stage, index) in props.stages"
       :key="stage.id"
@@ -59,18 +64,18 @@ function formatCost(value?: number) {
       <div class="stage-main">
         <div class="stage-title-line">
           <span class="stage-title">{{ stage.name || stage.id }}</span>
-          <span v-if="stage.kind === 'system'" class="stage-kind">SYSTEM</span>
-          <span v-else-if="stage.approval || stage.approval_required" class="stage-kind">APPROVAL</span>
+          <span v-if="stage.kind === 'system'" class="stage-kind">{{ t('stage.system') }}</span>
+          <span v-else-if="stage.approval || stage.approval_required" class="stage-kind">{{ t('stage.approval') }}</span>
         </div>
-        <p class="stage-detail">{{ stage.detail || stage.description || '대기 중' }}</p>
+        <p class="stage-detail">{{ stage.detail || stage.description || t('stage.waiting') }}</p>
         <p v-if="stage.error?.message" class="stage-error">{{ stage.error.message }}</p>
         <p v-if="stage.usage?.total_tokens" class="stage-usage">
           {{ formatTokens(stage.usage.total_tokens) }}
           <template v-if="formatCost(stage.usage.estimated_cost_usd)">
-            · {{ formatCost(stage.usage.estimated_cost_usd) }} 추정
+            · {{ t('stage.estimatedCost', { cost: formatCost(stage.usage.estimated_cost_usd) }) }}
           </template>
         </p>
-        <div v-if="stageArtifacts(stage).length" class="stage-artifacts" aria-label="단계 산출물">
+        <div v-if="stageArtifacts(stage).length" class="stage-artifacts" :aria-label="t('stage.artifactsLabel')">
           <button
             v-for="artifact in stageArtifacts(stage)"
             :key="artifact"
@@ -83,8 +88,8 @@ function formatCost(value?: number) {
         </div>
       </div>
       <div class="stage-state">
-        <strong>{{ statusLabels[stage.status] || stage.status || '대기' }}</strong>
-        <span v-if="stage.attempt > 1">{{ stage.attempt }}번째 시도</span>
+        <strong>{{ statusLabel(stage.status) }}</strong>
+        <span v-if="stage.attempt > 1">{{ t('stage.attempt', { attempt: stage.attempt }) }}</span>
       </div>
     </li>
   </ol>

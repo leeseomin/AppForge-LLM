@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { getActiveProvider, getProviderModels, getProviders } from '../api';
+import { useI18n } from '../i18n';
 import type { JobRunSettings, ProviderModel, ProviderStatus } from '../types';
 import ModelSelect from './ModelSelect.vue';
+
+const { t } = useI18n();
 
 const props = defineProps<{
   settings: JobRunSettings;
@@ -29,12 +32,15 @@ const selectedProvider = computed(() => providers.value.find((item) => item.id =
 const selectedModel = computed(() => models.value.find((item) => item.id === model.value));
 const summary = computed(() => {
   const selection = provider.value
-    ? `${selectedProvider.value?.name || provider.value} / ${model.value || '기본 모델'}`
-    : '활성 모델 자동 선택';
+    ? t('advanced.modelSummary', {
+      provider: selectedProvider.value?.name || provider.value,
+      model: model.value || t('common.defaultModel'),
+    })
+    : t('advanced.autoModel');
   const custom = [
     temperature.value ? `T ${temperature.value}` : '',
     topP.value ? `topP ${topP.value}` : '',
-    maxTokens.value ? `최대 ${maxTokens.value} tokens` : '',
+    maxTokens.value ? t('advanced.maxTokensSummary', { value: maxTokens.value }) : '',
   ].filter(Boolean).join(' · ');
   return custom ? `${selection} · ${custom}` : selection;
 });
@@ -70,7 +76,7 @@ async function loadModels(providerId: string): Promise<void> {
     const payload = await getProviderModels(providerId);
     models.value = payload.models || [];
   } catch (error) {
-    loadError.value = error instanceof Error ? error.message : '모델 목록을 불러오지 못했습니다.';
+    loadError.value = error instanceof Error ? error.message : t('advanced.loadModelsError');
   } finally {
     modelLoading.value = false;
   }
@@ -120,7 +126,7 @@ onMounted(async () => {
       || '';
     emitSettings();
   } catch (error) {
-    loadError.value = error instanceof Error ? error.message : '모델 설정을 불러오지 못했습니다.';
+    loadError.value = error instanceof Error ? error.message : t('advanced.loadSettingsError');
     emitSettings();
   } finally {
     loading.value = false;
@@ -131,73 +137,73 @@ onMounted(async () => {
 <template>
   <details class="job-advanced-settings">
     <summary>
-      <span>작업별 모델 · 고급 생성 설정</span>
-      <strong>{{ loading ? '불러오는 중…' : summary }}</strong>
+      <span>{{ t('advanced.title') }}</span>
+      <strong>{{ loading ? t('common.loadingEllipsis') : summary }}</strong>
     </summary>
     <fieldset :disabled="props.busy || loading || modelLoading">
-      <legend>작업별 LLM 설정</legend>
+      <legend>{{ t('advanced.legend') }}</legend>
       <div class="advanced-settings-grid">
         <label>
-          <span>프로바이더</span>
+          <span>{{ t('advanced.provider') }}</span>
           <select :value="provider" @change="onProviderChange">
-            <option value="">활성 프로바이더 자동 선택</option>
+            <option value="">{{ t('advanced.providerAuto') }}</option>
             <option v-for="item in configuredProviders" :key="item.id" :value="item.id">
               {{ item.name }}
             </option>
           </select>
         </label>
         <label>
-          <span>모델</span>
+          <span>{{ t('advanced.model') }}</span>
           <ModelSelect
             :model-value="model"
             :models="models"
             :loading="modelLoading"
-            placeholder="모델 ID 또는 기본 모델"
+            :placeholder="t('advanced.modelPlaceholder')"
             @update:model-value="onModelChange"
           />
         </label>
         <label>
-          <span>Temperature</span>
+          <span>{{ t('advanced.temperature') }}</span>
           <input
             v-model="temperature"
             type="number"
             min="0"
             max="2"
             step="0.05"
-            placeholder="프로바이더 기본값"
+            :placeholder="t('advanced.providerDefault')"
             @input="emitSettings"
           />
-          <small>낮을수록 일관적, 높을수록 다양</small>
+          <small>{{ t('advanced.temperatureHelp') }}</small>
         </label>
         <label>
-          <span>Top P</span>
+          <span>{{ t('advanced.topP') }}</span>
           <input
             v-model="topP"
             type="number"
             min="0"
             max="1"
             step="0.05"
-            placeholder="프로바이더 기본값"
+            :placeholder="t('advanced.providerDefault')"
             @input="emitSettings"
           />
-          <small>누적 확률 기반 후보 범위</small>
+          <small>{{ t('advanced.topPHelp') }}</small>
         </label>
         <label>
-          <span>최대 출력 토큰</span>
+          <span>{{ t('advanced.maxOutput') }}</span>
           <input
             v-model="maxTokens"
             type="number"
             min="1"
             max="1000000"
             step="1"
-            placeholder="프로바이더 기본값"
+            :placeholder="t('advanced.providerDefault')"
             @input="emitSettings"
           />
-          <small>각 LLM 호출의 출력 상한</small>
+          <small>{{ t('advanced.maxOutputHelp') }}</small>
         </label>
       </div>
       <p v-if="loadError" class="settings-inline-error">{{ loadError }}</p>
-      <p class="settings-note">이 선택은 전역 활성 모델을 바꾸지 않고 새 작업에만 고정됩니다.</p>
+      <p class="settings-note">{{ t('advanced.note') }}</p>
     </fieldset>
   </details>
 </template>

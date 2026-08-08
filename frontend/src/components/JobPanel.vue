@@ -7,6 +7,7 @@ import {
   retryJob,
   reviseJob,
 } from '../api';
+import { useI18n } from '../i18n';
 import { isActiveJobStatus } from '../jobStatus';
 import type { JobPayload } from '../types';
 import ArtifactBrowser from './ArtifactBrowser.vue';
@@ -15,6 +16,8 @@ import EventFeed from './EventFeed.vue';
 import ProgressRing from './ProgressRing.vue';
 import StageTimeline from './StageTimeline.vue';
 import WorkspaceBrowser from './WorkspaceBrowser.vue';
+
+const { locale, t } = useI18n();
 
 const props = defineProps<{
   job: JobPayload | null;
@@ -40,15 +43,15 @@ const isAwaitingApproval = computed(() => props.job?.status === 'awaiting_approv
 
 const statusTitle = computed(() => {
   const job = props.job;
-  if (!job) return '앱 제작을 준비하고 있습니다.';
-  if (job.status === 'completed') return '앱 제작이 완료되었습니다.';
-  if (job.status === 'failed') return '확인이 필요한 오류가 발생했습니다.';
-  if (job.status === 'awaiting_approval') return '승인이 필요한 체크포인트에서 대기 중입니다.';
-  if (job.status === 'packaging') return '다운로드 패키지를 준비하고 있습니다.';
-  if (job.status === 'queued') return job.queue_position ? `대기열 ${job.queue_position}번째입니다.` : '앱 제작을 준비하고 있습니다.';
-  if (job.status === 'initializing') return '앱 제작을 준비하고 있습니다.';
+  if (!job) return t('job.preparing');
+  if (job.status === 'completed') return t('job.completed');
+  if (job.status === 'failed') return t('job.failed');
+  if (job.status === 'awaiting_approval') return t('job.awaitingApproval');
+  if (job.status === 'packaging') return t('job.packaging');
+  if (job.status === 'queued') return job.queue_position ? t('job.queued', { position: job.queue_position }) : t('job.preparing');
+  if (job.status === 'initializing') return t('job.preparing');
   const activeStage = job.stages.find((stage) => stage.id === job.active_stage);
-  return activeStage ? `${activeStage.name} 진행 중` : '앱을 만들고 있습니다.';
+  return activeStage ? t('job.stageRunning', { name: activeStage.name }) : t('job.building');
 });
 
 const completedStages = computed(() => props.job?.stages.filter((stage) => stage.status === 'completed').length || 0);
@@ -67,11 +70,11 @@ const downloadUrl = computed(() => {
 
 const downloadLabel = computed(() => {
   const job = props.job;
-  if (!job) return '완료 후 ZIP 다운로드';
-  if (job.status === 'failed') return '오류 해결 후 ZIP 다운로드';
-  if (job.status !== 'completed' || !job.download.available) return '완료 후 ZIP 다운로드';
+  if (!job) return t('job.downloadPending');
+  if (job.status === 'failed') return t('job.downloadAfterFix');
+  if (job.status !== 'completed' || !job.download.available) return t('job.downloadPending');
   const size = job.download.size_bytes ? ` · ${formatBytes(job.download.size_bytes)}` : '';
-  return `소스 ZIP 다운로드${size}`;
+  return t('job.downloadReady', { size });
 });
 
 const previewUrl = computed(() => localPreviewUrl.value || props.job?.preview?.url || null);
@@ -91,7 +94,8 @@ watch(
 
 function formatBytes(value: number) {
   if (!Number.isFinite(value) || value < 0) return '';
-  if (value < 1024) return `${value.toLocaleString('ko-KR')} B`;
+  const numberLocale = locale.value === 'ko' ? 'ko-KR' : 'en-US';
+  if (value < 1024) return `${value.toLocaleString(numberLocale)} B`;
   const units = ['KB', 'MB', 'GB'];
   let amount = value / 1024;
   let index = 0;
@@ -106,7 +110,7 @@ function formatDateTime(value: string | null) {
   if (!value) return '';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat('ko-KR', {
+  return new Intl.DateTimeFormat(locale.value === 'ko' ? 'ko-KR' : 'en-US', {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
@@ -114,11 +118,26 @@ function formatDateTime(value: string | null) {
 }
 
 function formatTokens(value?: number) {
-  return Number.isFinite(value) ? Number(value).toLocaleString('ko-KR') : '-';
+  return Number.isFinite(value) ? Number(value).toLocaleString(locale.value === 'ko' ? 'ko-KR' : 'en-US') : '-';
 }
 
 function formatCost(value?: number) {
-  return Number.isFinite(value) ? `$${Number(value).toFixed(6)}` : '가격 정보 없음';
+  return Number.isFinite(value) ? `$${Number(value).toFixed(6)}` : t('job.noPricing');
+}
+
+function statusLabel(status: string, fallback?: string) {
+  if (status === 'pending') return t('stage.pending');
+  if (status === 'running') return t('stage.running');
+  if (status === 'validating') return t('stage.validating');
+  if (status === 'retrying') return t('stage.retrying');
+  if (status === 'awaiting_approval') return t('stage.awaitingApproval');
+  if (status === 'completed') return t('stage.completed');
+  if (status === 'failed') return t('stage.failed');
+  if (status === 'queued') return t('stage.queued');
+  if (status === 'initializing') return t('stage.initializing');
+  if (status === 'packaging') return t('stage.packaging');
+  if (status === 'cancelled') return t('stage.cancelled');
+  return fallback || status;
 }
 
 function readableError(error: unknown, fallback: string) {
@@ -132,9 +151,9 @@ async function onBuildPreview() {
   try {
     const preview = await buildPreview(props.job.id);
     localPreviewUrl.value = preview.url;
-    emit('toast', '정적 프리뷰를 준비했습니다.');
+    emit('toast', t('job.previewReady'));
   } catch (error) {
-    previewError.value = readableError(error, '프리뷰를 만들지 못했습니다.');
+    previewError.value = readableError(error, t('job.previewError'));
     emit('toast', previewError.value);
   } finally {
     buildingPreview.value = false;
@@ -151,9 +170,9 @@ async function onApprove() {
   try {
     const updated = await approveJob(props.job.id);
     emit('jobUpdated', updated);
-    emit('toast', '승인을 기록하고 파이프라인을 계속합니다.');
+    emit('toast', t('job.approvalRecorded'));
   } catch (error) {
-    emit('toast', readableError(error, '승인을 처리하지 못했습니다.'));
+    emit('toast', readableError(error, t('job.approvalError')));
   } finally {
     approving.value = false;
   }
@@ -165,9 +184,9 @@ async function onRetry(stage: string | null = null) {
   try {
     const updated = await retryJob(props.job.id, stage || props.job.active_stage || undefined);
     emit('jobUpdated', updated);
-    emit('toast', '재시도 작업을 대기열에 등록했습니다.');
+    emit('toast', t('job.retryQueued'));
   } catch (error) {
-    emit('toast', readableError(error, '재시도를 시작하지 못했습니다.'));
+    emit('toast', readableError(error, t('job.retryError')));
   } finally {
     retrying.value = false;
   }
@@ -177,7 +196,7 @@ async function onSubmitRevision() {
   if (!props.job || revising.value) return;
   const requestText = revisionText.value.trim();
   if (!requestText) {
-    emit('toast', '수정 요청 내용을 입력해 주세요.');
+    emit('toast', t('job.revisionRequired'));
     return;
   }
   revising.value = true;
@@ -185,9 +204,9 @@ async function onSubmitRevision() {
     const created = await reviseJob(props.job.id, requestText);
     revisionText.value = '';
     emit('jobUpdated', created);
-    emit('toast', '수정 작업을 대기열에 등록했습니다.');
+    emit('toast', t('job.revisionQueued'));
   } catch (error) {
-    emit('toast', readableError(error, '수정 작업을 만들지 못했습니다.'));
+    emit('toast', readableError(error, t('job.revisionError')));
   } finally {
     revising.value = false;
   }
@@ -212,20 +231,20 @@ function onDownloadClick(event: MouseEvent) {
               'is-failed': props.job.status === 'failed',
             }"
           >
-            {{ props.job.status_label || props.job.status }}
+            {{ statusLabel(props.job.status, props.job.status_label) }}
           </span>
-          <span v-if="props.job.pipeline" class="pipeline-label">자동 파이프라인 · {{ props.job.pipeline }}</span>
-          <span v-if="props.job.mode" class="pipeline-label">{{ props.job.mode === 'checkpoint' ? '체크포인트' : '자율' }} 모드</span>
-          <span v-if="props.job.queue_position" class="pipeline-label">대기열 #{{ props.job.queue_position }}</span>
-          <span v-if="props.job.revision_index" class="pipeline-label">수정 #{{ props.job.revision_index }}</span>
+          <span v-if="props.job.pipeline" class="pipeline-label">{{ t('job.pipeline', { name: props.job.pipeline }) }}</span>
+          <span v-if="props.job.mode" class="pipeline-label">{{ props.job.mode === 'checkpoint' ? t('job.modeCheckpoint') : t('job.modeAutonomous') }}</span>
+          <span v-if="props.job.queue_position" class="pipeline-label">{{ t('job.queue', { position: props.job.queue_position }) }}</span>
+          <span v-if="props.job.revision_index" class="pipeline-label">{{ t('job.revision', { index: props.job.revision_index }) }}</span>
           <span v-if="props.job.llm?.provider || props.job.llm?.model" class="pipeline-label">
             {{ [props.job.llm?.provider, props.job.llm?.model].filter(Boolean).join(' / ') }}
           </span>
         </div>
         <h2 id="jobStatusTitle">{{ statusTitle }}</h2>
-        <p>{{ props.job.message || '상태를 확인하고 있습니다.' }}</p>
+        <p>{{ props.job.message || t('job.statusFallback') }}</p>
         <p v-if="props.job.routing?.rationale" class="routing-rationale">
-          라우팅: {{ props.job.routing.rationale }}
+          {{ t('job.routing', { rationale: props.job.routing.rationale }) }}
         </p>
       </div>
       <ProgressRing :value="props.job.progress" />
@@ -234,7 +253,7 @@ function onDownloadClick(event: MouseEvent) {
     <div
       class="progress-track"
       role="progressbar"
-      aria-label="전체 진행률"
+      :aria-label="t('job.progressLabel')"
       aria-valuemin="0"
       aria-valuemax="100"
       :aria-valuenow="props.job.progress"
@@ -242,54 +261,54 @@ function onDownloadClick(event: MouseEvent) {
       <div class="progress-bar" :style="{ width: `${props.job.progress}%` }"></div>
     </div>
 
-    <div class="job-metrics" aria-label="작업 요약">
+    <div class="job-metrics" :aria-label="t('job.summaryLabel')">
       <div>
-        <span>완료 단계</span>
+        <span>{{ t('job.completedStages') }}</span>
         <strong>{{ completedStages }} / {{ totalStages }}</strong>
       </div>
       <div>
-        <span>작업 ID</span>
+        <span>{{ t('job.id') }}</span>
         <strong>{{ props.job.id.slice(0, 8) }}</strong>
       </div>
       <div>
-        <span>최근 업데이트</span>
+        <span>{{ t('job.updatedAt') }}</span>
         <strong>{{ formatDateTime(props.job.updated_at) || '-' }}</strong>
       </div>
       <div>
-        <span>사용 토큰</span>
+        <span>{{ t('job.tokens') }}</span>
         <strong>{{ formatTokens(totalTokens) }}</strong>
       </div>
       <div>
-        <span>추정 비용 (USD)</span>
+        <span>{{ t('job.cost') }}</span>
         <strong>{{ formatCost(estimatedCost) }}</strong>
       </div>
     </div>
 
     <details v-if="totalTokens" class="usage-breakdown">
-      <summary>토큰 사용량 상세</summary>
+      <summary>{{ t('job.usageDetails') }}</summary>
       <dl>
-        <div><dt>입력</dt><dd>{{ formatTokens(props.job.usage?.input_tokens) }}</dd></div>
-        <div><dt>출력</dt><dd>{{ formatTokens(props.job.usage?.output_tokens) }}</dd></div>
-        <div><dt>캐시 읽기</dt><dd>{{ formatTokens(props.job.usage?.cache_read_input_tokens) }}</dd></div>
-        <div><dt>캐시 쓰기</dt><dd>{{ formatTokens(props.job.usage?.cache_write_input_tokens) }}</dd></div>
-        <div><dt>추론</dt><dd>{{ formatTokens(props.job.usage?.reasoning_tokens) }}</dd></div>
+        <div><dt>{{ t('job.inputTokens') }}</dt><dd>{{ formatTokens(props.job.usage?.input_tokens) }}</dd></div>
+        <div><dt>{{ t('job.outputTokens') }}</dt><dd>{{ formatTokens(props.job.usage?.output_tokens) }}</dd></div>
+        <div><dt>{{ t('job.cacheRead') }}</dt><dd>{{ formatTokens(props.job.usage?.cache_read_input_tokens) }}</dd></div>
+        <div><dt>{{ t('job.cacheWrite') }}</dt><dd>{{ formatTokens(props.job.usage?.cache_write_input_tokens) }}</dd></div>
+        <div><dt>{{ t('job.reasoning') }}</dt><dd>{{ formatTokens(props.job.usage?.reasoning_tokens) }}</dd></div>
       </dl>
-      <p>비용은 models.dev 카탈로그 단가가 제공된 모델에 한해 추정됩니다.</p>
+      <p>{{ t('job.pricingNote') }}</p>
     </details>
 
     <div v-if="isAwaitingApproval" class="approval-panel">
       <div>
-        <h3>중간 산출물 승인 필요</h3>
-        <p>아래 아티팩트와 코드를 확인한 뒤 계속 진행할 수 있습니다. 수정이 필요하면 수정 요청을 등록하세요.</p>
+        <h3>{{ t('job.approvalTitle') }}</h3>
+        <p>{{ t('job.approvalHelp') }}</p>
       </div>
       <button class="primary-button" type="button" :disabled="approving" @click="onApprove">
-        {{ approving ? '승인 중…' : '검토 완료 · 계속 진행' }}
+        {{ approving ? t('job.approving') : t('job.approve') }}
       </button>
     </div>
 
     <div class="stage-heading">
-      <h3>진행 단계</h3>
-      <span v-if="props.job.updated_at" class="last-updated">업데이트 {{ formatDateTime(props.job.updated_at) }}</span>
+      <h3>{{ t('job.stages') }}</h3>
+      <span v-if="props.job.updated_at" class="last-updated">{{ t('job.updated', { time: formatDateTime(props.job.updated_at) }) }}</span>
     </div>
 
     <div class="job-grid">
@@ -320,18 +339,18 @@ function onDownloadClick(event: MouseEvent) {
     <div class="preview-panel" v-if="canBuildPreview || previewUrl">
       <div class="preview-header">
         <div>
-          <h3>정적 프리뷰</h3>
-          <p>빌드 산출물이 있으면 같은 화면에서 생성 앱을 확인합니다.</p>
+          <h3>{{ t('job.previewTitle') }}</h3>
+          <p>{{ t('job.previewHelp') }}</p>
         </div>
         <button class="secondary-button" type="button" :disabled="buildingPreview" @click="onBuildPreview">
-          {{ buildingPreview ? '빌드 중' : previewUrl ? '프리뷰 다시 빌드' : '프리뷰 빌드' }}
+          {{ buildingPreview ? t('job.previewBuilding') : previewUrl ? t('job.previewRebuild') : t('job.previewBuild') }}
         </button>
       </div>
       <p v-if="previewError" class="preview-error">{{ previewError }}</p>
       <iframe
         v-if="previewUrl"
         class="preview-frame"
-        title="생성 앱 프리뷰"
+        :title="t('job.previewFrameTitle')"
         :src="previewUrl"
         sandbox="allow-scripts"
       ></iframe>
@@ -339,17 +358,17 @@ function onDownloadClick(event: MouseEvent) {
 
     <div v-if="canRevise" class="revision-panel">
       <div>
-        <h3>대화형 수정 요청</h3>
-        <p>프리뷰나 코드를 확인한 뒤 바꾸고 싶은 점을 적으면 기존 작업공간을 기준으로 수정 작업을 만듭니다.</p>
+        <h3>{{ t('job.reviseTitle') }}</h3>
+        <p>{{ t('job.reviseHelp') }}</p>
       </div>
       <textarea
         v-model="revisionText"
         rows="4"
-        placeholder="예: 로그인 버튼을 더 눈에 띄게 만들고, 모바일에서 카드 간격을 줄여 주세요."
+        :placeholder="t('job.revisePlaceholder')"
         :disabled="revising"
       ></textarea>
       <button class="primary-button" type="button" :disabled="revising" @click="onSubmitRevision">
-        {{ revising ? '등록 중…' : '수정 작업 생성' }}
+        {{ revising ? t('job.revising') : t('job.createRevision') }}
       </button>
     </div>
 
@@ -367,36 +386,34 @@ function onDownloadClick(event: MouseEvent) {
         <span>{{ downloadLabel }}</span>
       </a>
       <button v-if="!isActive" class="secondary-button" type="button" @click="emit('newRequest')">
-        새 요청 시작
+        {{ t('job.newRequest') }}
       </button>
     </div>
   </section>
 
   <section v-else class="job-panel empty-job-panel" aria-labelledby="emptyJobTitle">
     <div class="empty-job-copy">
-      <p class="section-kicker">BUILD PIPELINE</p>
-      <h2 id="emptyJobTitle">제작 과정이 여기에 표시됩니다.</h2>
-      <p>
-        왼쪽에 만들 앱을 설명하고 실행하면 계획부터 검증까지 각 단계와 결과를 실시간으로 확인할 수 있습니다.
-      </p>
+      <p class="section-kicker">{{ t('job.emptyKicker') }}</p>
+      <h2 id="emptyJobTitle">{{ t('job.emptyTitle') }}</h2>
+      <p>{{ t('job.emptyHelp') }}</p>
     </div>
-    <ol class="empty-pipeline" aria-label="예정된 제작 흐름">
+    <ol class="empty-pipeline" :aria-label="t('job.emptyFlowLabel')">
       <li>
         <span>01</span>
-        <div><strong>요구사항과 구조 설계</strong><small>목표, 화면, 데이터 흐름을 정리합니다.</small></div>
+        <div><strong>{{ t('job.emptyPlan') }}</strong><small>{{ t('job.emptyPlanHelp') }}</small></div>
       </li>
       <li>
         <span>02</span>
-        <div><strong>구현과 자동 검증</strong><small>코드를 만들고 테스트와 품질 검사를 수행합니다.</small></div>
+        <div><strong>{{ t('job.emptyBuild') }}</strong><small>{{ t('job.emptyBuildHelp') }}</small></div>
       </li>
       <li>
         <span>03</span>
-        <div><strong>프리뷰와 소스 패키지</strong><small>결과를 확인하고 전체 소스를 내려받습니다.</small></div>
+        <div><strong>{{ t('job.emptyPackage') }}</strong><small>{{ t('job.emptyPackageHelp') }}</small></div>
       </li>
     </ol>
     <div class="empty-job-note">
       <span aria-hidden="true">✓</span>
-      <p>작업 중에는 단계별 상태, 최근 이벤트, 토큰 사용량이 자동으로 갱신됩니다.</p>
+      <p>{{ t('job.emptyNote') }}</p>
     </div>
   </section>
 </template>

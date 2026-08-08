@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { useI18n } from '../i18n';
 import type { HealthPayload } from '../types';
+
+const { locale, t } = useI18n();
 
 const props = defineProps<{
   health: HealthPayload | null;
@@ -12,20 +15,25 @@ const bannerText = computed(() => {
     return props.serverError;
   }
   if (!props.health) {
-    return '외부 LLM 연결 환경을 확인하고 있습니다.';
+    return t('health.checking');
   }
   if (!props.health.ready) {
-    return `${props.health.driver.message} ${props.health.driver.action}`.trim();
+    return locale.value === 'ko'
+      ? `${props.health.driver.message} ${props.health.driver.action}`.trim()
+      : t('health.notReady');
   }
   const networkText = props.health.network_enabled
-    ? '네트워크 허용'
+    ? t('health.networkAllowed')
     : props.health.safety.dependency_install_enabled
-      ? '작업공간 의존성 설치만 허용'
-      : '네트워크 사용 안 함';
+      ? t('health.dependenciesOnly')
+      : t('health.noNetwork');
   const destructiveText = props.health.safety.destructive_operations_enabled
-    ? '파괴 작업 허용됨'
-    : '배포/파괴 작업 차단';
-  return `${props.health.driver.message} · ${networkText} · ${destructiveText}`;
+    ? t('health.destructiveAllowed')
+    : t('health.destructiveBlocked');
+  const message = locale.value === 'ko'
+    ? props.health.driver.message
+    : t('topbar.ready', { label: props.health.driver.label });
+  return t('health.readySummary', { message, network: networkText, safety: destructiveText });
 });
 </script>
 

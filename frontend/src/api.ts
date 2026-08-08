@@ -19,13 +19,14 @@ import type {
   QuickConnectResult,
   TestResult,
 } from './types';
+import { translateCurrent } from './i18n';
 
 export class ApiError extends Error {
   readonly payload: ApiErrorPayload;
   readonly status: number;
 
   constructor(payload: ApiErrorPayload, status: number) {
-    super(payload.message || payload.title || '요청 실패');
+    super(payload.message || payload.title || translateCurrent('api.requestFailed'));
     this.name = 'ApiError';
     this.payload = payload;
     this.status = status;
@@ -65,9 +66,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (!response.ok) {
     const errorPayload: ApiErrorPayload = payload?.error || {
       code: `HTTP_${response.status}`,
-      title: '요청을 처리하지 못했습니다',
-      message: `서버가 HTTP ${response.status} 응답을 반환했습니다.`,
-      action: '서버 상태를 확인한 뒤 다시 시도하세요.',
+      title: translateCurrent('api.requestTitle'),
+      message: translateCurrent('api.httpError', { status: response.status }),
+      action: translateCurrent('api.checkServer'),
       context: {},
     };
     throw new ApiError(errorPayload, response.status);

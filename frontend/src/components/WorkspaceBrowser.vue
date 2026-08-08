@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { ApiError, getWorkspaceFile, getWorkspaceTree } from '../api';
+import { useI18n } from '../i18n';
 import type { WorkspaceTreeEntry, WorkspaceFilePayload } from '../types';
+
+const { t } = useI18n();
 
 const props = defineProps<{
   jobId: string;
@@ -37,7 +40,7 @@ async function loadTree() {
       if (first) await openFile(first.path);
     }
   } catch (err) {
-    error.value = err instanceof Error ? err.message : '파일 트리를 불러오지 못했습니다.';
+    error.value = err instanceof Error ? err.message : t('workspace.loadTreeError');
   } finally {
     loading.value = false;
   }
@@ -50,7 +53,7 @@ async function openFile(path: string) {
   try {
     file.value = await getWorkspaceFile(props.jobId, path);
   } catch (err) {
-    const message = err instanceof ApiError ? err.payload.message : err instanceof Error ? err.message : '파일을 열 수 없습니다.';
+    const message = err instanceof ApiError ? err.payload.message : err instanceof Error ? err.message : t('workspace.openFileError');
     emit('toast', message);
   } finally {
     fileLoading.value = false;
@@ -79,17 +82,17 @@ watch(() => props.jobId, () => {
   <section class="workspace-browser" aria-labelledby="workspaceBrowserTitle">
     <div class="panel-heading compact">
       <div>
-        <h3 id="workspaceBrowserTitle">작업공간 코드</h3>
-        <p>생성된 파일을 ZIP 다운로드 전에 바로 확인합니다.</p>
+        <h3 id="workspaceBrowserTitle">{{ t('workspace.title') }}</h3>
+        <p>{{ t('workspace.help') }}</p>
       </div>
       <button class="secondary-button" type="button" :disabled="loading" @click="loadTree">
-        {{ loading ? '로딩 중' : '새로고침' }}
+        {{ loading ? t('common.loading') : t('common.refresh') }}
       </button>
     </div>
     <p v-if="error" class="inline-error">{{ error }}</p>
     <div class="workspace-split">
-      <aside class="file-list" aria-label="파일 목록">
-        <input v-model="query" type="search" placeholder="파일 검색" />
+      <aside class="file-list" :aria-label="t('workspace.fileList')">
+        <input v-model="query" type="search" :placeholder="t('workspace.search')" />
         <button
           v-for="entry in visibleFiles"
           :key="entry.path"
@@ -100,16 +103,16 @@ watch(() => props.jobId, () => {
           <span>{{ entry.path }}</span>
           <small>{{ formatBytes(entry.size) }}</small>
         </button>
-        <p v-if="!visibleFiles.length" class="empty-note">표시할 파일이 없습니다.</p>
+        <p v-if="!visibleFiles.length" class="empty-note">{{ t('workspace.empty') }}</p>
       </aside>
       <article class="code-viewer">
         <div class="code-toolbar">
-          <strong>{{ file?.path || selectedPath || '파일을 선택하세요' }}</strong>
-          <span v-if="fileLoading">불러오는 중…</span>
+          <strong>{{ file?.path || selectedPath || t('workspace.select') }}</strong>
+          <span v-if="fileLoading">{{ t('common.loadingEllipsis') }}</span>
           <span v-else-if="file?.size">{{ formatBytes(file.size) }}</span>
         </div>
         <pre v-if="file" tabindex="0"><code>{{ file.content }}</code></pre>
-        <p v-else class="empty-note">왼쪽 목록에서 파일을 선택하세요.</p>
+        <p v-else class="empty-note">{{ t('workspace.selectHelp') }}</p>
       </article>
     </div>
   </section>

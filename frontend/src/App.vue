@@ -17,8 +17,11 @@ import JobPanel from './components/JobPanel.vue';
 import ProviderSettings from './components/ProviderSettings.vue';
 import Toast from './components/Toast.vue';
 import TopBar from './components/TopBar.vue';
+import { useI18n } from './i18n';
 import { isActiveJobStatus } from './jobStatus';
 import type { ApiErrorPayload, HealthPayload, JobPayload, JobRunSettings } from './types';
+
+const { locale, setLocale, t } = useI18n();
 
 const STORAGE_KEY = 'appforge-v7-current-job';
 const LEGACY_STORAGE_KEY = 'appforge-v6-current-job';
@@ -107,11 +110,11 @@ async function refreshHealth(options: { restoreBusyJob?: boolean } = {}) {
     }
   } catch (error) {
     if (endingSession.value) {
-      serverError.value = '세션 종료됨';
+      serverError.value = t('topbar.sessionEnded');
       return;
     }
     health.value = null;
-    serverError.value = readableError(error, '웹 서버에 연결할 수 없습니다. 서버 실행 상태를 확인하세요.');
+    serverError.value = readableError(error, t('app.serverConnectError'));
   }
 }
 
@@ -119,11 +122,11 @@ async function submitJob() {
   if (submitting.value || isActiveJob.value) return;
   const normalized = prompt.value.trim();
   if (!normalized) {
-    showToast('만들 앱의 목적과 핵심 기능을 입력해 주세요.');
+    showToast(t('composer.required'));
     return;
   }
   if (!health.value?.ready) {
-    showToast('먼저 외부 LLM 연결을 설정해 주세요.');
+    showToast(t('health.notReady'));
     return;
   }
 
@@ -148,18 +151,18 @@ async function submitJob() {
       if (typeof runningJobId === 'string' && runningJobId) {
         setCurrentJob(runningJobId);
         await loadCurrentJob({ immediate: true });
-        showToast('이미 실행 중인 작업 상태로 연결했습니다.');
+        showToast(t('app.existingJob'));
       } else {
         job.value = makeRequestErrorJob(error.payload, normalized);
-        showToast(error.payload.title || '요청을 시작하지 못했습니다.');
+        showToast(error.payload.title || t('app.requestStartError'));
       }
     } else {
       job.value = makeRequestErrorJob(
         {
           code: 'REQUEST_FAILED',
-          title: '요청을 시작하지 못했습니다',
-          message: readableError(error, '요청 처리 중 오류가 발생했습니다.'),
-          action: '입력과 서버 상태를 확인한 뒤 다시 시도하세요.',
+          title: t('app.requestStartTitle'),
+          message: readableError(error, t('app.requestProcessError')),
+          action: t('app.requestAction'),
           technical: {},
         },
         normalized,
@@ -291,16 +294,16 @@ async function loadCurrentJob({ immediate = false, restoreTerminal = true }: Loa
     }
   } catch (error) {
     if (endingSession.value) {
-      serverError.value = '세션 종료됨';
+      serverError.value = t('topbar.sessionEnded');
       return;
     }
     if (error instanceof ApiError && error.status === 404) {
       setCurrentJob(null);
       job.value = null;
-      showToast('이전에 보던 작업 기록을 찾을 수 없어 초기화했습니다.');
+      showToast(t('app.previousJobMissing'));
       return;
     }
-    serverError.value = readableError(error, '상태를 불러오지 못했습니다. 잠시 뒤 다시 시도합니다.');
+    serverError.value = readableError(error, t('app.jobLoadError'));
     schedulePoll(3000);
   }
 }
@@ -314,9 +317,9 @@ async function cancelActiveJob() {
     window.clearTimeout(pollTimer);
     setCurrentJob(null);
     await refreshHealth({ restoreBusyJob: false });
-    showToast('현재 작업을 취소했습니다.');
+    showToast(t('app.cancelled'));
   } catch (error) {
-    showToast(readableError(error, '작업 취소에 실패했습니다.'));
+    showToast(readableError(error, t('app.cancelError')));
     schedulePoll(1200);
   } finally {
     cancelling.value = false;
@@ -334,7 +337,7 @@ function handleJobUpdated(updated: JobPayload) {
 
 async function showHistoricalJob(jobId: string) {
   if (isActiveJob.value && currentJobId.value !== jobId) {
-    showToast('진행 중인 작업이 있어 다른 기록은 완료 후 열 수 있습니다.');
+    showToast(t('app.historyBusy'));
     return;
   }
   try {
@@ -353,7 +356,7 @@ async function showHistoricalJob(jobId: string) {
     await nextTick();
     document.querySelector('#jobStatusTitle')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (error) {
-    showToast(readableError(error, '작업 기록을 열지 못했습니다.'));
+    showToast(readableError(error, t('app.historyOpenError')));
   }
 }
 
@@ -371,15 +374,15 @@ async function endCurrentSession() {
   job.value = null;
   prompt.value = '';
   health.value = null;
-  serverError.value = '세션 종료됨';
+  serverError.value = t('topbar.sessionEnded');
   try {
     const payload = await endSession();
-    showToast(payload.message || '세션을 종료합니다.');
-    serverError.value = '세션 종료됨';
+    showToast(payload.message || t('app.sessionEnding'));
+    serverError.value = t('topbar.sessionEnded');
     health.value = null;
   } catch (error) {
     endingSession.value = false;
-    showToast(readableError(error, '세션 종료에 실패했습니다.'));
+    showToast(readableError(error, t('app.sessionEndError')));
     schedulePoll(1200);
   }
 }
@@ -428,8 +431,8 @@ function makeRequestErrorJob(error: ApiErrorPayload, requestPrompt: string): Job
     version: '2.0',
     prompt: requestPrompt,
     status: 'failed',
-    status_label: '요청 오류',
-    message: error.message || '요청 처리 중 오류가 발생했습니다.',
+    status_label: t('app.requestErrorLabel'),
+    message: error.message || t('app.requestProcessError'),
     created_at: now,
     updated_at: now,
     started_at: null,
@@ -505,16 +508,34 @@ onBeforeUnmount(() => {
     <main class="content">
       <section class="hero" aria-labelledby="heroTitle">
         <div>
-          <p class="eyebrow">LOCAL AI WORKBENCH</p>
-          <h1 id="heroTitle">프롬프트 하나로 자율적으로 앱 생성.</h1>
-          <p class="hero-copy">
-            아이디어를 설명하면 요구사항 정리부터 구현, 검증, 패키징까지 하나의 작업 흐름으로 진행합니다.
-          </p>
+          <p class="eyebrow">{{ t('hero.eyebrow') }}</p>
+          <h1 id="heroTitle">{{ t('hero.title') }}</h1>
+          <p class="hero-copy">{{ t('hero.description') }}</p>
         </div>
-        <div class="hero-flow" aria-label="앱 제작 단계">
-          <span><b>01</b>기획</span>
-          <span><b>02</b>구현</span>
-          <span><b>03</b>검증</span>
+        <div class="hero-aside">
+          <div class="language-switch" role="group" :aria-label="t('language.label')">
+            <button
+              type="button"
+              :class="{ selected: locale === 'ko' }"
+              :aria-pressed="locale === 'ko'"
+              @click="setLocale('ko')"
+            >
+              {{ t('language.korean') }}
+            </button>
+            <button
+              type="button"
+              :class="{ selected: locale === 'en' }"
+              :aria-pressed="locale === 'en'"
+              @click="setLocale('en')"
+            >
+              {{ t('language.english') }}
+            </button>
+          </div>
+          <div class="hero-flow" :aria-label="t('hero.workflowLabel')">
+            <span><b>01</b>{{ t('hero.plan') }}</span>
+            <span><b>02</b>{{ t('hero.build') }}</span>
+            <span><b>03</b>{{ t('hero.verify') }}</span>
+          </div>
         </div>
       </section>
 
@@ -538,10 +559,7 @@ onBeforeUnmount(() => {
 
       <footer class="footer-note">
         <span aria-hidden="true">●</span>
-        <p>
-          로컬 작업공간에서 실행됩니다. 백엔드 파이프라인 로직은 동일하게 유지하며,
-          배포와 운영 데이터 변경은 자동으로 수행하지 않습니다.
-        </p>
+        <p>{{ t('app.footer') }}</p>
       </footer>
     </main>
   </div>

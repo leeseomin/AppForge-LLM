@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
+import { useI18n } from '../i18n';
 import type { JobRunSettings } from '../types';
 import JobAdvancedSettings from './JobAdvancedSettings.vue';
+
+const { locale, t } = useI18n();
 
 const props = defineProps<{
   modelValue: string;
@@ -23,20 +26,21 @@ const emit = defineEmits<{
 const promptInput = ref<HTMLTextAreaElement | null>(null);
 const isInvalid = ref(false);
 
-const examples = [
-  '개인 지출 CSV를 불러와 월별 예산과 카테고리별 사용량을 보여주는 반응형 웹앱',
-  '동네 독서모임 일정, 참석 여부, 책 메모를 관리하는 모바일 친화 웹앱',
-  '소규모 팀이 고객 문의를 칸반으로 분류하고 SLA를 추적하는 내부 도구',
-];
+const examples = computed(() => [
+  t('composer.example1'),
+  t('composer.example2'),
+  t('composer.example3'),
+]);
 
 const countLabel = computed(() => {
-  return `${props.modelValue.length.toLocaleString('ko-KR')} / ${props.promptMaxChars.toLocaleString('ko-KR')}`;
+  const numberLocale = locale.value === 'ko' ? 'ko-KR' : 'en-US';
+  return `${props.modelValue.length.toLocaleString(numberLocale)} / ${props.promptMaxChars.toLocaleString(numberLocale)}`;
 });
 
 const buttonLabel = computed(() => {
-  if (props.submitting) return '시작하는 중…';
-  if (props.busy) return 'AI 에이전트가 앱 제작 중…';
-  return 'AI 에이전트로 앱 만들기';
+  if (props.submitting) return t('composer.starting');
+  if (props.busy) return t('composer.busy');
+  return t('composer.start');
 });
 
 const disabled = computed(() => props.submitting || props.busy || !props.ready);
@@ -92,9 +96,9 @@ watch(
     <form novalidate @submit.prevent="submit">
       <div class="field-heading">
         <div>
-          <p class="section-kicker">ONE PROMPT → PLANNED, TESTED APP</p>
-          <label id="requestTitle" for="promptInput">어떤 앱을 만들까요?</label>
-          <p>사용자, 핵심 기능, 데이터, 원하는 실행 환경을 함께 적으면 결과가 더 정확해집니다.</p>
+          <p class="section-kicker">{{ t('composer.kicker') }}</p>
+          <label id="requestTitle" for="promptInput">{{ t('composer.title') }}</label>
+          <p>{{ t('composer.help') }}</p>
         </div>
         <span class="character-count">{{ countLabel }}</span>
       </div>
@@ -108,7 +112,7 @@ watch(
         required
         spellcheck="true"
         autocomplete="off"
-        placeholder="예: 개인 지출 CSV를 불러와 월별 예산과 카테고리별 사용량을 보여주는 반응형 웹앱을 만들어 주세요. 로컬 저장, 빈 상태와 오류 상태, 테스트, Docker 실행 방법을 포함해 주세요."
+        :placeholder="t('composer.placeholder')"
         :aria-invalid="isInvalid ? 'true' : 'false'"
         aria-describedby="requestHelp readinessNotice"
         :disabled="props.busy"
@@ -116,15 +120,15 @@ watch(
         @keydown="onKeydown"
       ></textarea>
 
-      <p v-if="isInvalid" class="inline-error">만들 앱의 목적과 핵심 기능을 입력해 주세요.</p>
+      <p v-if="isInvalid" class="inline-error">{{ t('composer.required') }}</p>
 
       <details class="mode-switch">
         <summary>
-          <span>실행 모드</span>
-          <strong>{{ props.mode === 'checkpoint' ? '검토 후 진행' : '완전 자율 실행' }}</strong>
+          <span>{{ t('composer.mode') }}</span>
+          <strong>{{ props.mode === 'checkpoint' ? t('composer.checkpoint') : t('composer.autonomous') }}</strong>
         </summary>
-        <fieldset :disabled="props.busy" aria-label="실행 모드 선택">
-          <legend>실행 모드 선택</legend>
+        <fieldset :disabled="props.busy" :aria-label="t('composer.modeLabel')">
+          <legend>{{ t('composer.modeLabel') }}</legend>
           <label :class="{ selected: props.mode === 'autonomous' }">
             <input
               type="radio"
@@ -133,8 +137,8 @@ watch(
               :checked="props.mode === 'autonomous'"
               @change="updateMode('autonomous')"
             />
-            <span>완전 자율 실행</span>
-            <small>검토 없이 끝까지 자동 제작</small>
+            <span>{{ t('composer.autonomous') }}</span>
+            <small>{{ t('composer.autonomousHelp') }}</small>
           </label>
           <label :class="{ selected: props.mode === 'checkpoint' }">
             <input
@@ -144,8 +148,8 @@ watch(
               :checked="props.mode === 'checkpoint'"
               @change="updateMode('checkpoint')"
             />
-            <span>검토 후 진행</span>
-            <small>중간 산출물을 확인하고 승인한 뒤 계속 진행</small>
+            <span>{{ t('composer.checkpoint') }}</span>
+            <small>{{ t('composer.checkpointHelp') }}</small>
           </label>
         </fieldset>
       </details>
@@ -156,7 +160,7 @@ watch(
         @update:settings="emit('update:settings', $event)"
       />
 
-      <div class="prompt-chips" aria-label="예시 요청">
+      <div class="prompt-chips" :aria-label="t('composer.examplesLabel')">
         <button
           v-for="example in examples"
           :key="example"
@@ -170,7 +174,7 @@ watch(
 
       <div class="composer-footer">
         <p id="requestHelp" class="keyboard-hint">
-          <kbd>Ctrl</kbd><span>+</span><kbd>Enter</kbd>로 바로 시작
+          <kbd>Ctrl</kbd><span>+</span><kbd>Enter</kbd>{{ t('composer.shortcut') }}
         </p>
         <button class="primary-button" type="submit" :disabled="disabled">
           <span>{{ buttonLabel }}</span>

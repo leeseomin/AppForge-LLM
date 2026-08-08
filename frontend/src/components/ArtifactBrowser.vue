@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { getArtifact, listArtifacts } from '../api';
+import { useI18n } from '../i18n';
 import type { ArtifactSummary } from '../types';
+
+const { t } = useI18n();
 
 const props = defineProps<{
   jobId: string;
@@ -35,7 +38,7 @@ async function loadList() {
       await openArtifact(next.name);
     }
   } catch (err) {
-    error.value = err instanceof Error ? err.message : '아티팩트 목록을 불러오지 못했습니다.';
+    error.value = err instanceof Error ? err.message : t('artifact.loadListError');
   } finally {
     loading.value = false;
   }
@@ -48,7 +51,7 @@ async function openArtifact(name: string) {
     const result = await getArtifact(props.jobId, name);
     payload.value = result.payload;
   } catch (err) {
-    emit('toast', err instanceof Error ? err.message : '아티팩트를 열 수 없습니다.');
+    emit('toast', err instanceof Error ? err.message : t('artifact.openError'));
   } finally {
     payloadLoading.value = false;
   }
@@ -75,16 +78,16 @@ watch(() => props.initialArtifact, async (name) => {
   <section class="artifact-browser" aria-labelledby="artifactBrowserTitle">
     <div class="panel-heading compact">
       <div>
-        <h3 id="artifactBrowserTitle">중간 산출물</h3>
-        <p>요구사항, 설계, 검증 결과를 JSON 원문으로 확인합니다.</p>
+        <h3 id="artifactBrowserTitle">{{ t('artifact.title') }}</h3>
+        <p>{{ t('artifact.help') }}</p>
       </div>
       <button class="secondary-button" type="button" :disabled="loading" @click="loadList">
-        {{ loading ? '로딩 중' : '새로고침' }}
+        {{ loading ? t('common.loading') : t('common.refresh') }}
       </button>
     </div>
     <p v-if="error" class="inline-error">{{ error }}</p>
     <div v-if="artifacts.length" class="artifact-grid">
-      <aside class="artifact-list" aria-label="아티팩트 목록">
+      <aside class="artifact-list" :aria-label="t('artifact.list')">
         <button
           v-for="artifact in artifacts"
           :key="artifact.name"
@@ -98,12 +101,12 @@ watch(() => props.initialArtifact, async (name) => {
       </aside>
       <article class="artifact-viewer">
         <div class="code-toolbar">
-          <strong>{{ selected || '아티팩트' }}</strong>
-          <span v-if="payloadLoading">불러오는 중…</span>
+          <strong>{{ selected || t('artifact.fallback') }}</strong>
+          <span v-if="payloadLoading">{{ t('common.loadingEllipsis') }}</span>
         </div>
         <pre v-if="prettyPayload" tabindex="0"><code>{{ prettyPayload }}</code></pre>
       </article>
     </div>
-    <p v-else-if="!loading" class="empty-note">아직 표시할 산출물이 없습니다.</p>
+    <p v-else-if="!loading" class="empty-note">{{ t('artifact.empty') }}</p>
   </section>
 </template>

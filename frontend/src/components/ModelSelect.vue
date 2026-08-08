@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { useI18n } from '../i18n';
 import type { ProviderModel } from '../types';
+
+const { t } = useI18n();
 
 const props = withDefaults(
   defineProps<{
@@ -10,7 +13,7 @@ const props = withDefaults(
     loading?: boolean;
   }>(),
   {
-    placeholder: '모델 검색 또는 ID 입력',
+    placeholder: '',
     loading: false,
   },
 );
@@ -139,7 +142,7 @@ onUnmounted(() => {
       :value="query"
       type="text"
       class="model-select-input"
-      :placeholder="loading ? '모델 목록 로딩 중...' : placeholder"
+      :placeholder="loading ? t('modelSelect.loading') : placeholder || t('modelSelect.placeholder')"
       autocomplete="off"
       @input="onInput"
       @focus="onFocus"
@@ -148,7 +151,7 @@ onUnmounted(() => {
     />
     <span v-if="loading" class="model-select-spinner" aria-hidden="true"></span>
     <div v-if="isOpen && !loading" class="model-select-dropdown">
-      <p v-if="filtered.length === 0" class="model-select-empty">검색 결과 없음</p>
+      <p v-if="filtered.length === 0" class="model-select-empty">{{ t('modelSelect.empty') }}</p>
       <button
         v-for="(m, index) in filtered"
         :key="m.id"
@@ -162,7 +165,7 @@ onUnmounted(() => {
         <span v-if="m.name && m.name !== m.id" class="model-select-option-name">{{ m.name }}</span>
       </button>
       <p v-if="models.length > 50 && normalizedQuery" class="model-select-more">
-        더 많은 결과는 검색어를 구체화하세요
+        {{ t('modelSelect.more') }}
       </p>
     </div>
   </div>

@@ -16,6 +16,7 @@ import {
   startOAuth,
   testProvider,
 } from '../api';
+import { useI18n } from '../i18n';
 import type {
   ActiveSelection,
   OAuthProvider,
@@ -25,6 +26,8 @@ import type {
   QuickConnectResult,
   TestResult,
 } from '../types';
+
+const { t } = useI18n();
 
 const emit = defineEmits<{
   close: [];
@@ -61,9 +64,9 @@ const qcModelOptions = computed(() => modelCache.value.get(qcProvider.value) ?? 
 const qcModelLoading = computed(() => modelLoading.value.has(qcProvider.value));
 const qcModelError = computed(() => modelLoadErrors.value[qcProvider.value] ?? '');
 const qcModelPlaceholder = computed(() => {
-  if (qcModelLoading.value) return '모델 목록 로딩 중...';
+  if (qcModelLoading.value) return t('modelSelect.loading');
   const first = qcModelOptions.value[0];
-  return first ? `예: ${first.id}` : '모델 ID';
+  return first ? `e.g. ${first.id}` : t('settings.modelId');
 });
 const qcNeedsBaseURL = computed(() => Boolean(qcProviderEntry.value?.base_url_required) && !qcProviderEntry.value?.base_url);
 const qcCanSubmit = computed(
@@ -112,7 +115,7 @@ async function ensureModels(providerId: string): Promise<void> {
     setCachedModels(providerId, payload.models ?? []);
   } catch {
     setCachedModels(providerId, []);
-    setModelLoadError(providerId, '모델 목록 로딩 실패. 모델 ID를 직접 입력할 수 있습니다.');
+    setModelLoadError(providerId, t('settings.modelLoadError'));
   } finally {
     setModelLoading(providerId, false);
   }
@@ -168,7 +171,7 @@ async function reload() {
       oauthMethod.value = oauthProviders.value[0].methods[0]?.id ?? 'browser';
     }
   } catch (error) {
-    loadError.value = readableError(error, '프로바이더 목록을 불러오지 못했습니다.');
+    loadError.value = readableError(error, t('settings.providerLoadError'));
   } finally {
     loading.value = false;
   }
@@ -223,21 +226,21 @@ async function runOAuthLogin() {
           stopOAuthPoll();
           oauthResult.value = pollResult;
           oauthBusy.value = false;
-          emit('toast', `${providerId} OAuth 로그인 성공`);
+          emit('toast', t('settings.oauthLoginSuccessToast', { provider: providerId }));
           emit('changed');
           await reload();
         } else if (pollResult.status === 'failed') {
           stopOAuthPoll();
           oauthResult.value = pollResult;
           oauthBusy.value = false;
-          emit('toast', `OAuth 로그인 실패: ${pollResult.error || '오류'}`);
+          emit('toast', t('settings.oauthLoginFailureToast', { error: pollResult.error || t('settings.unknownError') }));
         }
       } catch {
         // keep polling on transient errors
       }
     }, 2000);
   } catch (error) {
-    const message = readableError(error, 'OAuth 시작에 실패했습니다.');
+    const message = readableError(error, t('settings.oauthStartError'));
     oauthResult.value = { status: 'failed', error: message };
     oauthBusy.value = false;
     emit('toast', message);
@@ -248,9 +251,9 @@ async function doRefreshOAuth() {
   if (!oauthProviderId.value) return;
   try {
     await refreshOAuth(oauthProviderId.value);
-    emit('toast', `${oauthProviderId.value} 토큰 갱신됨`);
+    emit('toast', t('settings.tokenRefreshed', { provider: oauthProviderId.value }));
   } catch (error) {
-    emit('toast', readableError(error, '토큰 갱신 실패'));
+    emit('toast', readableError(error, t('settings.tokenRefreshError')));
   }
 }
 
@@ -268,15 +271,15 @@ async function runQuickConnect() {
     qcResult.value = result;
     if (result.ok) {
       qcApiKey.value = '';
-      emit('toast', `${result.provider} / ${result.model} 연결 및 활성화 완료`);
+      emit('toast', t('settings.quickConnectedToast', { provider: result.provider, model: result.model || t('common.defaultModel') }));
       emit('changed');
       await reload();
     } else {
-      const stepLabel = { save: '저장', test: '연결 테스트', activate: '활성화' }[result.step] || result.step;
-      emit('toast', `빠른 연결 실패 (${stepLabel}): ${result.error || '오류'}`);
+      const stepLabel = quickConnectStepLabel(result.step);
+      emit('toast', t('settings.quickFailureToast', { step: stepLabel, error: result.error || t('settings.unknownError') }));
     }
   } catch (error) {
-    const message = readableError(error, '빠른 연결에 실패했습니다.');
+    const message = readableError(error, t('settings.quickError'));
     qcResult.value = { ok: false, step: 'save', error: message, provider: qcProvider.value };
     emit('toast', message);
   } finally {
@@ -305,16 +308,25 @@ function toggle(provider: ProviderStatus) {
 
 function keyPlaceholder(provider: ProviderStatus) {
   if (provider.has_key) {
-    return provider.key_source === 'env' ? `${provider.env_key ?? ''} 환경변수 사용 중` : '저장된 키 사용 중 (덮어쓰려면 입력)';
+    return provider.key_source === 'env'
+      ? t('settings.envInUse', { key: provider.env_key ?? '' })
+      : t('settings.keyStored');
   }
-  return 'API 키 입력';
+  return t('settings.keyInput');
 }
 
 function statusLabel(provider: ProviderStatus) {
-  if (active.value.provider === provider.id) return '활성';
-  if (!provider.has_key) return '키 필요';
-  if (!provider.configured) return '설정 필요';
-  return '사용 가능';
+  if (active.value.provider === provider.id) return t('common.active');
+  if (!provider.has_key) return t('settings.keyRequired');
+  if (!provider.configured) return t('settings.setupRequired');
+  return t('common.available');
+}
+
+function quickConnectStepLabel(step: string) {
+  if (step === 'save') return t('settings.stepSave');
+  if (step === 'test') return t('settings.stepTest');
+  if (step === 'activate') return t('settings.stepActivate');
+  return step;
 }
 
 function statusClass(provider: ProviderStatus) {
@@ -369,10 +381,10 @@ async function save(provider: ProviderStatus) {
     const index = providers.value.findIndex((p) => p.id === provider.id);
     if (index >= 0) providers.value[index] = result.status;
     d.apiKey = '';
-    emit('toast', `${provider.name} 설정을 저장했습니다.`);
+    emit('toast', t('settings.savedToast', { provider: provider.name }));
     emit('changed');
   } catch (error) {
-    emit('toast', readableError(error, '저장에 실패했습니다.'));
+    emit('toast', readableError(error, t('settings.saveError')));
   } finally {
     busyId.value = null;
   }
@@ -380,7 +392,7 @@ async function save(provider: ProviderStatus) {
 
 async function remove(provider: ProviderStatus) {
   if (!provider.has_key || provider.key_source !== 'stored') {
-    emit('toast', '저장된 키가 없습니다.');
+    emit('toast', t('settings.noSavedKey'));
     return;
   }
   busyId.value = provider.id;
@@ -397,10 +409,10 @@ async function remove(provider: ProviderStatus) {
       };
     }
     draft.value[provider.id] = { ...ensureDraft(provider), apiKey: '', defaultModel: '' };
-    emit('toast', `${provider.name} 설정을 삭제했습니다.`);
+    emit('toast', t('settings.deletedToast', { provider: provider.name }));
     emit('changed');
   } catch (error) {
-    emit('toast', readableError(error, '삭제에 실패했습니다.'));
+    emit('toast', readableError(error, t('settings.deleteError')));
   } finally {
     busyId.value = null;
   }
@@ -409,7 +421,7 @@ async function remove(provider: ProviderStatus) {
 async function test(provider: ProviderStatus) {
   const d = ensureDraft(provider);
   busyId.value = provider.id;
-  testResults.value[provider.id] = { ok: false, error: '연결을 시도하는 중...' };
+  testResults.value[provider.id] = { ok: false, error: t('settings.connectingStatus') };
   try {
     const body: { apiKey?: string; baseURL?: string; model?: string } = {};
     if (d.apiKey.trim()) body.apiKey = d.apiKey.trim();
@@ -417,10 +429,12 @@ async function test(provider: ProviderStatus) {
     if (d.defaultModel.trim()) body.model = d.defaultModel.trim();
     const result = await testProvider(provider.id, body);
     testResults.value[provider.id] = result;
-    emit('toast', result.ok ? `${provider.name} 연결 성공` : `${provider.name} 연결 실패`);
+    emit('toast', result.ok
+      ? t('settings.providerConnectionSuccess', { provider: provider.name })
+      : t('settings.providerConnectionFailed', { provider: provider.name }));
   } catch (error) {
-    testResults.value[provider.id] = { ok: false, error: readableError(error, '연결 테스트에 실패했습니다.') };
-    emit('toast', '연결 테스트 실패');
+    testResults.value[provider.id] = { ok: false, error: readableError(error, t('settings.connectionTestError')) };
+    emit('toast', t('settings.connectionTestFailed'));
   } finally {
     busyId.value = null;
   }
@@ -435,10 +449,10 @@ async function activate(provider: ProviderStatus) {
     active.value = result;
     activeProviderId.value = provider.id;
     activeModel.value = result.model ?? model;
-    emit('toast', `${provider.name}${model ? ` / ${model}` : ''} 을(를) 활성 모델로 설정했습니다.`);
+    emit('toast', t('settings.activatedToast', { provider: provider.name, model: model ? ` / ${model} ` : ' ' }));
     emit('changed');
   } catch (error) {
-    emit('toast', readableError(error, '활성 모델 설정에 실패했습니다.'));
+    emit('toast', readableError(error, t('settings.activateError')));
   } finally {
     busyId.value = null;
   }
@@ -451,10 +465,10 @@ async function applyActiveModel() {
     const model = activeModel.value || null;
     const result = await setActiveProvider(provider, model);
     active.value = result;
-    emit('toast', '사용할 모델을 적용했습니다.');
+    emit('toast', t('settings.modelApplied'));
     emit('changed');
   } catch (error) {
-    emit('toast', readableError(error, '모델 적용에 실패했습니다.'));
+    emit('toast', readableError(error, t('settings.modelApplyError')));
   } finally {
     busyId.value = null;
   }
@@ -472,48 +486,45 @@ function readableError(error: unknown, fallback: string) {
     <div class="settings-card">
       <header class="settings-header">
         <div>
-          <p class="section-kicker">EXTERNAL LLM · MULTI-PROVIDER</p>
-          <h2 id="settingsTitle">LLM 연결 설정</h2>
+          <p class="section-kicker">{{ t('settings.kicker') }}</p>
+          <h2 id="settingsTitle">{{ t('settings.title') }}</h2>
         </div>
-        <button class="settings-close" type="button" aria-label="닫기" @click="emit('close')">×</button>
+        <button class="settings-close" type="button" :aria-label="t('settings.closeLabel')" @click="emit('close')">×</button>
       </header>
 
-      <p v-if="loading" class="settings-empty">프로바이더 목록을 불러오는 중...</p>
+      <p v-if="loading" class="settings-empty">{{ t('settings.loading') }}</p>
       <p v-else-if="loadError" class="settings-error">{{ loadError }}</p>
 
       <section v-if="!loading && !loadError" class="quick-connect">
-        <h3>빠른 연결</h3>
-        <p class="settings-hint">
-          프로바이더와 API 키만 입력하면 저장 · 연결 테스트 · 활성 모델 설정까지 한 번에 처리됩니다.
-          모델은 비워두면 프로바이더 기본값을 사용합니다.
-        </p>
+        <h3>{{ t('settings.quickTitle') }}</h3>
+        <p class="settings-hint">{{ t('settings.quickHelp') }}</p>
         <div class="qc-row">
           <label class="qc-field qc-provider">
-            <span>프로바이더</span>
+            <span>{{ t('settings.provider') }}</span>
             <select v-model="qcProvider" @change="onQcProviderChange">
-              <option value="" disabled>선택하세요</option>
+              <option value="" disabled>{{ t('settings.choose') }}</option>
               <option v-for="p in providers" :key="p.id" :value="p.id">
                 {{ p.name }} ({{ p.id }})
               </option>
             </select>
           </label>
           <label class="qc-field qc-key">
-            <span>API 키</span>
+            <span>{{ t('settings.apiKey') }}</span>
             <input
               v-model="qcApiKey"
               type="password"
-              :placeholder="qcProviderEntry ? (qcProviderEntry.has_key ? '저장된 키 사용 중 (덮어쓰려면 입력)' : 'API 키 입력') : '프로바이더 먼저 선택'"
+              :placeholder="qcProviderEntry ? (qcProviderEntry.has_key ? t('settings.keyStored') : t('settings.keyInput')) : t('settings.chooseProviderFirst')"
               autocomplete="off"
             />
           </label>
         </div>
         <div class="qc-row">
           <label v-if="qcNeedsBaseURL" class="qc-field qc-base">
-            <span>Base URL <small>(필수)</small></span>
+            <span>{{ t('settings.baseUrl') }} <small>({{ t('common.required') }})</small></span>
             <input v-model="qcBaseURL" type="text" :placeholder="qcProviderEntry?.base_url_default || 'https://...'" />
           </label>
           <label class="qc-field qc-model">
-            <span>모델 <small>(선택)</small></span>
+            <span>{{ t('settings.model') }} <small>({{ t('common.optional') }})</small></span>
             <ModelSelect
               v-model="qcModel"
               :models="qcModelOptions"
@@ -524,10 +535,10 @@ function readableError(error: unknown, fallback: string) {
           </label>
         </div>
         <p v-if="qcProviderEntry?.env_key" class="form-hint">
-          환경변수 <code>{{ qcProviderEntry.env_key }}</code> 가 설정되어 있으면 자동으로 사용합니다.
+          {{ t('settings.envHint', { key: qcProviderEntry.env_key }) }}
         </p>
         <p v-if="qcProviderEntry?.docs_url" class="form-hint">
-          <a :href="qcProviderEntry.docs_url" target="_blank" rel="noopener noreferrer">API 키 발급 가이드 ↗</a>
+          <a :href="qcProviderEntry.docs_url" target="_blank" rel="noopener noreferrer">{{ t('settings.apiGuide') }}</a>
         </p>
         <div class="qc-actions">
           <button
@@ -536,29 +547,26 @@ function readableError(error: unknown, fallback: string) {
             :disabled="!qcCanSubmit || qcBusy"
             @click="runQuickConnect"
           >
-            {{ qcBusy ? '연결 중...' : '연결하고 활성화' }}
+            {{ qcBusy ? t('settings.connecting') : t('settings.connectActivate') }}
           </button>
         </div>
         <p v-if="qcResult" class="test-result" :class="{ ok: qcResult.ok }">
           <template v-if="qcResult.ok">
-            ✓ 연결 성공 — 활성: <strong>{{ qcResult.provider }}</strong> / <strong>{{ qcResult.model }}</strong>
-            <span v-if="qcResult.test?.text"> — 응답: “{{ qcResult.test.text }}”</span>
+            ✓ {{ t('settings.connectionSuccess', { provider: qcResult.provider, model: qcResult.model || t('common.defaultModel') }) }}
+            <span v-if="qcResult.test?.text"> — {{ t('settings.response', { text: qcResult.test.text }) }}</span>
           </template>
           <template v-else>
-            ✕ 실패 ({{ { save: '저장', test: '연결 테스트', activate: '활성화' }[qcResult.step] || qcResult.step }}): {{ qcResult.error }}
+            ✕ {{ t('settings.failure', { step: quickConnectStepLabel(qcResult.step), error: qcResult.error || t('settings.unknownError') }) }}
           </template>
         </p>
       </section>
 
       <section v-if="!loading && !loadError && oauthProviders.length > 0" class="oauth-block">
-        <h3>OAuth 로그인</h3>
-        <p class="settings-hint">
-          ChatGPT Plus/Pro, xAI Grok 구독, GitHub Copilot으로 브라우저 또는 장치 코드로 로그인합니다.
-          API 키 없이 구독을 통해 접근할 수 있습니다.
-        </p>
+        <h3>{{ t('settings.oauthTitle') }}</h3>
+        <p class="settings-hint">{{ t('settings.oauthHelp') }}</p>
         <div class="qc-row">
           <label class="qc-field">
-            <span>프로바이더</span>
+            <span>{{ t('settings.provider') }}</span>
             <select v-model="oauthProviderId" @change="onOauthProviderChange">
               <option v-for="p in oauthProviders" :key="p.id" :value="p.id">
                 {{ p.name || p.id }}
@@ -566,7 +574,7 @@ function readableError(error: unknown, fallback: string) {
             </select>
           </label>
           <label class="qc-field">
-            <span>방식</span>
+            <span>{{ t('settings.method') }}</span>
             <select v-model="oauthMethod">
               <option v-for="m in oauthMethodOptions" :key="m.id" :value="m.id">{{ m.label }}</option>
             </select>
@@ -579,7 +587,7 @@ function readableError(error: unknown, fallback: string) {
             :disabled="!oauthProviderId || oauthBusy"
             @click="runOAuthLogin"
           >
-            {{ oauthBusy ? '인증 대기 중...' : 'OAuth 로그인' }}
+            {{ oauthBusy ? t('settings.oauthWaiting') : t('settings.oauthLogin') }}
           </button>
           <button
             class="ghost-button"
@@ -587,43 +595,41 @@ function readableError(error: unknown, fallback: string) {
             :disabled="!oauthProviderId || oauthBusy"
             @click="doRefreshOAuth"
           >
-            토큰 갱신
+            {{ t('settings.refreshToken') }}
           </button>
         </div>
         <p v-if="oauthInstructions" class="form-hint">{{ oauthInstructions }}</p>
         <p v-if="oauthUrl" class="form-hint">
-          <a :href="oauthUrl" target="_blank" rel="noopener noreferrer">인증 페이지 열기 ↗</a>
+          <a :href="oauthUrl" target="_blank" rel="noopener noreferrer">{{ t('settings.openAuth') }}</a>
         </p>
         <p v-if="oauthResult" class="test-result" :class="{ ok: oauthResult.status === 'success' }">
           <template v-if="oauthResult.status === 'success'">
-            ✓ OAuth 인증 성공 — <strong>{{ oauthResult.provider }}</strong>
+            ✓ {{ t('settings.oauthSuccess', { provider: oauthResult.provider || oauthProviderId }) }}
           </template>
           <template v-else-if="oauthResult.status === 'failed'">
-            ✕ 실패: {{ oauthResult.error }}
+            ✕ {{ t('settings.oauthFailure', { error: oauthResult.error || t('settings.unknownError') }) }}
           </template>
         </p>
       </section>
 
       <section v-if="!loading && !loadError" class="active-block">
-        <h3>사용할 모델</h3>
-        <p class="settings-hint">
-          AppForge 파이프라인이 호출할 외부 LLM 프로바이더와 모델입니다. 저장 후 바로 실행에 적용됩니다.
-        </p>
+        <h3>{{ t('settings.activeTitle') }}</h3>
+        <p class="settings-hint">{{ t('settings.activeHelp') }}</p>
         <div class="active-row">
           <label class="active-field">
-            <span>프로바이더</span>
+            <span>{{ t('settings.provider') }}</span>
             <select v-model="activeProviderId">
-              <option value="" disabled>선택하세요</option>
+              <option value="" disabled>{{ t('settings.choose') }}</option>
               <option v-for="p in providers" :key="p.id" :value="p.id">{{ p.name }}</option>
             </select>
           </label>
           <label class="active-field">
-            <span>모델</span>
+            <span>{{ t('settings.model') }}</span>
             <ModelSelect
               v-model="activeModel"
               :models="activeModelOptions"
               :loading="activeModelLoading"
-              placeholder="예: gpt-4o-mini"
+              :placeholder="t('settings.modelExample')"
             />
             <small v-if="activeModelError" class="field-warning">{{ activeModelError }}</small>
           </label>
@@ -633,18 +639,18 @@ function readableError(error: unknown, fallback: string) {
             :disabled="busyId === '__active__'"
             @click="applyActiveModel"
           >
-            적용
+            {{ t('common.apply') }}
           </button>
         </div>
         <p v-if="active.provider" class="active-current">
-          현재 활성: <strong>{{ active.provider }}</strong> / <strong>{{ active.model || '기본 모델' }}</strong>
+          {{ t('settings.current', { provider: active.provider, model: active.model || t('common.defaultModel') }) }}
         </p>
       </section>
 
       <section v-if="!loading && !loadError" class="advanced-block">
         <button class="advanced-toggle" type="button" @click="showAdvanced = !showAdvanced">
           <span class="provider-chevron" aria-hidden="true">{{ showAdvanced ? '▾' : '▸' }}</span>
-          고급 설정 (프로바이더별 상세 편집)
+          {{ t('settings.advanced') }}
         </button>
 
         <div v-if="showAdvanced" class="provider-list">
@@ -657,7 +663,7 @@ function readableError(error: unknown, fallback: string) {
             <button class="provider-summary" type="button" @click="toggle(provider)">
               <span class="provider-name">{{ provider.name }}</span>
               <span class="provider-key-hint">
-                {{ provider.has_key ? (provider.key_source === 'env' ? '환경변수' : '키 저장됨') : '키 없음' }}
+                {{ provider.has_key ? (provider.key_source === 'env' ? t('settings.envSource') : t('settings.keySaved')) : t('settings.noKey') }}
               </span>
               <span class="provider-status" :class="statusClass(provider)">{{ statusLabel(provider) }}</span>
               <span class="provider-chevron" aria-hidden="true">{{ expandedId === provider.id ? '▾' : '▸' }}</span>
@@ -665,7 +671,7 @@ function readableError(error: unknown, fallback: string) {
 
             <div v-if="expandedId === provider.id" class="provider-body">
               <label class="form-field">
-                <span>API 키</span>
+                <span>{{ t('settings.apiKey') }}</span>
                 <input
                   v-model="ensureDraft(provider).apiKey"
                   :type="'password'"
@@ -674,11 +680,11 @@ function readableError(error: unknown, fallback: string) {
                 />
               </label>
               <p v-if="provider.env_key" class="form-hint">
-                환경변수 <code>{{ provider.env_key }}</code> 가 설정되어 있으면 자동으로 사용합니다.
+                {{ t('settings.envHint', { key: provider.env_key }) }}
               </p>
 
               <label class="form-field">
-                <span>Base URL <small v-if="provider.base_url_required">(필수)</small></span>
+                <span>{{ t('settings.baseUrl') }} <small v-if="provider.base_url_required">({{ t('common.required') }})</small></span>
                 <input
                   v-model="ensureDraft(provider).baseURL"
                   :type="'text'"
@@ -687,12 +693,12 @@ function readableError(error: unknown, fallback: string) {
               </label>
 
               <label class="form-field">
-                <span>기본 모델</span>
+                <span>{{ t('settings.defaultModel') }}</span>
                 <ModelSelect
                   v-model="ensureDraft(provider).defaultModel"
                   :models="providerModelOptions(provider)"
                   :loading="modelLoading.has(provider.id)"
-                  placeholder="모델 ID"
+                  :placeholder="t('settings.modelId')"
                   @update:model-value="ensureProviderModels(provider)"
                 />
                 <small v-if="providerModelLoadError(provider)" class="field-warning">
@@ -715,7 +721,7 @@ function readableError(error: unknown, fallback: string) {
                   class="model-chip model-chip-more"
                   @click="toggleChips(provider)"
                 >
-                  더 보기 ({{ modelChipExtraCount(provider) }}개)
+                  {{ t('settings.showMore', { count: modelChipExtraCount(provider) }) }}
                 </button>
                 <button
                   v-if="expandedChips.has(provider.id)"
@@ -723,30 +729,30 @@ function readableError(error: unknown, fallback: string) {
                   class="model-chip model-chip-more"
                   @click="toggleChips(provider)"
                 >
-                  접기
+                  {{ t('settings.collapse') }}
                 </button>
               </div>
 
               <p v-if="provider.docs_url" class="form-hint">
-                <a :href="provider.docs_url" target="_blank" rel="noopener noreferrer">API 키 발급 가이드 ↗</a>
+                <a :href="provider.docs_url" target="_blank" rel="noopener noreferrer">{{ t('settings.apiGuide') }}</a>
               </p>
 
               <p v-if="testResults[provider.id]" class="test-result" :class="{ ok: testResults[provider.id].ok }">
-                {{ testResults[provider.id].ok ? '✓ 연결 성공' : '✕ ' + (testResults[provider.id].error || '연결 실패') }}
+                {{ testResults[provider.id].ok ? `✓ ${t('settings.connectionOk')}` : `✕ ${testResults[provider.id].error || t('settings.connectionFailed')}` }}
                 <span v-if="testResults[provider.id].ok && testResults[provider.id].text">
-                  — 응답: “{{ testResults[provider.id].text }}”
+                  — {{ t('settings.response', { text: testResults[provider.id].text || '' }) }}
                 </span>
               </p>
 
               <div class="provider-actions">
                 <button class="secondary-button" type="button" :disabled="busyId === provider.id" @click="save(provider)">
-                  저장
+                  {{ t('common.save') }}
                 </button>
                 <button class="ghost-button" type="button" :disabled="busyId === provider.id" @click="test(provider)">
-                  연결 테스트
+                  {{ t('settings.testConnection') }}
                 </button>
                 <button class="primary-button" type="button" :disabled="busyId === provider.id" @click="activate(provider)">
-                  이 모델 활성화
+                  {{ t('settings.activateModel') }}
                 </button>
                 <button
                   class="ghost-button danger"
@@ -754,7 +760,7 @@ function readableError(error: unknown, fallback: string) {
                   :disabled="busyId === provider.id"
                   @click="remove(provider)"
                 >
-                  키 삭제
+                  {{ t('settings.deleteKey') }}
                 </button>
               </div>
             </div>
@@ -763,11 +769,8 @@ function readableError(error: unknown, fallback: string) {
       </section>
 
       <footer class="settings-footer">
-        <p class="settings-hint">
-          API 키는 로컬 브릿지 서버(<code>llm_bridge</code>)의 설정 파일에만 저장되며, 이 화면에 다시 표시되지
-          않습니다.
-        </p>
-        <button class="secondary-button" type="button" @click="emit('close')">닫기</button>
+        <p class="settings-hint">{{ t('settings.securityNote') }}</p>
+        <button class="secondary-button" type="button" @click="emit('close')">{{ t('common.close') }}</button>
       </footer>
     </div>
   </div>

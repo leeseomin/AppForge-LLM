@@ -8,6 +8,9 @@ import { createHighlighterCore } from 'shiki/core';
 import { createJavaScriptRegexEngine } from 'shiki/engine/javascript';
 import githubDark from '@shikijs/themes/github-dark';
 import 'katex/dist/katex.min.css';
+import { useI18n } from '../i18n';
+
+const { t } = useI18n();
 
 const props = defineProps<{
   content: string;
@@ -147,7 +150,7 @@ async function renderMarkdown(source: string): Promise<string> {
       block.parentElement?.replaceWith(container);
     } catch {
       block.parentElement?.classList.add('mermaid-error');
-      block.parentElement?.setAttribute('title', 'Mermaid 다이어그램을 렌더링하지 못했습니다.');
+      block.parentElement?.setAttribute('title', t('markdown.mermaidError'));
     }
   }
 
@@ -172,7 +175,7 @@ watch(
 
 <template>
   <div class="markdown-content" :aria-busy="rendering ? 'true' : 'false'">
-    <p v-if="rendering && !html" class="markdown-loading">출력을 렌더링하는 중…</p>
+    <p v-if="rendering && !html" class="markdown-loading">{{ t('markdown.loading') }}</p>
     <!-- Content is sanitized before this assignment. -->
     <div v-else v-html="html"></div>
   </div>
