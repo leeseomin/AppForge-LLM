@@ -130,12 +130,108 @@ def test_llm_tool_arguments_cannot_escalate_safety_flags(tmp_path) -> None:
     result = LLMBridgeAgentDriver(bridge_url="http://bridge.test")._execute_registered_tool(
         layout,
         "run_command",
-        {"command": [sys.executable, "--version"], "allow_destructive": True},
+        {"command": ["bash", "-lc", "echo escalated"], "allow_destructive": True},
         project,
     )
 
     assert not result.success
     assert "allow_destructive" in str(result.error)
+
+
+def test_run_command_allows_non_destructive_diagnostics_without_opt_in(tmp_path) -> None:
+    """The pipeline cannot run tests or builds if every command needs allow_destructive."""
+    layout = ProjectLayout.from_root(tmp_path)
+    project = {"safety": {"allow_destructive": False, "allow_network": False}}
+
+    result = LLMBridgeAgentDriver(bridge_url="http://bridge.test")._execute_registered_tool(
+        layout,
+        "run_command",
+        {"command": [sys.executable, "--version"]},
+        project,
+    )
+
+    assert result.success, result.error
+
+
+def test_run_command_still_blocks_data_destroying_executables(tmp_path) -> None:
+    (tmp_path / "keep.txt").write_text("keep", encoding="utf-8")
+
+    with pytest.raises(PermissionError):
+        run_command(tmp_path, ["rm", "-r", "keep.txt"], policy=CommandPolicy())
+
+    assert (tmp_path / "keep.txt").exists()
+
+
+def test_dependency_install_is_allowed_without_general_network(tmp_path) -> None:
+    from appforge.tooling.command import validate_command
+
+    policy = CommandPolicy(allow_dependency_install=True)
+    validate_command(["npm", "install"], policy, workspace=tmp_path)
+
+    with pytest.raises(PermissionError):
+        validate_command(["git", "clone", "https://example.test/repo.git"], policy, workspace=tmp_path)
+
+
+def test_pip_install_outside_workspace_still_requires_destructive(tmp_path) -> None:
+    from appforge.tooling.command import validate_command
+
+    policy = CommandPolicy(allow_dependency_install=True)
+    with pytest.raises(PermissionError):
+        validate_command([sys.executable, "-m", "pip", "install", "requests"], policy, workspace=tmp_path)
+
+    workspace_python = tmp_path / ".venv" / "bin" / "python"
+    workspace_python.parent.mkdir(parents=True)
+    workspace_python.write_text("", encoding="utf-8")
+    validate_command(
+        [str(workspace_python), "-m", "pip", "install", "-r", "requirements.txt"],
+        policy,
+        workspace=tmp_path,
+    )
+
+
+def test_commands_run_non_interactively(tmp_path) -> None:
+    """Watch-mode test runners never exit; CI=true is what makes them run once."""
+    script = tmp_path / "show_env.py"
+    script.write_text(
+        "import os\nprint(os.environ.get('CI', 'missing'))\n",
+        encoding="utf-8",
+    )
+
+    result = run_command(tmp_path, [sys.executable, "show_env.py"], policy=CommandPolicy())
+
+    assert result.success, result.error
+    assert result.data["stdout"].strip() == "true"
+
+
+def test_explicit_env_overrides_non_interactive_defaults(tmp_path) -> None:
+    script = tmp_path / "show_env.py"
+    script.write_text(
+        "import os\nprint(os.environ.get('CI', 'missing'))\n",
+        encoding="utf-8",
+    )
+
+    result = run_command(
+        tmp_path,
+        [sys.executable, "show_env.py"],
+        policy=CommandPolicy(),
+        env={"CI": "false"},
+    )
+
+    assert result.data["stdout"].strip() == "false"
+
+
+def test_quality_tool_reports_missing_toolchain_as_skipped(tmp_path) -> None:
+    """Exit 127 means the check never ran; reporting it as a failure loops the agent."""
+    (tmp_path / "package.json").write_text(
+        '{"name": "app", "scripts": {"test": "vitest run"}}', encoding="utf-8"
+    )
+
+    result = ToolRegistry().get("run_tests").run(tmp_path, {})
+
+    assert result.success
+    assert result.data["skipped"] is True
+    assert result.data["code"] == "TOOLCHAIN_UNAVAILABLE"
+    assert "install_dependencies" in result.data["reason"]
 
 
 def test_run_command_does_not_inherit_sensitive_host_environment(tmp_path, monkeypatch) -> None:

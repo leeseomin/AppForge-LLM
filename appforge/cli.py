@@ -11,6 +11,7 @@ from rich.table import Table
 
 from . import __version__
 from .checkpoints import next_stage, read_checkpoint, write_checkpoint
+from .constants import DEFAULT_SAFETY
 from .drivers import DEFAULT_LLM_BRIDGE_URL, DriverError, create_driver
 from .gates import review_stage, run_declared_gates, validate_stage_artifacts, validate_stage_result
 from .models import ProjectLayout
@@ -142,6 +143,11 @@ def forge(
     auto_approve: bool = typer.Option(True, "--auto-approve/--pause-for-approval"),
     allow_network: bool = typer.Option(False, "--allow-network", help="Allow dependency downloads and remote audits"),
     allow_destructive: bool = typer.Option(False, "--allow-destructive", help="Allow destructive AppForge tool operations"),
+    allow_dependency_install: bool = typer.Option(
+        DEFAULT_SAFETY["allow_dependency_install"],
+        "--allow-dependency-install/--no-dependency-install",
+        help="Allow package managers to install dependencies into the workspace",
+    ),
     unsafe_agent: bool = typer.Option(False, "--unsafe-agent", help="Bypass the coding agent's permission sandbox; isolated workspaces only"),
     max_stage_attempts: int | None = typer.Option(None, "--max-stage-attempts", min=1, max=10),
     stage_timeout: int = typer.Option(3600, "--stage-timeout", min=60),
@@ -171,6 +177,7 @@ def forge(
             auto_approve=auto_approve,
             allow_network=allow_network,
             allow_destructive=allow_destructive,
+            allow_dependency_install=allow_dependency_install,
             max_stage_attempts=max_stage_attempts,
             stage_timeout=stage_timeout,
         )
@@ -248,6 +255,11 @@ def complete_stage(
     auto_approve: bool = typer.Option(True, "--auto-approve/--await-approval"),
     allow_network: bool = typer.Option(False, "--allow-network"),
     allow_destructive: bool = typer.Option(False, "--allow-destructive"),
+    allow_dependency_install: bool = typer.Option(
+        DEFAULT_SAFETY["allow_dependency_install"],
+        "--allow-dependency-install/--no-dependency-install",
+        help="Allow package managers to install dependencies into the workspace",
+    ),
 ) -> None:
     """Validate and checkpoint work completed manually by the current coding assistant."""
     layout = _layout(project)
@@ -265,6 +277,7 @@ def complete_stage(
         stage=spec,
         allow_network=allow_network,
         allow_destructive=allow_destructive,
+        allow_dependency_install=allow_dependency_install,
     )
     records = artifact_records + gate_records
     if not result_ok:
@@ -301,6 +314,11 @@ def run(
     auto_approve: bool = typer.Option(True, "--auto-approve/--pause-for-approval"),
     allow_network: bool = typer.Option(False, "--allow-network", help="Allow dependency downloads and remote audits"),
     allow_destructive: bool = typer.Option(False, "--allow-destructive", help="Allow destructive AppForge tool operations"),
+    allow_dependency_install: bool = typer.Option(
+        DEFAULT_SAFETY["allow_dependency_install"],
+        "--allow-dependency-install/--no-dependency-install",
+        help="Allow package managers to install dependencies into the workspace",
+    ),
     unsafe_agent: bool = typer.Option(False, "--unsafe-agent", help="Bypass the coding agent's permission sandbox; use only in an isolated workspace"),
     max_stage_attempts: int | None = typer.Option(None, "--max-stage-attempts", min=1, max=10),
     stage_timeout: int = typer.Option(3600, "--stage-timeout", min=60),
@@ -323,6 +341,7 @@ def run(
             auto_approve=auto_approve,
             allow_network=allow_network,
             allow_destructive=allow_destructive,
+            allow_dependency_install=allow_dependency_install,
             max_stage_attempts=max_stage_attempts,
             stage_timeout=stage_timeout,
         )

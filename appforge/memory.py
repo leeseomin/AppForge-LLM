@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -94,6 +95,20 @@ def render_memory_context(layout: ProjectLayout, *, current_stage: str) -> str:
     return truncate(rendered, MAX_RENDERED_MEMORY_CHARS)
 
 
+_DRIVER_ERROR_CODE = re.compile(r"^([A-Z][A-Z0-9_]{4,}):")
+
+
+def driver_error_code(driver: Any) -> str | None:
+    """Pull the machine-readable code out of a driver's stderr, when it has one."""
+    if not isinstance(driver, dict):
+        return None
+    first_line = str(driver.get("stderr") or "").strip().splitlines()[:1]
+    if not first_line:
+        return None
+    match = _DRIVER_ERROR_CODE.match(first_line[0].strip())
+    return match.group(1) if match else None
+
+
 def failure_signature(failure: dict[str, Any]) -> str:
     """Create a stable signature for detecting unproductive retry loops."""
     compact = {
@@ -121,5 +136,9 @@ def failure_signature(failure: dict[str, Any]) -> str:
         "driver_exit_code": (failure.get("driver") or {}).get("exit_code")
         if isinstance(failure.get("driver"), dict)
         else None,
+        # Two attempts that died for different reasons are not a loop, even when they
+        # produce the same exit code and the same (empty) set of failed checks.
+        "driver_error_code": driver_error_code(failure.get("driver")),
+        "submitted_artifacts": sorted(failure.get("submitted_artifacts") or []),
     }
     return json.dumps(compact, ensure_ascii=False, sort_keys=True)

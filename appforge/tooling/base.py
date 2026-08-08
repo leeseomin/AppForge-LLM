@@ -27,6 +27,10 @@ class Tool(ABC):
     dependencies: ClassVar[tuple[str, ...]] = ()
     network_required: ClassVar[bool] = False
     destructive: ClassVar[bool] = False
+    dependency_install_required: ClassVar[bool] = False
+    # Safety flags this tool understands. The caller injects them from project
+    # safety; they are never accepted from agent-supplied arguments.
+    policy_inputs: ClassVar[tuple[str, ...]] = ()
     input_schema: ClassVar[dict[str, Any]] = {"type": "object"}
     llm_exposed: ClassVar[bool] = False
     llm_description: ClassVar[str] = ""
@@ -52,6 +56,8 @@ class Tool(ABC):
             "missing_dependencies": missing,
             "network_required": self.network_required,
             "destructive": self.destructive,
+            "dependency_install_required": self.dependency_install_required,
+            "policy_inputs": list(self.policy_inputs),
             "input_schema": self.input_schema,
             "llm_exposed": self.llm_exposed,
             "llm_description": self.llm_description or self.description,
@@ -75,6 +81,18 @@ class Tool(ABC):
             return ToolResult(success=False, error="This tool requires allow_destructive=true")
         if self.network_required and not bool(payload.get("allow_network", False)):
             return ToolResult(success=False, error="This tool requires allow_network=true")
+        if self.dependency_install_required and not (
+            bool(payload.get("allow_dependency_install", False))
+            or bool(payload.get("allow_network", False))
+        ):
+            return ToolResult(
+                success=False,
+                error=(
+                    "Dependency installation is disabled for this run. Do not retry it; "
+                    "report the affected checks as unverified instead."
+                ),
+                data={"code": "DEPENDENCY_INSTALL_DISABLED", "retryable": False},
+            )
         try:
             result = self.execute(workspace, payload)
         except Exception as exc:  # tool boundary: convert failures into structured results

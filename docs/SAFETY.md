@@ -8,6 +8,17 @@ OpenAppForge treats the coding agent as a powerful but fallible worker. Agent ou
 - AppForge network tools are disabled unless `allow_network=true` reaches the tool contract.
 - Tools marked destructive require `allow_destructive=true`.
 - Command execution uses argument vectors with `shell=False`, bounded timeouts, and captured/redacted output.
+- Dependency installation is a capability of its own, `allow_dependency_install`, enabled by
+  default and disabled with `--no-dependency-install` or `APPFORGE_ALLOW_DEPENDENCY_INSTALL=false`.
+  It permits package managers to resolve dependencies whose writes land inside the workspace
+  (`node_modules`, a workspace `.venv`, module caches). It does not open general network access,
+  and `pip install` still requires `allow_destructive` unless it runs through a workspace `.venv`,
+  because installing with the host interpreter would mutate the environment running AppForge.
+- `run_command` executes non-destructive argument vectors without `allow_destructive`. Shells,
+  inline interpreters (`-c`/`-e`), data-destroying executables (`rm`, `rmdir`, `shred`,
+  `truncate`, `unlink`), and the blocked-pattern list all still require it.
+- Commands run with `CI=true` and non-interactive package-manager defaults so watch-mode test
+  runners terminate instead of hanging a gate until its timeout.
 - Known destructive system, disk, force-push, and pipe-to-shell patterns are blocked by the command policy.
 - Codex/Claude/generic local coding-agent CLI drivers were removed; each pipeline stage runs through the local LLM bridge against a configured external provider API key.
 - The bridge binds to the loopback interface only; provider API keys are persisted in a `0600`-permission config file and are never sent to the browser.
@@ -57,6 +68,15 @@ Secret scanning is heuristic and cannot prove absence. Use a dedicated organizat
 ## Evidence integrity
 
 The coding agent cannot complete a stage with prose alone. It must produce a fresh schema-valid completion record and all declared artifacts. Required quality tools are executed by the orchestrator after the agent returns. A missing command counts as skipped; a skipped required gate fails.
+
+A gate whose runner is not installed reports `TOOLCHAIN_UNAVAILABLE` rather than a failure, because
+the check never executed. When a required gate is blocked that way, the stage fails once as
+`ENVIRONMENT_UNAVAILABLE` and is not retried: no repair to the generated code can install a missing
+toolchain, so retrying only burns budget.
+
+An attempt that exhausts its turn or token budget after submitting every required artifact and a
+schema-valid stage result is accepted. The budget bounds how long an attempt may run; it does not
+invalidate work the agent already finished and the orchestrator already validated.
 
 No stage should label a test, target, migration, or user flow as verified unless the corresponding evidence was actually executed. Inferred support must be labeled as such.
 

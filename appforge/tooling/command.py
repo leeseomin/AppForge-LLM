@@ -27,6 +27,11 @@ _SHELL_EXECUTABLES = {"sh", "bash", "zsh", "fish", "cmd", "powershell", "pwsh"}
 _INLINE_CODE_FLAGS = {"-c", "-e"}
 _INTERPRETERS = {"node", "ruby", "perl"}
 _PYTHON_MODULE_INSTALLERS = {"pip", "pip3"}
+# Executables whose whole purpose is removing or truncating data. They stay behind
+# allow_destructive even when workspace command execution is otherwise permitted.
+_DESTRUCTIVE_EXECUTABLES = {"rm", "rmdir", "shred", "truncate", "unlink"}
+_PACKAGE_MANAGERS = {"npm", "pnpm", "yarn", "bun", "cargo", "go", "gradle", "mvn", "flutter", "dart"}
+_DEPENDENCY_INSTALL_VERBS = {"install", "ci", "add", "fetch", "download", "get", "restore", "sync"}
 
 SAFE_ENV_KEYS = {
     "PATH",
@@ -39,11 +44,26 @@ SAFE_ENV_KEYS = {
     "COMSPEC",
 }
 
+# Test runners such as vitest and jest default to an interactive watch loop, which
+# never exits and would hang a gate until its timeout. Every major runner treats
+# these as the signal to run once and exit. Callers may still override them.
+NON_INTERACTIVE_ENV = {
+    "CI": "true",
+    "NO_COLOR": "1",
+    "npm_config_yes": "true",
+    "npm_config_audit": "false",
+    "npm_config_fund": "false",
+    "npm_config_update_notifier": "false",
+}
+
 
 @dataclass(frozen=True)
 class CommandPolicy:
     allow_destructive: bool = False
     allow_network: bool = False
+    # Permits package-manager dependency resolution whose writes stay inside the
+    # workspace (node_modules, a workspace .venv, cargo/go module caches).
+    allow_dependency_install: bool = False
     timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT
 
 
@@ -57,12 +77,51 @@ def normalize_command(command: str | Sequence[str]) -> list[str]:
     return parts
 
 
-def validate_command(argv: list[str], policy: CommandPolicy) -> None:
+def _is_inside(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+    except (ValueError, OSError):
+        return False
+    return True
+
+
+def _is_workspace_dependency_install(argv: list[str], workspace: Path | None) -> bool:
+    """True when argv resolves dependencies into the workspace rather than the host.
+
+    Node/Rust/Go package managers write into the project directory, so they are safe
+    under allow_dependency_install. `pip install` mutates whichever interpreter runs
+    it, so it only qualifies when that interpreter lives inside the workspace.
+    """
+    executable = Path(argv[0]).name.lower()
+    verbs = {arg.lower() for arg in argv[1:4] if not arg.startswith("-")}
+    is_python = executable == "python" or executable.startswith("python")
+    if is_python:
+        if not (len(argv) >= 4 and argv[1] == "-m" and argv[2].lower() in _PYTHON_MODULE_INSTALLERS):
+            return False
+        if argv[3].lower() != "install":
+            return False
+        return workspace is not None and _is_inside(Path(argv[0]), workspace)
+    if executable in _PYTHON_MODULE_INSTALLERS:
+        return False
+    return executable in _PACKAGE_MANAGERS and bool(verbs & _DEPENDENCY_INSTALL_VERBS)
+
+
+def validate_command(
+    argv: list[str],
+    policy: CommandPolicy,
+    *,
+    workspace: Path | None = None,
+) -> None:
     executable = Path(argv[0]).name.lower()
     rendered = shlex.join(argv)
+    dependency_install = _is_workspace_dependency_install(argv, workspace)
     if not policy.allow_destructive:
         if executable in _SHELL_EXECUTABLES:
             raise PermissionError("Shell execution requires allow_destructive=true or sandbox isolation")
+        if executable in _DESTRUCTIVE_EXECUTABLES:
+            raise PermissionError(
+                f"{executable!r} deletes or truncates data and requires allow_destructive=true"
+            )
         is_python = executable == "python" or executable.startswith("python")
         is_interpreter = is_python or executable in _INTERPRETERS
         if is_interpreter and any(arg in _INLINE_CODE_FLAGS for arg in argv[1:3]):
@@ -73,8 +132,12 @@ def validate_command(argv: list[str], policy: CommandPolicy) -> None:
             and argv[1] == "-m"
             and argv[2].lower() in _PYTHON_MODULE_INSTALLERS
             and argv[3].lower() in {"install", "uninstall"}
+            and not (dependency_install and policy.allow_dependency_install)
         ):
-            raise PermissionError("Python package mutation requires allow_destructive=true or sandbox isolation")
+            raise PermissionError(
+                "Python package mutation outside the workspace requires allow_destructive=true; "
+                "create a workspace .venv and install with it instead"
+            )
         for pattern in _BLOCKED_PATTERNS:
             if pattern.search(rendered):
                 raise PermissionError(f"Blocked potentially destructive command: {rendered}")
@@ -113,7 +176,14 @@ def validate_command(argv: list[str], policy: CommandPolicy) -> None:
             " download",
         )
         if executable in network_commands and any(verb in f" {rendered_lower}" for verb in network_verbs):
-            raise PermissionError("Network-capable package/repository operation requires allow_network=true")
+            # Dependency resolution is its own capability: it reaches a package
+            # registry but writes only into the workspace, so it is allowed without
+            # opening general network access.
+            if not (dependency_install and policy.allow_dependency_install):
+                raise PermissionError(
+                    "Network-capable package/repository operation requires allow_network=true "
+                    "(or allow_dependency_install=true for workspace dependency installation)"
+                )
 
 
 def run_command(
@@ -125,12 +195,13 @@ def run_command(
 ) -> ToolResult:
     policy = policy or CommandPolicy()
     argv = normalize_command(command)
-    validate_command(argv, policy)
+    validate_command(argv, policy, workspace=workspace)
     merged_env = {
         key: value
         for key, value in os.environ.items()
         if key in SAFE_ENV_KEYS
     }
+    merged_env.update(NON_INTERACTIVE_ENV)
     if env:
         merged_env.update({str(k): str(v) for k, v in env.items()})
     started = time.monotonic()

@@ -25,6 +25,7 @@ export interface HealthPayload {
   safety: {
     deployment_enabled: boolean;
     destructive_operations_enabled: boolean;
+    dependency_install_enabled: boolean;
   };
 }
 

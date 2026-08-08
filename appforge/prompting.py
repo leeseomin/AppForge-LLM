@@ -11,7 +11,7 @@ from .memory import render_memory_context
 from .models import PipelineSpec, ProjectLayout, StageSpec
 from .tooling.detection import detect_stack
 from .tooling.registry import ToolRegistry
-from .util import read_json, safe_resolve, truncate
+from .util import command_exists, read_json, safe_resolve, truncate
 
 
 def load_skill(relative_path: str) -> str:
@@ -146,6 +146,58 @@ _ENTRYPOINT_HINTS = (
     "requirements.txt",
     "README.md",
 )
+
+
+_TOOLCHAIN_PROBES = (
+    ("node", "Node.js"),
+    ("npm", "npm"),
+    ("pnpm", "pnpm"),
+    ("yarn", "yarn"),
+    ("python3", "Python"),
+    ("cargo", "Cargo"),
+    ("go", "Go"),
+)
+
+
+def _environment_section(layout: ProjectLayout, project: dict[str, Any]) -> str:
+    """State what this machine can actually do, so the agent never probes for it.
+
+    Every blocked capability the agent has to discover by trial costs turns and
+    tokens it could spend implementing, and produces unfixable "repair" loops.
+    """
+    safety = project.get("safety") if isinstance(project.get("safety"), dict) else {}
+    allow_network = bool(safety.get("allow_network", False))
+    allow_destructive = bool(safety.get("allow_destructive", False))
+    allow_install = bool(safety.get("allow_dependency_install", False)) or allow_network
+    available = [label for command, label in _TOOLCHAIN_PROBES if command_exists(command)]
+    lines = [
+        f"- Installed toolchains: {', '.join(available) or '<none detected>'}",
+        f"- Workspace dependency installation (`install_dependencies`): "
+        f"{'ALLOWED' if allow_install else 'BLOCKED'}",
+        f"- General outbound network (curl/wget/git clone): {'ALLOWED' if allow_network else 'BLOCKED'}",
+        f"- Destructive commands (shell, rm, inline interpreters): "
+        f"{'ALLOWED' if allow_destructive else 'BLOCKED'}",
+        "- Deployment and production data changes: BLOCKED",
+    ]
+    if allow_install:
+        lines.append(
+            "- Run `install_dependencies` BEFORE `run_tests` or `run_build`. Without it those "
+            "commands exit 127 because the toolchain is not resolved yet."
+        )
+    else:
+        lines.append(
+            "- Dependency installation is off. Do NOT attempt `npm install`, `pip install`, or a "
+            "workaround for it. Report affected test/build checks as unverified with "
+            "`\"passed\": null` and state the reason once; a blocked capability is not a defect "
+            "to repair and retrying it will not change the result."
+        )
+    if not allow_destructive:
+        lines.append(
+            "- `run_command` works for non-destructive commands. It executes argv directly, so "
+            "shell syntax (pipes, `&&`, globs, redirection) is unavailable — pass a single program "
+            "and its arguments."
+        )
+    return "\n".join(lines)
 
 
 def _is_managed_or_ignored_path(relative_path: str) -> bool:
@@ -333,6 +385,7 @@ def build_stage_prompt(
     engineering_spine = load_skill("meta/engineering-spine.md")
     stage_result_schema = read_json(Path(__file__).resolve().parent / "resources" / "schemas" / "stage-result.schema.json", {})
     tool_info = {name: ToolRegistry().get(name).info() for name in stage.tools if name in ToolRegistry().names()}
+    environment_section = _environment_section(layout, project)
     failure_section = ""
     if previous_failure:
         failure_section = (
@@ -351,10 +404,11 @@ Work directly in the current workspace. Do not merely describe the work: create 
 - Original request: {project['prompt']}
 - Pipeline: `{pipeline.name}` — {pipeline.description}
 - Mode: `{project['mode']}`
-- Network downloads allowed by runner: `{bool((project.get('safety') or {}).get('allow_network', False))}`
-- Destructive AppForge tool operations allowed: `{bool((project.get('safety') or {}).get('allow_destructive', False))}`
 - Stage: `{stage.name}` (attempt {attempt})
 - Stage purpose: {stage.description}
+
+## Execution environment
+{environment_section}
 
 ## Non-negotiable operating contract
 {autonomy}

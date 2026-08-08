@@ -17,7 +17,11 @@ const bannerText = computed(() => {
   if (!props.health.ready) {
     return `${props.health.driver.message} ${props.health.driver.action}`.trim();
   }
-  const networkText = props.health.network_enabled ? '패키지 설치용 네트워크 허용' : '네트워크 사용 안 함';
+  const networkText = props.health.network_enabled
+    ? '네트워크 허용'
+    : props.health.safety.dependency_install_enabled
+      ? '작업공간 의존성 설치만 허용'
+      : '네트워크 사용 안 함';
   const destructiveText = props.health.safety.destructive_operations_enabled
     ? '파괴 작업 허용됨'
     : '배포/파괴 작업 차단';

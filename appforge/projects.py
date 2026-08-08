@@ -3,10 +3,19 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .constants import PROJECT_FILE_NAME, STATE_FILE_NAME
+from .constants import DEFAULT_SAFETY, PROJECT_FILE_NAME, SAFETY_KEYS, STATE_FILE_NAME
 from .models import ProjectLayout
 from .pipelines import auto_select_pipeline, load_pipeline
 from .util import atomic_write_json, atomic_write_text, read_json, slugify, utc_now
+
+
+def resolve_safety(overrides: dict[str, Any] | None = None) -> dict[str, bool]:
+    """Merge caller overrides onto the default safety posture, ignoring unknown keys."""
+    safety = dict(DEFAULT_SAFETY)
+    for key in SAFETY_KEYS:
+        if overrides and key in overrides:
+            safety[key] = bool(overrides[key])
+    return safety
 
 
 class ProjectError(ValueError):
@@ -21,6 +30,7 @@ def initialize_project(
     pipeline_name: str = "auto",
     mode: str | None = None,
     existing_target: Path | None = None,
+    safety: dict[str, Any] | None = None,
 ) -> ProjectLayout:
     if not prompt.strip():
         raise ProjectError("The product request cannot be empty")
@@ -68,11 +78,7 @@ def initialize_project(
         "created_at": utc_now(),
         "existing_repository": existing_repo,
         "selection_scores": scores,
-        "safety": {
-            "allow_network": False,
-            "allow_deploy": False,
-            "allow_destructive": False,
-        },
+        "safety": resolve_safety(safety),
     }
     atomic_write_json(layout.control / PROJECT_FILE_NAME, project)
     atomic_write_json(
@@ -134,6 +140,10 @@ def load_project(layout: ProjectLayout) -> dict[str, Any]:
     data = read_json(layout.control / PROJECT_FILE_NAME)
     if not isinstance(data, dict):
         raise ProjectError(f"Invalid project metadata at {layout.control / PROJECT_FILE_NAME}")
+    # Projects created before a safety key existed must still get a defined posture
+    # rather than silently falling back to "denied" for every policy-aware tool.
+    stored = data.get("safety") if isinstance(data.get("safety"), dict) else {}
+    data["safety"] = resolve_safety(stored)
     return data
 
 

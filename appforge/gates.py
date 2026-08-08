@@ -254,6 +254,7 @@ def run_declared_gates(
     stage: StageSpec,
     allow_network: bool,
     allow_destructive: bool,
+    allow_dependency_install: bool = True,
 ) -> tuple[bool, list[dict[str, Any]]]:
     registry = ToolRegistry()
     all_passed = True
@@ -262,6 +263,17 @@ def run_declared_gates(
         try:
             tool = registry.get(gate.tool)
             inputs = dict(gate.inputs)
+            for key in getattr(tool, "policy_inputs", ()) or ():
+                inputs.setdefault(
+                    key,
+                    {
+                        "allow_network": allow_network,
+                        "allow_destructive": allow_destructive,
+                        "allow_dependency_install": allow_dependency_install,
+                    }.get(key, False),
+                )
+            if getattr(tool, "dependency_install_required", False):
+                inputs.setdefault("allow_dependency_install", allow_dependency_install)
             if tool.network_required and not allow_network:
                 skipped_record = {
                     "success": True,

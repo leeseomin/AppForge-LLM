@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from .checkpoints import next_stage, read_checkpoint, write_checkpoint
-from .constants import STAGE_RESULT_FILE_NAME
+from .constants import DEFAULT_SAFETY, STAGE_RESULT_FILE_NAME
 from .drivers import AgentDriver, DriverError
 from .gates import (
     review_stage,
@@ -20,7 +20,7 @@ from .llm_review import independent_llm_review
 from .memory import append_stage_memory, failure_signature
 from .models import PipelineSpec, ProjectLayout, StageSpec
 from .pipelines import load_pipeline
-from .projects import load_project, update_project
+from .projects import load_project, resolve_safety, update_project
 from .prompting import build_stage_prompt
 from .util import atomic_write_json, atomic_write_text, utc_now
 
@@ -38,6 +38,26 @@ class RunSummary:
     failure: dict[str, Any] | None = None
 
 
+_ENVIRONMENT_BLOCK_CODES = {"TOOLCHAIN_UNAVAILABLE", "DEPENDENCY_INSTALL_DISABLED"}
+
+
+def _environment_blockers(records: list[dict[str, Any]]) -> list[str]:
+    """Required checks that no retry can satisfy because the capability is absent.
+
+    A missing test runner is an environment fact, not a defect in the generated code,
+    so the agent must not be sent back to "repair" it three times.
+    """
+    blockers: list[str] = []
+    for record in records:
+        if record.get("passed") or not record.get("required"):
+            continue
+        data = (record.get("result") or {}).get("data") or {}
+        if str(data.get("code") or "") in _ENVIRONMENT_BLOCK_CODES:
+            reason = str(data.get("reason") or "capability unavailable")
+            blockers.append(f"{record.get('name')}: {reason}")
+    return blockers
+
+
 class PipelineRunner:
     def __init__(
         self,
@@ -48,6 +68,7 @@ class PipelineRunner:
         approved_stage: str | None = None,
         allow_network: bool = False,
         allow_destructive: bool = False,
+        allow_dependency_install: bool = DEFAULT_SAFETY["allow_dependency_install"],
         max_stage_attempts: int | None = None,
         stage_timeout: int = 3600,
         event_handler: RunEventHandler | None = None,
@@ -61,6 +82,7 @@ class PipelineRunner:
         self.approved_stage = approved_stage
         self.allow_network = allow_network
         self.allow_destructive = allow_destructive
+        self.allow_dependency_install = allow_dependency_install
         self.max_stage_attempts = max_stage_attempts or self.pipeline.max_stage_attempts
         self.stage_timeout = stage_timeout
         self.event_handler = event_handler
@@ -75,11 +97,14 @@ class PipelineRunner:
             {
                 "last_run_at": utc_now(),
                 "driver": driver.name,
-                "safety": {
-                    "allow_network": allow_network,
-                    "allow_deploy": False,
-                    "allow_destructive": allow_destructive,
-                },
+                "safety": resolve_safety(
+                    {
+                        "allow_network": allow_network,
+                        "allow_deploy": False,
+                        "allow_destructive": allow_destructive,
+                        "allow_dependency_install": allow_dependency_install,
+                    }
+                ),
             },
         )
 
@@ -437,6 +462,7 @@ class PipelineRunner:
                 stage=stage,
                 allow_network=self.allow_network,
                 allow_destructive=self.allow_destructive,
+                allow_dependency_install=self.allow_dependency_install,
             )
             records = artifact_records + gate_records
             if not stage_record_ok:
@@ -498,6 +524,8 @@ class PipelineRunner:
                     seen=seen_failure_signatures,
                     failure=last_failure,
                 )
+                if last_failure.get("retryable") is False:
+                    stop_retrying = True
             attempt_log = {
                 "stage": stage.name,
                 "attempt": attempt,
@@ -801,12 +829,30 @@ class PipelineRunner:
             for item in (review.get("findings") or [])
             if item.get("severity") == "critical"
         ]
+        submitted_artifacts = sorted(
+            str(record.get("name"))
+            for record in records
+            if record.get("kind") == "artifact" and record.get("passed")
+        )
+        blocked = _environment_blockers(records)
+        if blocked and code == "STAGE_CHECK_FAILED":
+            code = "ENVIRONMENT_UNAVAILABLE"
+            message = (
+                f"Stage {stage.name} cannot pass in this environment: "
+                f"{'; '.join(blocked)}"
+            )
+            action = (
+                "Enable dependency installation (--allow-dependency-install), install the missing "
+                "toolchain, or run this stage where the toolchain exists. Retrying will not help."
+            )
         return {
             "code": code,
             "message": message,
             "action": action,
             "stage": stage.name,
             "attempt": attempt,
+            "retryable": not blocked,
+            "submitted_artifacts": submitted_artifacts,
             "driver": {
                 "name": self.driver.name,
                 "success": bool(driver_result.get("success")),

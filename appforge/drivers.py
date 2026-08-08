@@ -12,10 +12,10 @@ from typing import Any, Callable
 import jsonschema
 
 from .artifacts import ArtifactValidationError, load_artifact_schema, validate_artifact
-from .constants import MAX_CAPTURE_CHARS, SCHEMAS_DIR, STAGE_RESULT_FILE_NAME
+from .constants import MAX_CAPTURE_CHARS, SAFETY_KEYS, SCHEMAS_DIR, STAGE_RESULT_FILE_NAME
 from .models import DriverResult, ProjectLayout, ToolResult
 from .pipelines import load_pipeline
-from .projects import load_project
+from .projects import load_project, resolve_safety
 from .util import atomic_write_json, atomic_write_text, read_json, redact, truncate
 
 DEFAULT_LLM_BRIDGE_URL = "http://127.0.0.1:8788"
@@ -32,6 +32,18 @@ class DriverError(RuntimeError):
 
 class _StageDeadlineExceeded(RuntimeError):
     pass
+
+
+class _AgentBudgetExhausted(RuntimeError):
+    """The agent hit its turn or token budget.
+
+    Raised instead of failing immediately so the caller can still accept work whose
+    artifacts and stage result were already submitted and validated.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(f"{code}: {message}")
+        self.code = code
 
 
 class AgentDriver(ABC):
@@ -122,20 +134,42 @@ def _extract_json_object(text: str) -> dict[str, Any]:
     raise DriverError("LLM bridge response did not contain a JSON object")
 
 
-def _safe_workspace_path(layout: ProjectLayout, relative_path: str) -> Path:
+def _safe_workspace_path(layout: ProjectLayout, relative_path: str, *, for_write: bool = True) -> Path:
     candidate = Path(relative_path)
     if candidate.is_absolute() or not candidate.parts:
         raise DriverError(f"Unsafe file path from LLM bridge: {relative_path!r}")
     if any(part in {"", ".", ".."} for part in candidate.parts):
         raise DriverError(f"Unsafe file path from LLM bridge: {relative_path!r}")
-    if candidate.parts[0] in {".git", ".hg", ".svn", ".appforge"}:
-        raise DriverError(f"LLM bridge cannot write managed path: {relative_path!r}")
+    if candidate.parts[0] in {".git", ".hg", ".svn"}:
+        raise DriverError(f"LLM bridge cannot access version-control internals: {relative_path!r}")
+    if candidate.parts[0] == ".appforge":
+        # The agent owns .appforge content through submit_artifact/submit_stage_result,
+        # so it may read those files back but never write them directly.
+        if for_write:
+            raise DriverError(
+                f"LLM bridge cannot write managed path {relative_path!r}; "
+                "use submit_artifact or submit_stage_result instead"
+            )
     resolved = (layout.root / candidate).resolve()
     try:
         resolved.relative_to(layout.root)
     except ValueError as exc:
         raise DriverError(f"Unsafe file path from LLM bridge: {relative_path!r}") from exc
     return resolved
+
+
+def _looks_like_dependency_install(command: Any) -> bool:
+    """Whether an agent-supplied command is a dependency install run directly."""
+    from .tooling.command import normalize_command
+
+    if command in (None, "", []):
+        return False
+    try:
+        argv = normalize_command(command)
+    except ValueError:
+        return False
+    verbs = {arg.casefold() for arg in argv[1:4]}
+    return bool(verbs & {"install", "ci", "add", "sync", "restore"})
 
 
 def _iter_file_payloads(files: Any) -> list[tuple[str, str]]:
@@ -709,6 +743,14 @@ class LLMBridgeAgentDriver(AgentDriver):
 
     name = "llm-bridge-agent"
     AGENT_STAGES = {"implementation", "verification", "fix", "regression"}
+    # Writing a whole application costs far more than re-running checks, so the
+    # per-attempt budgets scale with what the stage actually has to produce.
+    STAGE_BUDGET_MULTIPLIER = {
+        "implementation": 3.0,
+        "fix": 1.5,
+        "regression": 1.5,
+        "verification": 1.0,
+    }
 
     def __init__(
         self,
@@ -720,6 +762,7 @@ class LLMBridgeAgentDriver(AgentDriver):
         temperature: float | None = None,
         top_p: float | None = None,
         max_turns: int | None = None,
+        max_usage_tokens: int | None = None,
     ) -> None:
         if not bridge_url:
             raise DriverError("LLM bridge agent driver requires APPFORGE_LLM_BRIDGE_URL")
@@ -729,9 +772,9 @@ class LLMBridgeAgentDriver(AgentDriver):
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.top_p = top_p
-        self.max_turns = int(max_turns or 40)
-        self.max_usage_tokens = 240_000
-        self.max_tool_seconds = 120
+        self.max_turns = int(max_turns or 60)
+        self.max_usage_tokens = int(max_usage_tokens or 400_000)
+        self.max_tool_seconds = 600
         self._single_shot = LLMBridgeDriver(
             bridge_url=bridge_url,
             provider=provider,
@@ -789,6 +832,9 @@ class LLMBridgeAgentDriver(AgentDriver):
         turns = 0
         repeated_tool_calls: dict[str, int] = {}
         usage_tokens = 0
+        budget_scale = self.STAGE_BUDGET_MULTIPLIER.get(stage, 1.0)
+        max_turns = max(1, int(self.max_turns * budget_scale))
+        max_usage_tokens = max(1, int(self.max_usage_tokens * budget_scale))
 
         def duration() -> float:
             return round(time.monotonic() - started, 4)
@@ -872,6 +918,7 @@ class LLMBridgeAgentDriver(AgentDriver):
                 session_id: str | None = None
                 session_completed = False
                 session_failure: llm_bridge.BridgeError | None = None
+                budget_exhausted: _AgentBudgetExhausted | None = None
                 try:
                     session = llm_bridge.agent_start(
                         self.bridge_url,
@@ -909,10 +956,10 @@ class LLMBridgeAgentDriver(AgentDriver):
                             continue
                         if etype == "tool_call":
                             turns += 1
-                            if turns > self.max_turns:
-                                return fail(
-                                    "AGENT_TURN_BUDGET_EXCEEDED: tool-call turn budget exceeded.",
-                                    stdout=_redact_text("".join(transcript)),
+                            if turns > max_turns:
+                                raise _AgentBudgetExhausted(
+                                    "AGENT_TURN_BUDGET_EXCEEDED",
+                                    f"tool-call turn budget of {max_turns} exceeded.",
                                 )
                             call_id = str(event.get("call_id") or event.get("id") or "")
                             name = str(event.get("name") or "")
@@ -980,10 +1027,12 @@ class LLMBridgeAgentDriver(AgentDriver):
                             usage_tokens += usage_total(usage)
                             if usage:
                                 self._emit({"type": "usage", "stage": stage, "usage": usage})
-                            if usage_tokens > self.max_usage_tokens:
-                                return fail(
-                                    "AGENT_TOKEN_BUDGET_EXCEEDED: reported bridge usage exceeded the stage token budget.",
-                                    stdout=_redact_text("".join(transcript)),
+                            if usage_tokens > max_usage_tokens:
+                                session_completed = True
+                                raise _AgentBudgetExhausted(
+                                    "AGENT_TOKEN_BUDGET_EXCEEDED",
+                                    f"reported bridge usage {usage_tokens} exceeded the stage token "
+                                    f"budget of {max_usage_tokens}.",
                                 )
                             session_completed = True
                             break
@@ -995,7 +1044,7 @@ class LLMBridgeAgentDriver(AgentDriver):
                             error_code = str(event.get("code") or "AGENT_REMOTE_ERROR")
                             message = str(event.get("message") or event.get("error") or "LLM bridge agent error.")
                             if error_code in {"AGENT_TURN_BUDGET_EXCEEDED", "AGENT_TOKEN_BUDGET_EXCEEDED"}:
-                                return fail(f"{error_code}: {message}", code=1)
+                                raise _AgentBudgetExhausted(error_code, message)
                             raise llm_bridge.BridgeError(
                                 message,
                                 payload={"error": {"code": error_code, "message": message}},
@@ -1015,6 +1064,8 @@ class LLMBridgeAgentDriver(AgentDriver):
                     raise
                 except _StageDeadlineExceeded:
                     raise
+                except _AgentBudgetExhausted as exc:
+                    budget_exhausted = exc
                 except llm_bridge.BridgeError as exc:
                     session_failure = exc
                 finally:
@@ -1033,12 +1084,21 @@ class LLMBridgeAgentDriver(AgentDriver):
                 ]
                 fully_submitted = not missing and stage_result_submitted
                 if fully_submitted:
-                    if session_failure is not None:
+                    ended_by = session_failure or budget_exhausted
+                    if ended_by is not None:
                         transcript.append(
                             "\n\n[AppForge recovery] The bridge ended after all required submissions "
-                            f"were validated; accepting the completed stage. Reason: {session_failure}\n"
+                            f"were validated; accepting the completed stage. Reason: {ended_by}\n"
                         )
                     break
+                if budget_exhausted is not None:
+                    # The budget is per stage attempt, so a continuation session would
+                    # start already over it. Stop and report what is actually missing.
+                    return fail(
+                        f"{budget_exhausted} Required submissions still missing: "
+                        f"{', '.join(missing) or 'stage_result'}.",
+                        stdout=_redact_text("".join(transcript)),
+                    )
                 if session_failure is not None:
                     can_retry = (
                         llm_bridge.is_retryable_error(session_failure)
@@ -1349,7 +1409,7 @@ class LLMBridgeAgentDriver(AgentDriver):
         rel = str(arguments.get("path") or "")
         if not rel:
             return ToolResult(success=False, error="path is required")
-        path = _safe_workspace_path(layout, rel)
+        path = _safe_workspace_path(layout, rel, for_write=name != "read_text")
         if name == "read_text":
             if not path.is_file():
                 return ToolResult(success=False, error=f"Not a file: {rel}")
@@ -1380,21 +1440,34 @@ class LLMBridgeAgentDriver(AgentDriver):
         tool = registry.get(name)
         if not getattr(tool, "llm_exposed", False):
             return ToolResult(success=False, error=f"Tool is not exposed to LLM agent: {name}")
-        safety = project.get("safety") if isinstance(project.get("safety"), dict) else {}
+        safety = resolve_safety(project.get("safety") if isinstance(project.get("safety"), dict) else {})
         payload = dict(arguments)
+        # Safety flags are owned by project configuration. Strip anything the model
+        # supplied first, then inject only the flags this tool declares.
+        for key in SAFETY_KEYS:
+            payload.pop(key, None)
+        granted = set(getattr(tool, "policy_inputs", ()) or ())
         if getattr(tool, "network_required", False):
-            payload["allow_network"] = bool(safety.get("allow_network", False))
-        else:
-            payload.pop("allow_network", None)
+            granted.add("allow_network")
         if getattr(tool, "destructive", False):
-            payload["allow_destructive"] = bool(safety.get("allow_destructive", False))
-        else:
-            payload.pop("allow_destructive", None)
+            granted.add("allow_destructive")
+        if getattr(tool, "dependency_install_required", False):
+            granted.update({"allow_dependency_install", "allow_network"})
+        for key in granted:
+            payload[key] = bool(safety.get(key, False))
+        # Dependency resolution and production builds routinely outlast a diagnostic
+        # command, so those tools get the full ceiling instead of the short default.
+        long_running = (
+            getattr(tool, "dependency_install_required", False)
+            or tool.capability in {"quality", "dependencies"}
+            or _looks_like_dependency_install(payload.get("command"))
+        )
+        default_timeout = self.max_tool_seconds if long_running else 120
         try:
-            requested_timeout = int(payload.get("timeout", self.max_tool_seconds))
+            requested_timeout = int(payload.get("timeout", default_timeout))
         except (TypeError, ValueError):
-            requested_timeout = self.max_tool_seconds
-        payload["timeout"] = min(requested_timeout, self.max_tool_seconds, 120)
+            requested_timeout = default_timeout
+        payload["timeout"] = max(1, min(requested_timeout, self.max_tool_seconds))
         return tool.run(layout.root, payload)
 
     def _submit_artifact(
@@ -1452,6 +1525,7 @@ def create_driver(
     unsafe: bool = False,
     model: str | None = None,
     max_turns: int | None = None,
+    max_usage_tokens: int | None = None,
     max_tokens: int | None = None,
     temperature: float | None = None,
     top_p: float | None = None,
@@ -1475,6 +1549,7 @@ def create_driver(
             temperature=temperature,
             top_p=top_p,
             max_turns=max_turns,
+            max_usage_tokens=max_usage_tokens,
         )
     if normalized in {"llm-bridge", "llm_bridge", "llm"}:
         return LLMBridgeDriver(

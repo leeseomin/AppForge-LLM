@@ -19,7 +19,7 @@ from typing import Any
 from . import __version__
 from .checkpoints import next_stage
 from .drivers import DriverError, create_driver
-from .constants import IGNORED_DIRS, PROJECT_FILE_NAME, STATE_FILE_NAME, STAGE_RESULT_FILE_NAME
+from .constants import DEFAULT_SAFETY, IGNORED_DIRS, PROJECT_FILE_NAME, STATE_FILE_NAME, STAGE_RESULT_FILE_NAME
 from .models import PipelineSpec, ProjectLayout, StageSpec
 from .pipelines import all_pipelines, auto_select_pipeline, list_pipeline_names, load_pipeline, select_pipeline
 from .projects import initialize_project
@@ -138,10 +138,12 @@ class WebConfig:
     model: str | None = None
     allow_network: bool = False
     allow_destructive: bool = False
+    allow_dependency_install: bool = DEFAULT_SAFETY["allow_dependency_install"]
     unsafe_agent: bool = False
     max_stage_attempts: int | None = None
     stage_timeout: int = 3600
     max_turns: int | None = None
+    max_usage_tokens: int | None = None
     prompt_max_chars: int = 20_000
     llm_bridge_url: str = DEFAULT_LLM_BRIDGE_URL
     llm_provider: str | None = None
@@ -159,10 +161,14 @@ class WebConfig:
             model=os.environ.get("APPFORGE_MODEL") or None,
             allow_network=_env_bool("APPFORGE_ALLOW_NETWORK", False),
             allow_destructive=_env_bool("APPFORGE_ALLOW_DESTRUCTIVE", False),
+            allow_dependency_install=_env_bool(
+                "APPFORGE_ALLOW_DEPENDENCY_INSTALL", DEFAULT_SAFETY["allow_dependency_install"]
+            ),
             unsafe_agent=_env_bool("APPFORGE_UNSAFE_AGENT", False),
             max_stage_attempts=_env_optional_int("APPFORGE_MAX_STAGE_ATTEMPTS"),
             stage_timeout=_env_int("APPFORGE_STAGE_TIMEOUT", 3600, minimum=60),
             max_turns=_env_optional_int("APPFORGE_MAX_TURNS"),
+            max_usage_tokens=_env_optional_int("APPFORGE_MAX_USAGE_TOKENS"),
             prompt_max_chars=_env_int("APPFORGE_PROMPT_MAX_CHARS", 20_000, minimum=100),
             llm_bridge_url=os.environ.get("APPFORGE_LLM_BRIDGE_URL", DEFAULT_LLM_BRIDGE_URL),
             llm_provider=os.environ.get("APPFORGE_LLM_PROVIDER") or None,
@@ -243,6 +249,7 @@ class JobManager:
             "safety": {
                 "deployment_enabled": False,
                 "destructive_operations_enabled": self.config.allow_destructive,
+                "dependency_install_enabled": self.config.allow_dependency_install,
             },
         }
 
@@ -1182,6 +1189,7 @@ class JobManager:
                     unsafe=self.config.unsafe_agent,
                     model=job_model,
                     max_turns=self.config.max_turns,
+                    max_usage_tokens=self.config.max_usage_tokens,
                     max_tokens=_safe_int(generation.get("maxTokens")),
                     temperature=_optional_float(generation.get("temperature")),
                     top_p=_optional_float(generation.get("topP")),
@@ -1298,6 +1306,7 @@ class JobManager:
                 approved_stage=approved_stage,
                 allow_network=self.config.allow_network,
                 allow_destructive=self.config.allow_destructive,
+                allow_dependency_install=self.config.allow_dependency_install,
                 max_stage_attempts=self.config.max_stage_attempts,
                 stage_timeout=self.config.stage_timeout,
                 event_handler=lambda event: self._handle_runner_event(job_id, event),
