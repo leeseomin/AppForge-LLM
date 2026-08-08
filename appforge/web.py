@@ -62,16 +62,29 @@ class CreateJobRequest(BaseModel):
     prompt: str
     mode: str | None = None
     pipeline: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    generation: dict[str, Any] | None = None
+    pricing: dict[str, Any] | None = None
 
 
 class ReviseJobRequest(BaseModel):
     request: str
     mode: str | None = None
     pipeline: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    generation: dict[str, Any] | None = None
+    pricing: dict[str, Any] | None = None
 
 
 class RetryJobRequest(BaseModel):
     stage: str | None = None
+
+
+class UpdateJobRequest(BaseModel):
+    starred: bool | None = None
+    archived: bool | None = None
 
 
 class UpsertProviderRequest(BaseModel):
@@ -180,7 +193,7 @@ def create_app(
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; "
                 "script-src 'self'; "
-                "style-src 'self'; "
+                "style-src 'self' 'unsafe-inline'; "
                 "img-src 'self' data:; "
                 "connect-src 'self'; "
                 "font-src 'self'; "
@@ -295,11 +308,35 @@ def create_app(
             payload.prompt,
             mode=payload.mode or "autonomous",
             pipeline_name=payload.pipeline,
+            provider=payload.provider,
+            model=payload.model,
+            generation=payload.generation,
+            pricing=payload.pricing,
         )
+
+    @app.get("/api/jobs")
+    async def list_jobs(
+        limit: int = 20,
+        cursor: str | None = None,
+        archived: bool = False,
+    ) -> dict[str, Any]:
+        return resolved_manager.list_jobs(limit=limit, cursor=cursor, archived=archived)
 
     @app.get("/api/jobs/{job_id}")
     async def get_job(job_id: str) -> dict[str, Any]:
         return resolved_manager.get_job(job_id)
+
+    @app.patch("/api/jobs/{job_id}")
+    async def update_job(job_id: str, payload: UpdateJobRequest) -> dict[str, Any]:
+        return resolved_manager.update_job_metadata(
+            job_id,
+            starred=payload.starred,
+            archived=payload.archived,
+        )
+
+    @app.post("/api/jobs/{job_id}/rerun", status_code=202)
+    async def rerun_job(job_id: str) -> dict[str, Any]:
+        return resolved_manager.rerun_job(job_id)
 
     @app.post("/api/jobs/{job_id}/cancel")
     async def cancel_job(job_id: str) -> dict[str, Any]:
@@ -313,6 +350,10 @@ def create_app(
             payload.request,
             mode=payload.mode or "autonomous",
             pipeline_name=payload.pipeline,
+            provider=payload.provider,
+            model=payload.model,
+            generation=payload.generation,
+            pricing=payload.pricing,
         )
 
     @app.post("/api/jobs/{job_id}/approve", status_code=202)

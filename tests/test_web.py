@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -327,6 +328,206 @@ def test_web_ui_run_mode_picker_is_collapsed_by_default() -> None:
     summary = source.split("<summary>", 1)[1].split("</summary>", 1)[0]
     assert "실행 모드" in summary
     assert "완전 자율 실행" in summary
+
+
+def test_job_creation_snapshots_model_and_generation_settings(tmp_path: Path, monkeypatch) -> None:
+    _mock_ready_bridge(monkeypatch, provider="openai", model="gpt-default")
+    manager = JobManager(_fixture_config(tmp_path))
+    monkeypatch.setattr(manager, "_maybe_start_next_job_locked", lambda: None)
+
+    created = manager.create_job(
+        "설정이 고정되는 앱을 만들어라",
+        pipeline_name="prototype",
+        provider="openai",
+        model="gpt-job",
+        generation={"temperature": 0.2, "topP": 0.85, "maxTokens": 3072},
+        pricing={"input": 1.0, "output": 2.0, "cache_read": 0.25},
+    )
+
+    assert created["llm"] == {
+        "provider": "openai",
+        "model": "gpt-job",
+        "generation": {"temperature": 0.2, "topP": 0.85, "maxTokens": 3072},
+        "pricing": {"input": 1.0, "output": 2.0, "cache_read": 0.25},
+    }
+    stored = json.loads(
+        (manager.jobs_dir / f"{created['id']}.json").read_text(encoding="utf-8")
+    )
+    assert stored["llm"] == created["llm"]
+
+
+def test_explicit_provider_does_not_inherit_an_unrelated_global_model(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "appforge.llm_bridge.get_active",
+        lambda _url: {"provider": "openai", "model": "gpt-active"},
+    )
+    config = replace(_fixture_config(tmp_path), llm_provider="openai", model="gpt-global")
+    manager = JobManager(config)
+    monkeypatch.setattr(manager, "_maybe_start_next_job_locked", lambda: None)
+
+    created = manager.create_job(
+        "Anthropic 기본 모델로 앱을 만들어라",
+        pipeline_name="prototype",
+        provider="anthropic",
+    )
+
+    assert created["llm"]["provider"] == "anthropic"
+    assert created["llm"]["model"] is None
+
+
+def test_usage_events_accumulate_job_and_stage_cost(tmp_path: Path) -> None:
+    manager = JobManager(_fixture_config(tmp_path))
+    job = _minimal_job("usage-job")
+    job["llm"] = {
+        "provider": "openai",
+        "model": "gpt-test",
+        "generation": {},
+        "pricing": {"input": 1.0, "output": 2.0, "cache_read": 0.25},
+    }
+    job["stages"] = [
+        {
+            "id": "implementation",
+            "name": "앱 구현",
+            "status": "running",
+            "detail": "실행 중",
+            "attempt": 1,
+            "error": None,
+        }
+    ]
+    with manager._lock:
+        manager._jobs[str(job["id"])] = job
+
+    manager._handle_runner_event(
+        str(job["id"]),
+        {
+            "event": "usage",
+            "stage": "implementation",
+            "usage": {
+                "inputTokens": 1_000,
+                "outputTokens": 1_000,
+                "cacheReadInputTokens": 200,
+                "totalTokens": 2_000,
+            },
+        },
+    )
+
+    payload = manager.get_job(str(job["id"]))
+    assert payload["usage"]["input_tokens"] == 1_000
+    assert payload["usage"]["output_tokens"] == 1_000
+    assert payload["usage"]["total_tokens"] == 2_000
+    assert payload["usage"]["estimated_cost_usd"] == pytest.approx(0.00285)
+    assert payload["stages"][0]["usage"] == payload["usage"]
+
+
+def test_llm_text_events_are_coalesced_as_markdown(tmp_path: Path) -> None:
+    manager = JobManager(_fixture_config(tmp_path))
+    job = _minimal_job("markdown-job")
+    job["stages"] = [
+        {
+            "id": "implementation",
+            "name": "앱 구현",
+            "status": "running",
+            "detail": "실행 중",
+            "attempt": 1,
+            "error": None,
+        }
+    ]
+    with manager._lock:
+        manager._jobs[str(job["id"])] = job
+
+    manager._handle_runner_event(
+        str(job["id"]),
+        {"event": "llm_text", "stage": "implementation", "delta": "## 설계\n"},
+    )
+    manager._handle_runner_event(
+        str(job["id"]),
+        {"event": "llm_text", "stage": "implementation", "delta": "```ts\nconst ok = true\n```"},
+    )
+
+    outputs = [event for event in manager.get_job(str(job["id"]))["events"] if event["event"] == "llm_output"]
+    assert len(outputs) == 1
+    assert outputs[0]["data"]["markdown"] == "## 설계\n```ts\nconst ok = true\n```"
+
+
+def test_job_history_api_supports_pagination_star_archive_and_rerun(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    manager = JobManager(_fixture_config(tmp_path))
+    jobs = []
+    for index in range(3):
+        job = _minimal_job(f"history-{index}", status="failed")
+        job["created_at"] = f"2026-07-0{index + 1}T00:00:00Z"
+        job["updated_at"] = job["created_at"]
+        job["pipeline"] = "prototype"
+        job["mode"] = "autonomous"
+        job["llm"] = {
+            "provider": "openai",
+            "model": f"gpt-{index}",
+            "generation": {"temperature": 0.1 * index},
+            "pricing": {},
+        }
+        jobs.append(job)
+    with manager._lock:
+        for job in jobs:
+            manager._jobs[str(job["id"])] = job
+            manager._save_locked(job)
+
+    rerun_calls: list[tuple[str, dict]] = []
+
+    def fake_create_job(prompt: str, **kwargs) -> dict:
+        rerun_calls.append((prompt, kwargs))
+        return {**_minimal_job("rerun-created", status="queued"), "terminal": False, "progress": 0}
+
+    monkeypatch.setattr(manager, "create_job", fake_create_job)
+    app = create_app(
+        _fixture_config(tmp_path),
+        manager=manager,
+        llm_bridge_manager=_FakeBridgeManager(),
+        session_token=SESSION_TOKEN,
+    )
+    with _client(app) as client:
+        first = client.get("/api/jobs?limit=2")
+        assert first.status_code == 200, first.text
+        assert [item["id"] for item in first.json()["jobs"]] == ["history-2", "history-1"]
+        assert first.json()["has_more"] is True
+        cursor = first.json()["next_cursor"]
+        second = client.get(f"/api/jobs?limit=2&cursor={cursor}")
+        assert [item["id"] for item in second.json()["jobs"]] == ["history-0"]
+
+        starred = client.patch("/api/jobs/history-1", json={"starred": True})
+        assert starred.status_code == 200
+        assert starred.json()["starred"] is True
+
+        archived = client.patch("/api/jobs/history-0", json={"archived": True})
+        assert archived.status_code == 200
+        visible = client.get("/api/jobs?limit=10").json()["jobs"]
+        assert "history-0" not in [item["id"] for item in visible]
+        archived_list = client.get("/api/jobs?limit=10&archived=true").json()["jobs"]
+        assert [item["id"] for item in archived_list] == ["history-0"]
+
+        rerun = client.post("/api/jobs/history-2/rerun")
+        assert rerun.status_code == 202
+        assert rerun.json()["id"] == "rerun-created"
+
+    assert rerun_calls == [
+        (
+            "테스트 앱",
+            {
+                "mode": "autonomous",
+                "pipeline_name": "prototype",
+                "provider": "openai",
+                "model": "gpt-2",
+                "generation": {"temperature": 0.2},
+                "pricing": {},
+            },
+        )
+    ]
+    stored = json.loads((manager.jobs_dir / "history-1.json").read_text(encoding="utf-8"))
+    assert stored["starred"] is True
 
 
 def test_web_ui_error_panel_hides_internal_error_identifiers() -> None:

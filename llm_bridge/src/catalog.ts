@@ -25,6 +25,12 @@ export interface CatalogModel {
   tool_call?: boolean
   reasoning?: boolean
   attachment?: boolean
+  cost?: {
+    input?: number
+    output?: number
+    cache_read?: number
+    cache_write?: number
+  }
 }
 
 export interface CatalogProvider {

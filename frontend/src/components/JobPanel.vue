@@ -53,6 +53,8 @@ const statusTitle = computed(() => {
 
 const completedStages = computed(() => props.job?.stages.filter((stage) => stage.status === 'completed').length || 0);
 const totalStages = computed(() => props.job?.stages.length || 0);
+const totalTokens = computed(() => props.job?.usage?.total_tokens || 0);
+const estimatedCost = computed(() => props.job?.usage?.estimated_cost_usd);
 
 const downloadUrl = computed(() => {
   const job = props.job;
@@ -109,6 +111,14 @@ function formatDateTime(value: string | null) {
     minute: '2-digit',
     second: '2-digit',
   }).format(date);
+}
+
+function formatTokens(value?: number) {
+  return Number.isFinite(value) ? Number(value).toLocaleString('ko-KR') : '-';
+}
+
+function formatCost(value?: number) {
+  return Number.isFinite(value) ? `$${Number(value).toFixed(6)}` : '가격 정보 없음';
 }
 
 function readableError(error: unknown, fallback: string) {
@@ -208,6 +218,9 @@ function onDownloadClick(event: MouseEvent) {
           <span v-if="props.job.mode" class="pipeline-label">{{ props.job.mode === 'checkpoint' ? '체크포인트' : '자율' }} 모드</span>
           <span v-if="props.job.queue_position" class="pipeline-label">대기열 #{{ props.job.queue_position }}</span>
           <span v-if="props.job.revision_index" class="pipeline-label">수정 #{{ props.job.revision_index }}</span>
+          <span v-if="props.job.llm?.provider || props.job.llm?.model" class="pipeline-label">
+            {{ [props.job.llm?.provider, props.job.llm?.model].filter(Boolean).join(' / ') }}
+          </span>
         </div>
         <h2 id="jobStatusTitle">{{ statusTitle }}</h2>
         <p>{{ props.job.message || '상태를 확인하고 있습니다.' }}</p>
@@ -242,7 +255,27 @@ function onDownloadClick(event: MouseEvent) {
         <span>최근 업데이트</span>
         <strong>{{ formatDateTime(props.job.updated_at) || '-' }}</strong>
       </div>
+      <div>
+        <span>사용 토큰</span>
+        <strong>{{ formatTokens(totalTokens) }}</strong>
+      </div>
+      <div>
+        <span>추정 비용 (USD)</span>
+        <strong>{{ formatCost(estimatedCost) }}</strong>
+      </div>
     </div>
+
+    <details v-if="totalTokens" class="usage-breakdown">
+      <summary>토큰 사용량 상세</summary>
+      <dl>
+        <div><dt>입력</dt><dd>{{ formatTokens(props.job.usage?.input_tokens) }}</dd></div>
+        <div><dt>출력</dt><dd>{{ formatTokens(props.job.usage?.output_tokens) }}</dd></div>
+        <div><dt>캐시 읽기</dt><dd>{{ formatTokens(props.job.usage?.cache_read_input_tokens) }}</dd></div>
+        <div><dt>캐시 쓰기</dt><dd>{{ formatTokens(props.job.usage?.cache_write_input_tokens) }}</dd></div>
+        <div><dt>추론</dt><dd>{{ formatTokens(props.job.usage?.reasoning_tokens) }}</dd></div>
+      </dl>
+      <p>비용은 models.dev 카탈로그 단가가 제공된 모델에 한해 추정됩니다.</p>
+    </details>
 
     <div v-if="isAwaitingApproval" class="approval-panel">
       <div>

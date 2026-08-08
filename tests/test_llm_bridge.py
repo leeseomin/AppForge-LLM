@@ -143,6 +143,38 @@ def test_generate_normalizes_json_schema_response_format(monkeypatch) -> None:
     }
 
 
+def test_generate_forwards_all_supported_generation_options(monkeypatch) -> None:
+    requests: list[dict] = []
+
+    def fake_request(
+        base_url: str,
+        method: str,
+        path: str,
+        *,
+        body=None,
+        timeout: float = 30.0,
+        cancel_event=None,
+    ) -> dict:
+        requests.append(json.loads(json.dumps(body)))
+        return {"text": "ok", "usage": {}}
+
+    monkeypatch.setattr(llm_bridge, "_request", fake_request)
+
+    llm_bridge.generate(
+        "http://bridge.test",
+        prompt="Generate",
+        max_tokens=2048,
+        temperature=0.35,
+        top_p=0.82,
+    )
+
+    assert requests[0]["generation"] == {
+        "maxTokens": 2048,
+        "temperature": 0.35,
+        "topP": 0.82,
+    }
+
+
 def test_terminal_sse_rejects_connection_closed_before_done(monkeypatch) -> None:
     def incomplete_stream(*args, **kwargs):  # type: ignore[no-untyped-def]
         yield {"type": "connected"}

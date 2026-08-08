@@ -610,6 +610,7 @@ async function runAgentSession(
   signal: AbortSignal,
 ): Promise<void> {
   let turns = 0
+  let totalUsage: Record<string, unknown> = {}
   while (!session.closed) {
     if (signal.aborted) throw new BridgeLLMCancelled()
     touchAgentSession(session)
@@ -650,6 +651,7 @@ async function runAgentSession(
         if (event.usage && typeof event.usage === "object") usage = event.usage
       }
     }, { signal })
+    totalUsage = addUsage(totalUsage, usage)
     const assistantContent: unknown[] = []
     const assistantText = textParts.join("")
     if (assistantText) assistantContent.push({ type: "text", text: assistantText })
@@ -660,7 +662,7 @@ async function runAgentSession(
       session.messages.push({ role: "assistant", content: assistantContent })
     }
     if (toolCalls.length === 0) {
-      send("done", { type: "done", finish_reason: finishReason || "stop", turns, usage })
+      send("done", { type: "done", finish_reason: finishReason || "stop", turns, usage: totalUsage })
       return
     }
     turns += toolCalls.length
@@ -675,7 +677,23 @@ async function runAgentSession(
       send("tool_result", { type: "tool_result", call_id: call.id, name: call.name, ok: !envelope.is_error })
     }
   }
-  send("done", { type: "done", finish_reason: "closed", turns, usage: {} })
+  send("done", { type: "done", finish_reason: "closed", turns, usage: totalUsage })
+}
+
+function addUsage(
+  current: Record<string, unknown>,
+  next: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...current }
+  for (const [key, value] of Object.entries(next)) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      const previous = typeof merged[key] === "number" ? Number(merged[key]) : 0
+      merged[key] = previous + value
+    } else if (key === "providerMetadata" && value && typeof value === "object") {
+      merged[key] = value
+    }
+  }
+  return merged
 }
 
 async function agentToolResult(request: Request, match: RegExpMatchArray): Promise<Response> {

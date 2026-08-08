@@ -88,6 +88,24 @@ def test_auto_driver_resolves_to_llm_bridge_agent() -> None:
     assert driver.bridge_url == "http://127.0.0.1:8788"
 
 
+def test_create_driver_preserves_job_generation_settings() -> None:
+    driver = create_driver(
+        "llm-bridge-agent",
+        llm_provider="openai",
+        model="gpt-test",
+        max_tokens=4096,
+        temperature=0.25,
+        top_p=0.9,
+    )
+
+    assert isinstance(driver, LLMBridgeAgentDriver)
+    assert driver.provider == "openai"
+    assert driver.model == "gpt-test"
+    assert driver.max_tokens == 4096
+    assert driver.temperature == 0.25
+    assert driver.top_p == 0.9
+
+
 @pytest.mark.parametrize("name", ["codex", "claude", "generic"])
 def test_cli_and_command_drivers_are_removed(name: str) -> None:
     with pytest.raises(DriverError, match="removed|Unknown driver"):
@@ -299,6 +317,10 @@ def test_llm_bridge_agent_continues_after_transient_stream_interruption(tmp_path
     assert result.success is True
     assert len(sessions) == 2
     assert any(event.get("type") == "bridge_recovering" for event in relayed)
+    assert any(
+        event.get("type") == "usage" and event.get("usage", {}).get("total_tokens") == 10
+        for event in relayed
+    )
     assert "transport recovery" in sessions[1]
     assert (layout.root / "index.html").is_file()
     assert (layout.artifacts / "implementation_report.json").is_file()

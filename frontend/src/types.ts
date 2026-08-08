@@ -51,6 +51,7 @@ export interface JobStage {
   artifacts?: string[];
   approval?: boolean;
   approval_required?: boolean;
+  usage?: TokenUsage;
 }
 
 export interface JobEvent {
@@ -60,6 +61,39 @@ export interface JobEvent {
   timestamp: string;
   data?: Record<string, unknown>;
 }
+
+export interface TokenUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  non_cached_input_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_write_input_tokens?: number;
+  reasoning_tokens?: number;
+  total_tokens?: number;
+  estimated_cost_usd?: number;
+}
+
+export interface ModelPricing {
+  input?: number;
+  output?: number;
+  cache_read?: number;
+  cache_write?: number;
+}
+
+export interface GenerationSettings {
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+}
+
+export interface JobLlmSettings {
+  provider: string | null;
+  model: string | null;
+  generation: GenerationSettings;
+  pricing: ModelPricing;
+}
+
+export type JobRunSettings = JobLlmSettings;
 
 
 export interface RoutingInfo {
@@ -160,6 +194,38 @@ export interface JobPayload {
   preview?: PreviewState | null;
   progress: number;
   terminal: boolean;
+  starred?: boolean;
+  archived?: boolean;
+  llm?: JobLlmSettings;
+  usage?: TokenUsage;
+}
+
+export interface JobSummary {
+  id: string;
+  prompt: string;
+  status: JobStatus | string;
+  status_label: string;
+  message: string;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  pipeline: string | null;
+  mode?: RunMode | string;
+  project_name?: string | null;
+  parent_job_id?: string | null;
+  revision_index?: number | null;
+  starred: boolean;
+  archived: boolean;
+  llm?: JobLlmSettings;
+  usage?: TokenUsage;
+  progress: number;
+  terminal: boolean;
+}
+
+export interface JobListPayload {
+  jobs: JobSummary[];
+  next_cursor: string | null;
+  has_more: boolean;
 }
 
 export interface ToastMessage {
@@ -172,6 +238,7 @@ export type ProviderKind = 'api-key' | 'openai-compatible';
 export interface ProviderModel {
   id: string;
   name?: string;
+  cost?: ModelPricing;
 }
 
 export interface ProviderStatus {

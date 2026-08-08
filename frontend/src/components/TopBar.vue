@@ -11,6 +11,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   refresh: [];
+  openHistory: [];
   openSettings: [];
   cancel: [];
   endSession: [];
@@ -28,6 +29,7 @@ const emit = defineEmits<{
     </a>
 
     <div class="topbar-actions">
+      <button class="ghost-button" type="button" @click="emit('openHistory')">작업 기록</button>
       <button class="ghost-button" type="button" @click="emit('openSettings')">LLM 연결</button>
       <button
         v-if="props.canCancel"

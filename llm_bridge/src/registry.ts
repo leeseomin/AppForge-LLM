@@ -27,7 +27,7 @@ export interface RegistryEntry extends ProviderDescriptor {
   build: (modelId: string, options: BuildOptions) => Model
 }
 
-const m = (id: string, name?: string): ProviderModel => ({ id, name })
+const m = (id: string, name?: string, cost?: ProviderModel["cost"]): ProviderModel => ({ id, name, cost })
 
 const DOCS_URLS: Record<string, string> = {
   openai: "https://platform.openai.com/api-keys",
@@ -122,7 +122,7 @@ function buildEntriesFromCatalog(cat: catalog.Catalog): RegistryEntry[] {
     if (!p || typeof p !== "object") continue
     if (!isSupportedProvider(p)) continue
     const models: ProviderModel[] = Object.entries(p.models ?? {}).map(([mid, cm]) =>
-      m(mid, cm?.name),
+      m(mid, cm?.name, cm?.cost),
     )
     const kind: ProviderKind = p.npm === "@ai-sdk/openai-compatible" && !COMPAT_PROFILE_IDS.has(id)
       ? "openai-compatible"

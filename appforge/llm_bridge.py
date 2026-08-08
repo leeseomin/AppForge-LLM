@@ -515,6 +515,7 @@ def generate(
     model: str | None = None,
     max_tokens: int | None = None,
     temperature: float | None = None,
+    top_p: float | None = None,
     response_format: dict[str, Any] | None = None,
     timeout: float = 600.0,
     cancel_event: threading.Event | None = None,
@@ -534,6 +535,8 @@ def generate(
         generation["maxTokens"] = max_tokens
     if temperature is not None:
         generation["temperature"] = temperature
+    if top_p is not None:
+        generation["topP"] = top_p
     if generation:
         body["generation"] = generation
     return _request(
@@ -555,6 +558,7 @@ def stream(
     model: str | None = None,
     max_tokens: int | None = None,
     temperature: float | None = None,
+    top_p: float | None = None,
     response_format: dict[str, Any] | None = None,
     timeout: float = 600.0,
     cancel_event: threading.Event | None = None,
@@ -574,6 +578,8 @@ def stream(
         generation["maxTokens"] = max_tokens
     if temperature is not None:
         generation["temperature"] = temperature
+    if top_p is not None:
+        generation["topP"] = top_p
     if generation:
         body["generation"] = generation
     yield from _terminal_sse_request(

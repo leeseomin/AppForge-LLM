@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import queue
 import re
@@ -42,6 +43,8 @@ AWAITING_JOB_STATUSES = {"awaiting_approval"}
 ACTIVE_JOB_STATUSES = QUEUED_JOB_STATUSES | RUNNING_JOB_STATUSES | AWAITING_JOB_STATUSES
 TERMINAL_JOB_STATUSES = {"completed", "failed", "cancelled"}
 MAX_EVENTS = 160
+MAX_LLM_OUTPUT_CHARS = 40_000
+MAX_HISTORY_PAGE_SIZE = 100
 _UNSET = object()
 
 
@@ -243,12 +246,17 @@ class JobManager:
             },
         }
 
-    def driver_readiness(self) -> dict[str, Any]:
+    def driver_readiness(
+        self,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+    ) -> dict[str, Any]:
         requested = self.config.driver.casefold().strip()
         if requested in LLM_BRIDGE_DRIVER_ALIASES:
-            return self._llm_bridge_readiness()
+            return self._llm_bridge_readiness(provider=provider, model=model)
         if requested == "auto":
-            bridge_readiness = self._llm_bridge_readiness()
+            bridge_readiness = self._llm_bridge_readiness(provider=provider, model=model)
             return {
                 **bridge_readiness,
                 "requested": "auto",
@@ -274,7 +282,12 @@ class JobManager:
             "action": "APPFORGE_DRIVER를 auto, llm-bridge-agent 또는 llm-bridge로 설정하세요.",
         }
 
-    def _llm_bridge_readiness(self) -> dict[str, Any]:
+    def _llm_bridge_readiness(
+        self,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+    ) -> dict[str, Any]:
         from . import llm_bridge
 
         bridge_url = self.config.llm_bridge_url
@@ -296,9 +309,13 @@ class JobManager:
                 "message": str(exc),
                 "action": "llm_bridge 폴더에서 `bun install` 후 `bun run dev` 로 브릿지를 시작하세요.",
             }
-        provider = active.get("provider") or self.config.llm_provider
-        model = active.get("model") or self.config.model
-        if not provider:
+        selected_provider = provider or active.get("provider") or self.config.llm_provider
+        selected_model = (
+            model
+            if provider is not None
+            else active.get("model") or self.config.model
+        )
+        if not selected_provider:
             return {
                 "ready": False,
                 "requested": selected_driver,
@@ -312,7 +329,7 @@ class JobManager:
             (
                 item
                 for item in statuses
-                if isinstance(item, dict) and item.get("id") == provider
+                if isinstance(item, dict) and item.get("id") == selected_provider
             ),
             None,
         )
@@ -322,7 +339,7 @@ class JobManager:
                 "requested": selected_driver,
                 "selected": None,
                 "label": "LLM 브릿지",
-                "message": f"알 수 없는 프로바이더입니다: {provider}",
+                "message": f"알 수 없는 프로바이더입니다: {selected_provider}",
                 "action": "설정 패널에서 지원되는 프로바이더를 선택하세요.",
             }
         if not provider_status.get("configured"):
@@ -331,15 +348,17 @@ class JobManager:
                 "requested": selected_driver,
                 "selected": None,
                 "label": "LLM 브릿지",
-                "message": f"{provider} 프로바이더 설정이 완료되지 않았습니다.",
+                "message": f"{selected_provider} 프로바이더 설정이 완료되지 않았습니다.",
                 "action": "설정 패널에서 API 키와 필요한 Base URL을 저장하세요.",
             }
         return {
             "ready": True,
             "requested": selected_driver,
             "selected": selected_driver,
-            "label": f"LLM 브릿지 · {provider}",
-            "message": f"{provider}/{model or '기본 모델'} 을(를) 사용합니다.",
+            "label": f"LLM 브릿지 · {selected_provider}",
+            "message": f"{selected_provider}/{selected_model or '기본 모델'} 을(를) 사용합니다.",
+            "provider": selected_provider,
+            "model": selected_model,
             "action": "",
         }
 
@@ -362,11 +381,55 @@ class JobManager:
             )
         return normalized
 
+    def _resolve_job_llm_settings(
+        self,
+        *,
+        provider: str | None,
+        model: str | None,
+        generation: dict[str, Any] | None,
+        pricing: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        from . import llm_bridge
+
+        active: dict[str, Any] = {}
+        try:
+            active = llm_bridge.get_active(self.config.llm_bridge_url)
+        except Exception:
+            # Readiness produces the actionable bridge error when execution starts.
+            active = {}
+        explicit_provider = _optional_text(provider)
+        selected_provider = (
+            explicit_provider
+            or _optional_text(active.get("provider"))
+            or _optional_text(self.config.llm_provider)
+        )
+        explicit_model = _optional_text(model)
+        active_provider = _optional_text(active.get("provider"))
+        configured_provider = _optional_text(self.config.llm_provider)
+        active_model = (
+            _optional_text(active.get("model"))
+            if not explicit_provider or selected_provider == active_provider
+            else None
+        )
+        configured_model = (
+            _optional_text(self.config.model)
+            if not explicit_provider or selected_provider == configured_provider
+            else None
+        )
+        selected_model = explicit_model or active_model or configured_model
+        return {
+            "provider": selected_provider,
+            "model": selected_model,
+            "generation": _normalize_generation_settings(generation),
+            "pricing": _normalize_model_pricing(pricing),
+        }
+
     def _route_initial_prompt(
         self,
         prompt: str,
         *,
         pipeline_name: str | None = None,
+        llm: dict[str, Any] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         if pipeline_name:
             load_pipeline(pipeline_name)
@@ -379,12 +442,17 @@ class JobManager:
             }
 
         bridge_url = self.config.llm_bridge_url if self.config.llm_router else None
+        settings = llm or {}
+        generation = settings.get("generation") if isinstance(settings.get("generation"), dict) else {}
         selected, routing = select_pipeline(
             prompt,
             existing_repo=False,
             bridge_url=bridge_url,
-            provider=self.config.llm_provider,
-            model=self.config.router_model or self.config.model,
+            provider=_optional_text(settings.get("provider")) or self.config.llm_provider,
+            model=self.config.router_model or _optional_text(settings.get("model")) or self.config.model,
+            max_tokens=_safe_int(generation.get("maxTokens")),
+            temperature=_optional_float(generation.get("temperature")),
+            top_p=_optional_float(generation.get("topP")),
             timeout=self.config.router_timeout,
         )
         routing = dict(routing)
@@ -432,6 +500,7 @@ class JobManager:
         pipeline: PipelineSpec,
         mode: str,
         routing: dict[str, Any],
+        llm: dict[str, Any],
         created_at: str,
         parent_job_id: str | None = None,
         revision_index: int | None = None,
@@ -452,7 +521,14 @@ class JobManager:
             "pipeline": pipeline.name,
             "pipeline_description": pipeline.description,
             "routing": routing,
+            "llm": copy.deepcopy(llm),
+            "usage": _usage_from_raw(
+                routing.get("usage") if isinstance(routing.get("usage"), dict) else {},
+                llm.get("pricing") if isinstance(llm.get("pricing"), dict) else {},
+            ),
             "mode": mode,
+            "starred": False,
+            "archived": False,
             "auto_approve": mode == "autonomous",
             "approved_stage": None,
             "parent_job_id": parent_job_id,
@@ -489,10 +565,24 @@ class JobManager:
         *,
         mode: str = "autonomous",
         pipeline_name: str | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        generation: dict[str, Any] | None = None,
+        pricing: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         normalized = self._validate_prompt(prompt)
         run_mode = _normalize_job_mode(mode)
-        selected, routing = self._route_initial_prompt(normalized, pipeline_name=pipeline_name)
+        llm = self._resolve_job_llm_settings(
+            provider=provider,
+            model=model,
+            generation=generation,
+            pricing=pricing,
+        )
+        selected, routing = self._route_initial_prompt(
+            normalized,
+            pipeline_name=pipeline_name,
+            llm=llm,
+        )
         pipeline = load_pipeline(selected)
         job_id = uuid.uuid4().hex
         now = utc_now()
@@ -502,6 +592,7 @@ class JobManager:
             pipeline=pipeline,
             mode=run_mode,
             routing=routing,
+            llm=llm,
             created_at=now,
         )
         with self._lock:
@@ -520,6 +611,10 @@ class JobManager:
         *,
         mode: str = "autonomous",
         pipeline_name: str | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        generation: dict[str, Any] | None = None,
+        pricing: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         normalized = self._validate_prompt(request, field_name="수정 요청")
         run_mode = _normalize_job_mode(mode)
@@ -536,6 +631,7 @@ class JobManager:
                     status_code=409,
                 )
             parent_prompt = str(parent.get("prompt") or "")
+            inherited_llm = copy.deepcopy(parent.get("llm") or {})
             revision_index = 1 + max(
                 [
                     int(job.get("revision_index") or 0)
@@ -562,12 +658,19 @@ class JobManager:
         }
         job_id = uuid.uuid4().hex
         now = utc_now()
+        llm = self._resolve_job_llm_settings(
+            provider=provider if provider is not None else inherited_llm.get("provider"),
+            model=model if model is not None else inherited_llm.get("model"),
+            generation=generation if generation is not None else inherited_llm.get("generation"),
+            pricing=pricing if pricing is not None else inherited_llm.get("pricing"),
+        )
         job = self._new_job_record(
             job_id=job_id,
             prompt=revision_prompt,
             pipeline=pipeline,
             mode=run_mode,
             routing=routing,
+            llm=llm,
             created_at=now,
             parent_job_id=parent_job_id,
             revision_index=revision_index,
@@ -670,6 +773,91 @@ class JobManager:
                     status_code=404,
                 )
             return self._public_job_locked(job)
+
+    def list_jobs(
+        self,
+        *,
+        limit: int = 20,
+        cursor: str | None = None,
+        archived: bool = False,
+    ) -> dict[str, Any]:
+        page_size = max(1, min(int(limit), MAX_HISTORY_PAGE_SIZE))
+        try:
+            offset = int(cursor or "0")
+        except (TypeError, ValueError) as exc:
+            raise WebJobError(
+                "INVALID_CURSOR",
+                "작업 목록 커서가 올바르지 않습니다.",
+                status_code=422,
+            ) from exc
+        if offset < 0:
+            raise WebJobError("INVALID_CURSOR", "작업 목록 커서가 올바르지 않습니다.", status_code=422)
+        with self._lock:
+            candidates = [
+                job
+                for job in self._jobs.values()
+                if bool(job.get("archived", False)) is archived
+            ]
+            candidates.sort(
+                key=lambda job: (
+                    bool(job.get("starred", False)),
+                    str(job.get("updated_at") or job.get("created_at") or ""),
+                    str(job.get("id") or ""),
+                ),
+                reverse=True,
+            )
+            page = candidates[offset : offset + page_size]
+            next_offset = offset + len(page)
+            has_more = next_offset < len(candidates)
+            return {
+                "jobs": [self._job_summary_locked(job) for job in page],
+                "next_cursor": str(next_offset) if has_more else None,
+                "has_more": has_more,
+            }
+
+    def update_job_metadata(
+        self,
+        job_id: str,
+        *,
+        starred: bool | None = None,
+        archived: bool | None = None,
+    ) -> dict[str, Any]:
+        if starred is None and archived is None:
+            raise WebJobError(
+                "EMPTY_JOB_UPDATE",
+                "변경할 작업 속성이 없습니다.",
+                status_code=422,
+            )
+        with self._lock:
+            job = self._require_job_locked(job_id)
+            if archived is True and job.get("status") in ACTIVE_JOB_STATUSES:
+                raise WebJobError(
+                    "ACTIVE_JOB_ARCHIVE_FORBIDDEN",
+                    "실행 중인 작업은 보관할 수 없습니다.",
+                    action="작업이 끝나거나 취소된 뒤 보관하세요.",
+                    status_code=409,
+                )
+            if starred is not None:
+                job["starred"] = bool(starred)
+            if archived is not None:
+                job["archived"] = bool(archived)
+            job["updated_at"] = utc_now()
+            self._save_locked(job)
+            return self._public_job_locked(job)
+
+    def rerun_job(self, job_id: str) -> dict[str, Any]:
+        with self._lock:
+            source = copy.deepcopy(self._require_job_locked(job_id))
+        llm = source.get("llm") if isinstance(source.get("llm"), dict) else {}
+        return self.create_job(
+            str(source.get("prompt") or ""),
+            mode=str(source.get("mode") or "autonomous"),
+            pipeline_name=_optional_text(source.get("pipeline")),
+            provider=_optional_text(llm.get("provider")),
+            model=_optional_text(llm.get("model")),
+            generation=llm.get("generation") if isinstance(llm.get("generation"), dict) else {},
+            pricing=llm.get("pricing") if isinstance(llm.get("pricing"), dict) else {},
+        )
 
     def cancel_job(self, job_id: str) -> dict[str, Any]:
         with self._lock:
@@ -965,7 +1153,16 @@ class JobManager:
                 "running",
                 detail="외부 LLM 브릿지와 실행 환경을 확인하고 있습니다.",
             )
-            readiness = self.driver_readiness()
+            with self._lock:
+                job_llm = copy.deepcopy(self._jobs[job_id].get("llm") or {})
+            generation = (
+                job_llm.get("generation")
+                if isinstance(job_llm.get("generation"), dict)
+                else {}
+            )
+            job_provider = _optional_text(job_llm.get("provider"))
+            job_model = _optional_text(job_llm.get("model"))
+            readiness = self.driver_readiness(provider=job_provider, model=job_model)
             if not readiness["ready"]:
                 error = self._make_error(
                     "AGENT_NOT_AVAILABLE",
@@ -983,10 +1180,13 @@ class JobManager:
                 selected_driver = create_driver(
                     str(readiness.get("selected") or self.config.driver),
                     unsafe=self.config.unsafe_agent,
-                    model=self.config.model,
+                    model=job_model,
                     max_turns=self.config.max_turns,
+                    max_tokens=_safe_int(generation.get("maxTokens")),
+                    temperature=_optional_float(generation.get("temperature")),
+                    top_p=_optional_float(generation.get("topP")),
                     bridge_url=self.config.llm_bridge_url,
-                    llm_provider=self.config.llm_provider,
+                    llm_provider=job_provider,
                 )
             except DriverError as exc:
                 error = self._make_error(
@@ -1327,6 +1527,35 @@ class JobManager:
         event_name = str(event.get("event") or "")
         stage = event.get("stage")
         attempt = _safe_int(event.get("attempt"))
+        if event_name == "usage":
+            raw_usage = event.get("usage") if isinstance(event.get("usage"), dict) else {}
+            with self._lock:
+                job = self._jobs.get(job_id)
+                if job is None:
+                    return
+                pricing = (
+                    (job.get("llm") or {}).get("pricing")
+                    if isinstance(job.get("llm"), dict)
+                    and isinstance((job.get("llm") or {}).get("pricing"), dict)
+                    else {}
+                )
+                usage = _usage_from_raw(raw_usage, pricing)
+                if not usage:
+                    return
+                job["usage"] = _merge_usage(job.get("usage"), usage)
+                if stage:
+                    stage_record = self._find_stage_locked(job, str(stage))
+                    if stage_record is not None:
+                        stage_record["usage"] = _merge_usage(stage_record.get("usage"), usage)
+                job["updated_at"] = utc_now()
+                self._record_event_locked(
+                    job,
+                    "usage_reported",
+                    f"{self._stage_title(str(stage)) if stage else '파이프라인'} 토큰 사용량 갱신",
+                    data={"stage": stage, "attempt": attempt, "usage": usage},
+                )
+                self._save_locked(job)
+            return
         if event_name == "stage_started" and stage:
             self._update_job(
                 job_id,
@@ -1488,6 +1717,23 @@ class JobManager:
                 error=self._compact_error(failure),
             )
 
+        if event_name == "llm_text":
+            delta = str(event.get("delta") or "")
+            if not delta:
+                return
+            with self._lock:
+                job = self._jobs.get(job_id)
+                if job is None:
+                    return
+                self._append_llm_output_locked(
+                    job,
+                    stage=str(stage) if stage else None,
+                    attempt=attempt,
+                    delta=delta,
+                )
+                self._save_locked(job)
+            return
+
         with self._lock:
             job = self._jobs.get(job_id)
             if job is not None:
@@ -1504,6 +1750,41 @@ class JobManager:
                     data=compact,
                 )
                 self._save_locked(job)
+
+    def _append_llm_output_locked(
+        self,
+        job: dict[str, Any],
+        *,
+        stage: str | None,
+        attempt: int | None,
+        delta: str,
+    ) -> None:
+        events = job.setdefault("events", [])
+        previous = events[-1] if events else None
+        if (
+            isinstance(previous, dict)
+            and previous.get("event") == "llm_output"
+            and isinstance(previous.get("data"), dict)
+            and previous["data"].get("stage") == stage
+            and previous["data"].get("attempt") == attempt
+        ):
+            markdown = str(previous["data"].get("markdown") or "") + delta
+            previous["data"]["markdown"] = _clean_text(markdown, MAX_LLM_OUTPUT_CHARS)
+            previous["timestamp"] = utc_now()
+            record = previous
+        else:
+            self._record_event_locked(
+                job,
+                "llm_output",
+                f"{self._stage_title(stage) if stage else '파이프라인'} LLM 출력",
+                data={"stage": stage, "attempt": attempt, "markdown": delta},
+                max_text=MAX_LLM_OUTPUT_CHARS,
+            )
+            record = events[-1]
+        job["updated_at"] = utc_now()
+        if record is previous:
+            for subscriber in list(self._event_subscribers.get(str(job.get("id")), [])):
+                self._put_subscriber_event(subscriber, copy.deepcopy(record))
 
     def _initial_stages(self, pipeline: PipelineSpec) -> list[dict[str, Any]]:
         stages = [
@@ -1712,6 +1993,10 @@ class JobManager:
 
     def _public_job_locked(self, job: dict[str, Any]) -> dict[str, Any]:
         public = copy.deepcopy(job)
+        public.setdefault("starred", False)
+        public.setdefault("archived", False)
+        public.setdefault("llm", {})
+        public.setdefault("usage", {})
         public.pop("archive_path", None)
         if isinstance(public.get("error"), dict):
             public["error"] = self._compact_error(public["error"])
@@ -1738,6 +2023,33 @@ class JobManager:
             "cancelled": "취소됨",
         }.get(str(job.get("status")), str(job.get("status")))
         return public
+
+    def _job_summary_locked(self, job: dict[str, Any]) -> dict[str, Any]:
+        public = self._public_job_locked(job)
+        return {
+            key: public.get(key)
+            for key in (
+                "id",
+                "prompt",
+                "status",
+                "status_label",
+                "message",
+                "created_at",
+                "updated_at",
+                "completed_at",
+                "pipeline",
+                "mode",
+                "project_name",
+                "parent_job_id",
+                "revision_index",
+                "starred",
+                "archived",
+                "llm",
+                "usage",
+                "progress",
+                "terminal",
+            )
+        }
 
     def _progress(self, job: dict[str, Any]) -> int:
         stages = job.get("stages") or []
@@ -1974,6 +2286,7 @@ class JobManager:
         message: str,
         *,
         data: dict[str, Any] | None = None,
+        max_text: int = 1_000,
     ) -> None:
         self._ensure_next_event_id_locked(job)
         events = job.setdefault("events", [])
@@ -1984,7 +2297,7 @@ class JobManager:
             "event": event,
             "message": _clean_text(message, 1_000),
             "timestamp": utc_now(),
-            "data": _sanitize_value(data or {}, max_text=1_000),
+            "data": _sanitize_value(data or {}, max_text=max_text),
         }
         events.append(record)
         if len(events) > MAX_EVENTS:
@@ -2036,6 +2349,10 @@ class JobManager:
                 continue
             if not isinstance(data, dict) or not data.get("id"):
                 continue
+            data.setdefault("starred", False)
+            data.setdefault("archived", False)
+            data.setdefault("llm", {})
+            data.setdefault("usage", {})
             job_id = str(data["id"])
             if data.get("status") in RUNNING_JOB_STATUSES:
                 now = utc_now()
@@ -2105,6 +2422,152 @@ def _safe_int(value: Any) -> int | None:
         return int(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _normalize_generation_settings(value: dict[str, Any] | None) -> dict[str, Any]:
+    raw = value or {}
+    if not isinstance(raw, dict):
+        raise WebJobError("INVALID_GENERATION_SETTINGS", "생성 설정 형식이 올바르지 않습니다.", status_code=422)
+    normalized: dict[str, Any] = {}
+    max_tokens_value = raw.get("maxTokens", raw.get("max_tokens"))
+    if max_tokens_value is not None:
+        if isinstance(max_tokens_value, bool):
+            parsed_max = None
+        else:
+            try:
+                numeric_max = float(max_tokens_value)
+                parsed_max = int(numeric_max) if numeric_max.is_integer() else None
+            except (TypeError, ValueError, OverflowError):
+                parsed_max = None
+        if parsed_max is None or not 1 <= parsed_max <= 1_000_000:
+            raise WebJobError(
+                "INVALID_MAX_TOKENS",
+                "최대 출력 토큰은 1~1,000,000 사이의 정수여야 합니다.",
+                status_code=422,
+            )
+        normalized["maxTokens"] = parsed_max
+    temperature_value = raw.get("temperature")
+    if temperature_value is not None:
+        temperature = _optional_float(temperature_value)
+        if temperature is None or not 0 <= temperature <= 2:
+            raise WebJobError(
+                "INVALID_TEMPERATURE",
+                "temperature는 0~2 사이여야 합니다.",
+                status_code=422,
+            )
+        normalized["temperature"] = temperature
+    top_p_value = raw.get("topP", raw.get("top_p"))
+    if top_p_value is not None:
+        top_p = _optional_float(top_p_value)
+        if top_p is None or not 0 <= top_p <= 1:
+            raise WebJobError("INVALID_TOP_P", "topP는 0~1 사이여야 합니다.", status_code=422)
+        normalized["topP"] = top_p
+    return normalized
+
+
+def _normalize_model_pricing(value: dict[str, Any] | None) -> dict[str, float]:
+    raw = value or {}
+    if not isinstance(raw, dict):
+        raise WebJobError("INVALID_MODEL_PRICING", "모델 가격 정보 형식이 올바르지 않습니다.", status_code=422)
+    normalized: dict[str, float] = {}
+    aliases = {
+        "input": ("input",),
+        "output": ("output",),
+        "cache_read": ("cache_read", "cacheRead"),
+        "cache_write": ("cache_write", "cacheWrite"),
+    }
+    for target, keys in aliases.items():
+        source = next((raw.get(key) for key in keys if raw.get(key) is not None), None)
+        if source is None:
+            continue
+        parsed = _optional_float(source)
+        if parsed is None or parsed < 0:
+            raise WebJobError(
+                "INVALID_MODEL_PRICING",
+                "모델 가격은 0 이상의 숫자여야 합니다.",
+                status_code=422,
+            )
+        normalized[target] = parsed
+    return normalized
+
+
+def _usage_number(raw: dict[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        value = raw.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        if math.isfinite(float(value)):
+            return max(0, int(value))
+    return None
+
+
+def _usage_from_raw(raw: dict[str, Any], pricing: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(raw, dict) or not raw:
+        return {}
+    values = {
+        "input_tokens": _usage_number(raw, "input_tokens", "inputTokens", "prompt_tokens", "promptTokens"),
+        "output_tokens": _usage_number(raw, "output_tokens", "outputTokens", "completion_tokens", "completionTokens"),
+        "non_cached_input_tokens": _usage_number(raw, "non_cached_input_tokens", "nonCachedInputTokens"),
+        "cache_read_input_tokens": _usage_number(raw, "cache_read_input_tokens", "cacheReadInputTokens"),
+        "cache_write_input_tokens": _usage_number(raw, "cache_write_input_tokens", "cacheWriteInputTokens"),
+        "reasoning_tokens": _usage_number(raw, "reasoning_tokens", "reasoningTokens"),
+        "total_tokens": _usage_number(raw, "total_tokens", "totalTokens"),
+    }
+    if values["total_tokens"] is None and (
+        values["input_tokens"] is not None or values["output_tokens"] is not None
+    ):
+        values["total_tokens"] = int(values["input_tokens"] or 0) + int(values["output_tokens"] or 0)
+    usage = {key: value for key, value in values.items() if value is not None}
+    if not usage:
+        return {}
+
+    input_tokens = int(values["input_tokens"] or 0)
+    output_tokens = int(values["output_tokens"] or 0)
+    cache_read = int(values["cache_read_input_tokens"] or 0)
+    cache_write = int(values["cache_write_input_tokens"] or 0)
+    non_cached = values["non_cached_input_tokens"]
+    if non_cached is None:
+        non_cached = max(0, input_tokens - cache_read - cache_write)
+    input_rate = _optional_float(pricing.get("input")) or 0.0
+    output_rate = _optional_float(pricing.get("output")) or 0.0
+    cache_read_rate = _optional_float(pricing.get("cache_read"))
+    cache_write_rate = _optional_float(pricing.get("cache_write"))
+    if any((input_rate, output_rate, cache_read_rate, cache_write_rate)):
+        estimated = (
+            int(non_cached) * input_rate
+            + cache_read * (input_rate if cache_read_rate is None else cache_read_rate)
+            + cache_write * (input_rate if cache_write_rate is None else cache_write_rate)
+            + output_tokens * output_rate
+        ) / 1_000_000
+        usage["estimated_cost_usd"] = round(estimated, 8)
+    return usage
+
+
+def _merge_usage(current: Any, addition: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(current) if isinstance(current, dict) else {}
+    for key, value in addition.items():
+        if key == "estimated_cost_usd":
+            merged[key] = round(float(merged.get(key) or 0.0) + float(value or 0.0), 8)
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            merged[key] = int(merged.get(key) or 0) + int(value)
+    return merged
 
 
 def _normalize_job_mode(mode: str | None) -> str:

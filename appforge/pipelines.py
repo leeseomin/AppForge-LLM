@@ -218,6 +218,9 @@ def _try_llm_route(
     llm_bridge_url: str | None,
     provider: str | None = None,
     model: str | None = None,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+    top_p: float | None = None,
     timeout: int = 8,
 ) -> tuple[str, dict[str, int], dict[str, Any]] | None:
     if not llm_bridge_url:
@@ -234,8 +237,9 @@ def _try_llm_route(
             ),
             provider=provider,
             model=model,
-            max_tokens=600,
-            temperature=0,
+            max_tokens=600 if max_tokens is None else max_tokens,
+            temperature=0 if temperature is None else temperature,
+            top_p=top_p,
             response_format=_CLASSIFIER_SCHEMA,
             timeout=timeout,
         )
@@ -269,6 +273,9 @@ def auto_select_pipeline(
     llm_bridge_url: str | None = None,
     llm_provider: str | None = None,
     llm_model: str | None = None,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+    top_p: float | None = None,
     timeout: int = 8,
 ) -> tuple[str, dict[str, int]]:
     llm = _try_llm_route(
@@ -277,6 +284,9 @@ def auto_select_pipeline(
         llm_bridge_url=llm_bridge_url,
         provider=llm_provider,
         model=llm_model,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        top_p=top_p,
         timeout=timeout,
     )
     if llm is not None:
@@ -293,6 +303,9 @@ def select_pipeline(
     bridge_url: str | None = None,
     provider: str | None = None,
     model: str | None = None,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+    top_p: float | None = None,
     timeout: int = 8,
 ) -> tuple[str, dict[str, Any]]:
     """Return a pipeline and user-visible routing metadata.
@@ -316,6 +329,9 @@ def select_pipeline(
         llm_bridge_url=bridge_url,
         provider=provider,
         model=model,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        top_p=top_p,
         timeout=timeout,
     )
     if llm is None:
@@ -330,6 +346,7 @@ def select_pipeline(
             "llm_candidate": selected,
             "llm_confidence": confidence,
             "llm_rationale": llm_routing.get("rationale"),
+            "usage": llm_routing.get("usage") or {},
             "low_confidence_candidates": [candidate for candidate in (selected, fallback) if candidate],
         })
         return fallback, routing

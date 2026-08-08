@@ -12,12 +12,13 @@ import {
 } from './api';
 import ComposerCard from './components/ComposerCard.vue';
 import HealthBanner from './components/HealthBanner.vue';
+import JobHistory from './components/JobHistory.vue';
 import JobPanel from './components/JobPanel.vue';
 import ProviderSettings from './components/ProviderSettings.vue';
 import Toast from './components/Toast.vue';
 import TopBar from './components/TopBar.vue';
 import { isActiveJobStatus } from './jobStatus';
-import type { ApiErrorPayload, HealthPayload, JobPayload } from './types';
+import type { ApiErrorPayload, HealthPayload, JobPayload, JobRunSettings } from './types';
 
 const STORAGE_KEY = 'appforge-v7-current-job';
 const LEGACY_STORAGE_KEY = 'appforge-v6-current-job';
@@ -40,12 +41,28 @@ const cancelling = ref(false);
 const endingSession = ref(false);
 const toastMessage = ref('');
 const settingsOpen = ref(false);
+const historyOpen = ref(false);
+const jobSettings = ref<JobRunSettings>({
+  provider: null,
+  model: null,
+  generation: {},
+  pricing: {},
+});
 
 let pollTimer: number | undefined;
 let toastTimer: number | undefined;
 let eventSource: EventSource | undefined;
 let eventJobId: string | null = null;
 const lastEventIds = new Map<string, string>();
+
+function normalizeJobSettings(settings?: JobPayload['llm']): JobRunSettings {
+  return {
+    provider: settings?.provider || null,
+    model: settings?.model || null,
+    generation: settings?.generation || {},
+    pricing: settings?.pricing || {},
+  };
+}
 
 type LoadCurrentJobOptions = {
   immediate?: boolean;
@@ -112,8 +129,15 @@ async function submitJob() {
 
   submitting.value = true;
   try {
-    const created = await createJob(normalized, { mode: runMode.value });
+    const created = await createJob(normalized, {
+      mode: runMode.value,
+      provider: jobSettings.value.provider,
+      model: jobSettings.value.model,
+      generation: jobSettings.value.generation,
+      pricing: jobSettings.value.pricing,
+    });
     job.value = created;
+    jobSettings.value = normalizeJobSettings(created.llm);
     setCurrentJob(created.id);
     schedulePoll(350);
     await nextTick();
@@ -254,6 +278,7 @@ async function loadCurrentJob({ immediate = false, restoreTerminal = true }: Loa
       return;
     }
     job.value = payload;
+    jobSettings.value = normalizeJobSettings(payload.llm);
     if (!prompt.value && payload.prompt) {
       prompt.value = payload.prompt;
     }
@@ -300,10 +325,42 @@ async function cancelActiveJob() {
 
 function handleJobUpdated(updated: JobPayload) {
   job.value = updated;
+  jobSettings.value = normalizeJobSettings(updated.llm);
   if (!updated.terminal && updated.id !== 'request-error') {
     setCurrentJob(updated.id);
     schedulePoll(350);
   }
+}
+
+async function showHistoricalJob(jobId: string) {
+  if (isActiveJob.value && currentJobId.value !== jobId) {
+    showToast('진행 중인 작업이 있어 다른 기록은 완료 후 열 수 있습니다.');
+    return;
+  }
+  try {
+    const selected = await getJob(jobId);
+    job.value = selected;
+    prompt.value = selected.prompt || '';
+    jobSettings.value = normalizeJobSettings(selected.llm);
+    if (isActiveJobStatus(selected.status)) {
+      setCurrentJob(selected.id);
+      schedulePoll(350);
+    } else {
+      window.clearTimeout(pollTimer);
+      setCurrentJob(null);
+    }
+    historyOpen.value = false;
+    await nextTick();
+    document.querySelector('#jobStatusTitle')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (error) {
+    showToast(readableError(error, '작업 기록을 열지 못했습니다.'));
+  }
+}
+
+function handleHistoryRerun(created: JobPayload) {
+  historyOpen.value = false;
+  prompt.value = created.prompt || '';
+  handleJobUpdated(created);
 }
 
 async function endCurrentSession() {
@@ -340,6 +397,10 @@ function startNewRequest() {
 
 function openProviderSettings() {
   settingsOpen.value = true;
+}
+
+function openHistory() {
+  historyOpen.value = true;
 }
 
 function closeProviderSettings() {
@@ -433,6 +494,7 @@ onBeforeUnmount(() => {
       :cancelling="cancelling"
       :ending-session="endingSession"
       @refresh="refreshHealth"
+      @open-history="openHistory"
       @open-settings="openProviderSettings"
       @cancel="cancelActiveJob"
       @end-session="endCurrentSession"
@@ -452,7 +514,9 @@ onBeforeUnmount(() => {
         :busy="isActiveJob"
         :submitting="submitting"
         :mode="runMode"
+        :settings="jobSettings"
         @update:mode="runMode = $event"
+        @update:settings="jobSettings = $event"
         @submit="submitJob"
       />
       <JobPanel :job="job" @job-updated="handleJobUpdated" @new-request="startNewRequest" @toast="showToast" />
@@ -471,6 +535,15 @@ onBeforeUnmount(() => {
     @close="closeProviderSettings"
     @toast="showToast"
     @changed="handleProviderSettingsChanged"
+  />
+  <JobHistory
+    v-if="historyOpen"
+    :current-job-id="currentJobId"
+    :busy="isActiveJob"
+    @close="historyOpen = false"
+    @select="showHistoricalJob"
+    @rerun="handleHistoryRerun"
+    @toast="showToast"
   />
   <Toast :message="toastMessage" />
 </template>

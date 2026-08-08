@@ -3,6 +3,12 @@ export type ProviderKind = "api-key" | "openai-compatible"
 export interface ProviderModel {
   id: string
   name?: string
+  cost?: {
+    input?: number
+    output?: number
+    cache_read?: number
+    cache_write?: number
+  }
 }
 
 export interface OAuthCredential {

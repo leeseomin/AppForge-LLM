@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
+
 from appforge.artifacts import load_artifact_schema
 from appforge.constants import SKILLS_DIR
-from appforge.pipelines import all_pipelines, auto_select_pipeline, list_pipeline_names
+from appforge.pipelines import all_pipelines, auto_select_pipeline, list_pipeline_names, select_pipeline
 from appforge.tooling.registry import ToolRegistry
 
 
@@ -48,3 +50,29 @@ def test_router_handles_english_and_korean_requests() -> None:
     for prompt, existing, expected in cases:
         selected, scores = auto_select_pipeline(prompt, existing_repo=existing)
         assert selected == expected, scores
+
+
+def test_low_confidence_llm_route_preserves_usage(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "appforge.llm_bridge.generate",
+        lambda *args, **kwargs: {
+            "text": json.dumps(
+                {
+                    "pipeline": "web-app",
+                    "complexity": "standard",
+                    "confidence": 0.4,
+                    "rationale": "The local fallback is a better fit.",
+                }
+            ),
+            "usage": {"inputTokens": 25, "outputTokens": 10, "totalTokens": 35},
+        },
+    )
+
+    selected, routing = select_pipeline(
+        "빠른 MVP 프로토타입을 만들어라",
+        bridge_url="http://bridge.test",
+    )
+
+    assert selected == "prototype"
+    assert routing["source"] == "llm-router-low-confidence-fallback"
+    assert routing["usage"] == {"inputTokens": 25, "outputTokens": 10, "totalTokens": 35}

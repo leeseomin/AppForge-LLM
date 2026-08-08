@@ -426,6 +426,8 @@ class LLMBridgeDriver(AgentDriver):
         provider: str | None = None,
         model: str | None = None,
         max_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
     ) -> None:
         if not bridge_url:
             raise DriverError("LLM bridge driver requires APPFORGE_LLM_BRIDGE_URL")
@@ -433,6 +435,21 @@ class LLMBridgeDriver(AgentDriver):
         self.provider = provider
         self.model = model
         self.max_tokens = max_tokens
+        self.temperature = temperature
+        self.top_p = top_p
+        self._event_handler: Callable[[dict[str, Any]], None] | None = None
+
+    def set_event_handler(self, handler: Callable[[dict[str, Any]], None] | None) -> None:
+        self._event_handler = handler
+
+    def _emit(self, payload: dict[str, Any]) -> None:
+        if self._event_handler is None:
+            return
+        try:
+            self._event_handler(payload)
+        except Exception:
+            # Observability must never break stage execution.
+            return
 
     def run(
         self,
@@ -495,6 +512,8 @@ class LLMBridgeDriver(AgentDriver):
                     provider=self.provider,
                     model=self.model,
                     max_tokens=self.max_tokens,
+                    temperature=self.temperature,
+                    top_p=self.top_p,
                     response_format=_bridge_envelope_response_format(stage, produces),
                     timeout=remaining_timeout(),
                     cancel_event=cancel_event,
@@ -572,6 +591,9 @@ class LLMBridgeDriver(AgentDriver):
                 command=["llm-bridge", "/generate"],
                 final_message_path=str(final_path),
             )
+        usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+        if usage:
+            self._emit({"type": "usage", "stage": stage, "usage": usage})
         text = str(result.get("text") or "")
         atomic_write_text(final_path, _redact_text(text))
         if cancel_event is not None and cancel_event.is_set():
@@ -695,6 +717,8 @@ class LLMBridgeAgentDriver(AgentDriver):
         provider: str | None = None,
         model: str | None = None,
         max_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
         max_turns: int | None = None,
     ) -> None:
         if not bridge_url:
@@ -703,6 +727,8 @@ class LLMBridgeAgentDriver(AgentDriver):
         self.provider = provider
         self.model = model
         self.max_tokens = max_tokens
+        self.temperature = temperature
+        self.top_p = top_p
         self.max_turns = int(max_turns or 40)
         self.max_usage_tokens = 240_000
         self.max_tool_seconds = 120
@@ -711,11 +737,14 @@ class LLMBridgeAgentDriver(AgentDriver):
             provider=provider,
             model=model,
             max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
         )
         self._event_handler: Callable[[dict[str, Any]], None] | None = None
 
     def set_event_handler(self, handler: Callable[[dict[str, Any]], None] | None) -> None:
         self._event_handler = handler
+        self._single_shot.set_event_handler(handler)
 
     def _emit(self, payload: dict[str, Any]) -> None:
         if self._event_handler is None:
@@ -829,6 +858,10 @@ class LLMBridgeAgentDriver(AgentDriver):
             generation: dict[str, Any] = {}
             if self.max_tokens is not None:
                 generation["maxTokens"] = self.max_tokens
+            if self.temperature is not None:
+                generation["temperature"] = self.temperature
+            if self.top_p is not None:
+                generation["topP"] = self.top_p
             active_prompt = guidance
             max_agent_sessions = 3
 
@@ -945,6 +978,8 @@ class LLMBridgeAgentDriver(AgentDriver):
                         if etype == "done":
                             usage = event.get("usage") if isinstance(event.get("usage"), dict) else {}
                             usage_tokens += usage_total(usage)
+                            if usage:
+                                self._emit({"type": "usage", "stage": stage, "usage": usage})
                             if usage_tokens > self.max_usage_tokens:
                                 return fail(
                                     "AGENT_TOKEN_BUDGET_EXCEEDED: reported bridge usage exceeded the stage token budget.",
@@ -1417,6 +1452,9 @@ def create_driver(
     unsafe: bool = False,
     model: str | None = None,
     max_turns: int | None = None,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+    top_p: float | None = None,
     bridge_url: str | None = None,
     llm_provider: str | None = None,
 ) -> AgentDriver:
@@ -1433,6 +1471,9 @@ def create_driver(
             bridge_url=bridge_url or DEFAULT_LLM_BRIDGE_URL,
             provider=llm_provider,
             model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
             max_turns=max_turns,
         )
     if normalized in {"llm-bridge", "llm_bridge", "llm"}:
@@ -1440,5 +1481,8 @@ def create_driver(
             bridge_url=bridge_url or DEFAULT_LLM_BRIDGE_URL,
             provider=llm_provider,
             model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
         )
     raise DriverError(f"Unknown driver {name!r}; use auto, llm-bridge, or llm-bridge-agent")

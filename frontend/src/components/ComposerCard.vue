@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
+import type { JobRunSettings } from '../types';
+import JobAdvancedSettings from './JobAdvancedSettings.vue';
 
 const props = defineProps<{
   modelValue: string;
@@ -8,11 +10,13 @@ const props = defineProps<{
   busy: boolean;
   submitting: boolean;
   mode: string;
+  settings: JobRunSettings;
 }>();
 
 const emit = defineEmits<{
   'update:modelValue': [value: string];
   'update:mode': [value: string];
+  'update:settings': [value: JobRunSettings];
   submit: [];
 }>();
 
@@ -145,6 +149,12 @@ watch(
           </label>
         </fieldset>
       </details>
+
+      <JobAdvancedSettings
+        :settings="props.settings"
+        :busy="props.busy"
+        @update:settings="emit('update:settings', $event)"
+      />
 
       <div class="prompt-chips" aria-label="예시 요청">
         <button

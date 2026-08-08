@@ -196,13 +196,14 @@ test("agent accepts a tool result that arrives before model streaming finishes",
     expect(earlyResult.status).toBe(200)
     expect((await earlyResult.json()).queued).toBe(true)
 
-    while (!events.includes("event: done")) {
+    while (!events.includes('"total_tokens":4')) {
       const chunk = await reader.read()
       if (chunk.done) break
       events += decoder.decode(chunk.value, { stream: true })
     }
     expect(events).toContain("event: tool_result")
     expect(events).toContain("event: done")
+    expect(events).toContain('"total_tokens":4')
     expect(streamPass).toBe(2)
 
     const duplicate = await app.fetch(

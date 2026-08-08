@@ -36,6 +36,14 @@ function stageArtifacts(stage: JobStage) {
 function canOpenArtifact(stage: JobStage) {
   return ['completed', 'awaiting_approval', 'failed'].includes(stage.status);
 }
+
+function formatTokens(value?: number) {
+  return Number.isFinite(value) ? `${Number(value).toLocaleString('ko-KR')} tokens` : '';
+}
+
+function formatCost(value?: number) {
+  return Number.isFinite(value) ? `$${Number(value).toFixed(6)}` : '';
+}
 </script>
 
 <template>
@@ -56,6 +64,12 @@ function canOpenArtifact(stage: JobStage) {
         </div>
         <p class="stage-detail">{{ stage.detail || stage.description || '대기 중' }}</p>
         <p v-if="stage.error?.message" class="stage-error">{{ stage.error.message }}</p>
+        <p v-if="stage.usage?.total_tokens" class="stage-usage">
+          {{ formatTokens(stage.usage.total_tokens) }}
+          <template v-if="formatCost(stage.usage.estimated_cost_usd)">
+            · {{ formatCost(stage.usage.estimated_cost_usd) }} 추정
+          </template>
+        </p>
         <div v-if="stageArtifacts(stage).length" class="stage-artifacts" aria-label="단계 산출물">
           <button
             v-for="artifact in stageArtifacts(stage)"

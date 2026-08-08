@@ -4,6 +4,8 @@ import type {
   ArtifactListPayload,
   HealthPayload,
   JobPayload,
+  JobListPayload,
+  JobRunSettings,
   PreviewState,
   RunMode,
   WorkspaceFilePayload,
@@ -80,12 +82,51 @@ export function getHealth(): Promise<HealthPayload> {
 
 export function createJob(
   prompt: string,
-  options: { mode?: RunMode | string; pipeline?: string | null } = {},
+  options: {
+    mode?: RunMode | string;
+    pipeline?: string | null;
+    provider?: string | null;
+    model?: string | null;
+    generation?: JobRunSettings['generation'];
+    pricing?: JobRunSettings['pricing'];
+  } = {},
 ): Promise<JobPayload> {
   return request<JobPayload>('/api/jobs', {
     method: 'POST',
-    body: JSON.stringify({ prompt, mode: options.mode, pipeline: options.pipeline || undefined }),
+    body: JSON.stringify({
+      prompt,
+      mode: options.mode,
+      pipeline: options.pipeline || undefined,
+      provider: options.provider || undefined,
+      model: options.model || undefined,
+      generation: options.generation,
+      pricing: options.pricing,
+    }),
   });
+}
+
+export function listJobs(
+  options: { limit?: number; cursor?: string | null; archived?: boolean } = {},
+): Promise<JobListPayload> {
+  const params = new URLSearchParams();
+  params.set('limit', String(options.limit ?? 20));
+  if (options.cursor) params.set('cursor', options.cursor);
+  if (options.archived) params.set('archived', 'true');
+  return request<JobListPayload>(`/api/jobs?${params.toString()}`);
+}
+
+export function updateJobMetadata(
+  jobId: string,
+  updates: { starred?: boolean; archived?: boolean },
+): Promise<JobPayload> {
+  return request<JobPayload>(`/api/jobs/${encodeURIComponent(jobId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(updates),
+  });
+}
+
+export function rerunJob(jobId: string): Promise<JobPayload> {
+  return request<JobPayload>(`/api/jobs/${encodeURIComponent(jobId)}/rerun`, { method: 'POST' });
 }
 
 export function getJob(jobId: string): Promise<JobPayload> {
