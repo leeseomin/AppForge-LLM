@@ -1,22 +1,30 @@
 import { homedir } from "node:os"
-import { dirname, join } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises"
 import { VERSION } from "./version"
 
 function defaultConfigDir(): string {
-  return (
-    process.env.APPFORGE_LLM_CONFIG_DIR ||
-    process.env.APPFORGE_DATA_DIR ||
-    join(homedir(), ".appforge", "llm")
+  return resolve(
+    process.env.APPFORGE_LLM_CONFIG_DIR || join(homedir(), ".appforge", "llm"),
   )
 }
 function cachePath(): string {
-  return process.env.APPFORGE_MODELS_DEV_CACHE || join(defaultConfigDir(), "models-dev.json")
+  return resolve(process.env.APPFORGE_MODELS_DEV_CACHE || join(defaultConfigDir(), "models-dev.json"))
 }
 function sourceUrl(): string {
-  return process.env.APPFORGE_MODELS_DEV_URL || "https://models.dev"
+  const raw = process.env.APPFORGE_MODELS_DEV_URL || "https://models.dev"
+  const url = new URL(raw)
+  const loopback = new Set(["127.0.0.1", "localhost", "::1"]).has(url.hostname)
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+    throw new Error("The models catalog must use HTTPS unless it is loopback-only")
+  }
+  if (!url.pathname.endsWith("/api.json")) {
+    url.pathname = `${url.pathname.replace(/\/+$/, "")}/api.json`
+  }
+  return url.toString()
 }
 const TTL_MS = 5 * 60 * 1000
+const MAX_CATALOG_BYTES = 10 * 1024 * 1024
 const USER_AGENT = `appforge-llm-bridge/${VERSION}`
 
 export interface CatalogModel {
@@ -53,6 +61,8 @@ function isFresh(): boolean {
 
 async function readCacheFile(): Promise<Catalog | null> {
   try {
+    const info = await stat(cachePath())
+    if (!info.isFile() || info.size > MAX_CATALOG_BYTES) return null
     const raw = await readFile(cachePath(), "utf8")
     const parsed = JSON.parse(raw) as Catalog
     if (parsed && typeof parsed === "object") return parsed
@@ -97,11 +107,17 @@ export async function fetchCatalog(force = false): Promise<Catalog | null> {
   }
 
   try {
-    const res = await fetch(`${sourceUrl()}/api.json`, {
+    const res = await fetch(sourceUrl(), {
       headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
     })
     if (!res.ok) throw new Error(`models.dev returned HTTP ${res.status}`)
-    const data = (await res.json()) as Catalog
+    const declaredLength = Number(res.headers.get("content-length") || 0)
+    if (declaredLength > MAX_CATALOG_BYTES) throw new Error("models.dev payload is too large")
+    const raw = await res.text()
+    if (new TextEncoder().encode(raw).length > MAX_CATALOG_BYTES) {
+      throw new Error("models.dev payload is too large")
+    }
+    const data = JSON.parse(raw) as Catalog
     if (!data || typeof data !== "object") throw new Error("models.dev payload not an object")
     memoryCache = data
     memoryCacheAt = Date.now()

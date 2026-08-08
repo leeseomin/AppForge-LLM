@@ -3,7 +3,14 @@ from __future__ import annotations
 import json
 import threading
 
+import pytest
+
 from appforge import llm_bridge
+from appforge.llm_bridge_process import (
+    LLMBridgeProcessManager,
+    _bridge_bind,
+    _bridge_environment,
+)
 
 
 class _FakeSocket:
@@ -35,6 +42,7 @@ class _BlockingConnection:
         assert path == "/generate"
         assert body is not None
         assert headers["Content-Type"] == "application/json"
+        assert headers["X-AppForge-Bridge-Token"] == "bridge-test-token-0123456789abcdef0123456789"
         self.request_seen.set()
 
     def getresponse(self) -> object:
@@ -53,13 +61,17 @@ def test_generate_cancels_in_flight_bridge_http_request(monkeypatch) -> None:
         "HTTPConnection",
         lambda *args, **kwargs: connection,
     )
+    monkeypatch.setenv(
+        "APPFORGE_LLM_BRIDGE_TOKEN",
+        "bridge-test-token-0123456789abcdef0123456789",
+    )
     cancel_event = threading.Event()
     errors: list[BaseException] = []
 
     def call_bridge() -> None:
         try:
             llm_bridge.generate(
-                "http://bridge.test",
+                "http://127.0.0.1:8788",
                 prompt="Generate a tiny app",
                 timeout=30,
                 cancel_event=cancel_event,
@@ -79,6 +91,62 @@ def test_generate_cancels_in_flight_bridge_http_request(monkeypatch) -> None:
     assert connection.shutdown_called.is_set()
     assert len(errors) == 1
     assert isinstance(errors[0], llm_bridge.BridgeCancelled)
+
+
+def test_plain_http_bridge_is_rejected_when_it_is_not_loopback(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "APPFORGE_LLM_BRIDGE_TOKEN",
+        "bridge-test-token-0123456789abcdef0123456789",
+    )
+    monkeypatch.setattr(
+        llm_bridge.http.client,
+        "HTTPConnection",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("network must not open")),
+    )
+
+    with pytest.raises(llm_bridge.BridgeError) as caught:
+        llm_bridge.list_providers("http://bridge.example")
+
+    assert caught.value.code == "INSECURE_BRIDGE_URL"
+
+
+def test_bridge_process_environment_does_not_forward_arbitrary_host_secrets(monkeypatch) -> None:
+    monkeypatch.setenv("UNRELATED_DATABASE_PASSWORD", "must-not-cross-boundary")
+    monkeypatch.setenv("OPENAI_API_KEY", "allowed-provider-key")
+
+    env = _bridge_environment("127.0.0.1", "8788", "bridge-capability")
+
+    assert "UNRELATED_DATABASE_PASSWORD" not in env
+    assert env["OPENAI_API_KEY"] == "allowed-provider-key"
+    assert env["APPFORGE_LLM_BRIDGE_TOKEN"] == "bridge-capability"
+
+
+def test_disabled_autostart_reuses_an_authenticated_existing_bridge(monkeypatch, tmp_path) -> None:
+    base_url = "http://127.0.0.1:8788"
+    manager = LLMBridgeProcessManager(runtime_dir=tmp_path, enabled=False)
+    monkeypatch.setattr(manager, "_is_healthy", lambda _base_url: True)
+
+    manager.ensure_running(base_url)
+
+    headers = llm_bridge._request_headers(base_url, "/ready", "application/json")
+    assert headers[llm_bridge.BRIDGE_TOKEN_HEADER] == manager.auth_token
+    manager.shutdown()
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://user:secret@127.0.0.1:8788",
+        "http://127.0.0.1:8788/?token=secret",
+        "http://127.0.0.1:8788/prefix",
+    ],
+)
+def test_bridge_autostart_rejects_credential_bearing_or_prefixed_urls(base_url) -> None:
+    with pytest.raises(llm_bridge.BridgeError) as caught:
+        _bridge_bind(base_url)
+
+    assert caught.value.payload.get("reason") == "invalid_local_bridge_url"
+    assert "secret" not in str(caught.value.payload)
 
 
 def test_generate_normalizes_json_schema_response_format(monkeypatch) -> None:

@@ -63,16 +63,17 @@ Options:
   -h, --help  Show this help.
 
 Environment:
-  APPFORGE_WEB_HOST                 Bind host, default 127.0.0.1.
+  APPFORGE_WEB_HOST                 Loopback bind host, default 127.0.0.1.
   APPFORGE_WEB_PORT                 Preferred bind port, default 8787.
   APPFORGE_WEB_PORT_FALLBACK_LIMIT  Additional ports to scan upward if busy, default 20.
   APPFORGE_NO_OPEN=1                Suppress browser opening.
   APPFORGE_SKIP_INSTALL=1           Reuse the current .venv instead of syncing Python deps.
   APPFORGE_SKIP_FRONTEND_BUILD=1    Reuse current packaged frontend assets.
   APPFORGE_DRIVER                   Driver path; default llm-bridge-agent. auto is an alias.
-  APPFORGE_START_LLM_BRIDGE=1       Start or reuse llm_bridge before the web server.
-  APPFORGE_SKIP_LLM_BRIDGE=1        Do not start llm_bridge from this launcher.
-  APPFORGE_LLM_BRIDGE_URL           Bridge health URL base, default http://127.0.0.1:8788.
+  APPFORGE_START_LLM_BRIDGE=1       Request web-process-managed llm_bridge startup.
+  APPFORGE_SKIP_LLM_BRIDGE=1        Disable managed bridge startup.
+  APPFORGE_LLM_BRIDGE_URL           Bridge URL base, default http://127.0.0.1:8788.
+  APPFORGE_LLM_BRIDGE_TOKEN         Shared 32+ character capability for a manual bridge.
   APPFORGE_SMOKE_TIMEOUT            Smoke timeout in seconds, default 30.
   APPFORGE_BRIDGE_TIMEOUT           Bridge startup timeout in seconds, default 15.
 USAGE
@@ -323,31 +324,6 @@ normalize_driver() {
   printf '%s' "${1:-auto}" | tr '[:upper:]_' '[:lower:]-'
 }
 
-bridge_health_url() {
-  printf '%s/health' "${APPFORGE_LLM_BRIDGE_URL%/}"
-}
-
-wait_for_bridge() {
-  local deadline=$((SECONDS + APPFORGE_BRIDGE_TIMEOUT))
-  local health_url
-  health_url="$(bridge_health_url)"
-
-  while (( SECONDS < deadline )); do
-    if http_ok "$health_url"; then
-      log "llm_bridge is healthy at $health_url."
-      return 0
-    fi
-    if [[ -n "${BRIDGE_PID:-}" ]] && ! kill -0 "$BRIDGE_PID" >/dev/null 2>&1; then
-      log "llm_bridge exited before becoming healthy. See $BRIDGE_LOG."
-      return 1
-    fi
-    sleep 1
-  done
-
-  log "llm_bridge did not become healthy within ${APPFORGE_BRIDGE_TIMEOUT}s. See $BRIDGE_LOG."
-  return 1
-}
-
 maybe_start_bridge() {
   local driver
   driver="$(normalize_driver "${APPFORGE_DRIVER:-llm-bridge-agent}")"
@@ -364,30 +340,11 @@ maybe_start_bridge() {
     log "Skipping llm_bridge startup because APPFORGE_SKIP_LLM_BRIDGE is set."
     return
   fi
-
-  require_curl
-  if http_ok "$(bridge_health_url)"; then
-    log "Reusing healthy llm_bridge at ${APPFORGE_LLM_BRIDGE_URL%/}."
-    return
-  fi
-
-  have bun || die "Bun is required to start llm_bridge. Install Bun, start the bridge manually, or set APPFORGE_SKIP_LLM_BRIDGE=1."
-  [[ -d "$ROOT_DIR/llm_bridge" ]] || die "llm_bridge/ directory is missing."
-
-  if [[ ! -d "$ROOT_DIR/llm_bridge/node_modules" ]]; then
-    if is_true "${APPFORGE_SKIP_INSTALL:-}"; then
-      die "llm_bridge/node_modules is missing and APPFORGE_SKIP_INSTALL is set. Run bun install in llm_bridge or unset APPFORGE_SKIP_INSTALL."
-    fi
-    log "Installing llm_bridge dependencies."
-    (cd "$ROOT_DIR/llm_bridge" && bun install) || die "bun install failed in llm_bridge."
-  fi
-
-  mkdir -p "$APPFORGE_RUNTIME_PATH"
-  log "Starting llm_bridge; logs go to $BRIDGE_LOG."
-  (cd "$ROOT_DIR/llm_bridge" && bun run start >"$BRIDGE_LOG" 2>&1) &
-  BRIDGE_PID=$!
-
-  wait_for_bridge || die "Unable to start a healthy llm_bridge."
+  # The FastAPI process owns bridge startup so its high-entropy capability stays
+  # in memory and the child receives an allowlisted environment. Starting Bun
+  # here would either expose the capability in argv or forward the whole shell
+  # environment to a credential-bearing process.
+  log "Secure llm_bridge startup will be handled by the AppForge web process."
 }
 
 build_web_command() {

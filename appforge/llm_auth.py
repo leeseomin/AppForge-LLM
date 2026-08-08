@@ -11,6 +11,7 @@ so these commands work even when the web UI is not running.
 
 from __future__ import annotations
 
+import atexit
 import time
 import webbrowser
 from typing import Any
@@ -56,17 +57,15 @@ def _ensure_bridge(bridge_url: str, manager: LLMBridgeProcessManager | None = No
     own = manager is None
     mgr = manager or LLMBridgeProcessManager()
     try:
-        llm_bridge.ping(bridge_url, timeout=2.0)
-        return
-    except llm_bridge.BridgeError:
-        pass
-    try:
         mgr.ensure_running(bridge_url)
     except llm_bridge.BridgeError as exc:
-        raise AuthError(str(exc)) from exc
-    finally:
         if own:
             mgr.shutdown()
+        raise AuthError(str(exc)) from exc
+    if own:
+        # Keep an auto-started bridge alive for the whole CLI command, then
+        # terminate it and forget its in-memory capability at interpreter exit.
+        atexit.register(mgr.shutdown)
 
 
 def _state_label(status: dict[str, Any]) -> str:

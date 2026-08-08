@@ -247,6 +247,7 @@ stages:
   - handoff_report
   tools:
   - release_readiness
+  - secret_scan
   - archive_workspace
   - artifact_inventory
   checkpoint: true
@@ -259,6 +260,8 @@ stages:
   - A new engineer can continue
   - A source archive is produced
   gates:
+  - tool: secret_scan
+    required: true
   - tool: release_readiness
     required: true
   - tool: archive_workspace

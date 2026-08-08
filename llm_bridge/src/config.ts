@@ -1,14 +1,17 @@
+import { randomUUID } from "node:crypto"
 import { homedir } from "node:os"
-import { dirname, join } from "node:path"
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises"
-import { execFile } from "node:child_process"
-import { promisify } from "node:util"
+import { basename, dirname, join, resolve } from "node:path"
+import { spawn } from "node:child_process"
+import { chmod, lstat, mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises"
 import type { ActiveSelection, OAuthCredential, StoredProviderConfig } from "./types"
 
-const execFileAsync = promisify(execFile)
 const KEYCHAIN_SERVICE = "appforge-llm"
+const SECURITY_EXECUTABLE = "/usr/bin/security"
+const MAX_SECURITY_OUTPUT_BYTES = 1024 * 1024
 type SecretKey = "apiKey" | "oauth"
 type SecretBackend = "file" | "keychain"
+interface SecurityCommandResult { stdout: string }
+type SecurityCommandRunner = (args: string[], input?: string) => Promise<SecurityCommandResult>
 
 export interface SecretStore {
   get(providerId: string, key: SecretKey): Promise<string | undefined>
@@ -28,19 +31,21 @@ let loaded = false
 let loadedPath: string | null = null
 let loadedBackend: SecretBackend | null = null
 let secretStoreOverride: SecretStore | null = null
+let securityCommandRunnerOverride: SecurityCommandRunner | null = null
 
 function defaultConfigDir(): string {
-  return process.env.APPFORGE_LLM_CONFIG_DIR ||
-    process.env.APPFORGE_DATA_DIR ||
-    join(homedir(), ".appforge", "llm")
+  return resolve(
+    process.env.APPFORGE_LLM_CONFIG_DIR || join(homedir(), ".appforge", "llm"),
+  )
 }
 
 function currentConfigPath(): string {
-  return process.env.APPFORGE_LLM_CONFIG || join(defaultConfigDir(), "providers.json")
+  return resolve(process.env.APPFORGE_LLM_CONFIG || join(defaultConfigDir(), "providers.json"))
 }
 
 function currentSecretBackend(): SecretBackend {
-  const raw = (process.env.APPFORGE_LLM_SECRET_BACKEND || "file").trim().toLowerCase()
+  const platformDefault = process.platform === "darwin" ? "keychain" : "file"
+  const raw = (process.env.APPFORGE_LLM_SECRET_BACKEND || platformDefault).trim().toLowerCase()
   if (raw === "file" || raw === "keychain") return raw
   throw new Error("APPFORGE_LLM_SECRET_BACKEND must be either 'file' or 'keychain'")
 }
@@ -53,21 +58,76 @@ export function secretBackend(): SecretBackend {
   return currentSecretBackend()
 }
 
-async function ensureDir(): Promise<void> {
-  await mkdir(dirname(currentConfigPath()), { recursive: true })
+function assertOwnedByCurrentUser(path: string, uid: number): void {
+  if (process.platform === "win32" || typeof process.getuid !== "function") return
+  if (uid !== process.getuid()) throw new Error(`Refusing config path not owned by the current user: ${path}`)
 }
 
-async function applyPerms(): Promise<void> {
-  try {
-    await chmod0600(currentConfigPath())
-  } catch {
-    // Permissions are best-effort on some filesystems; never block writes.
+async function ensureDir(): Promise<void> {
+  const path = dirname(currentConfigPath())
+  await mkdir(path, { recursive: true, mode: 0o700 })
+  const info = await lstat(path)
+  if (!info.isDirectory() || info.isSymbolicLink()) {
+    throw new Error(`Refusing non-directory or symlinked config directory: ${path}`)
+  }
+  assertOwnedByCurrentUser(path, info.uid)
+  if (process.platform !== "win32") {
+    await chmod(path, 0o700)
+    if ((await stat(path)).mode & 0o077) throw new Error(`Could not secure config directory: ${path}`)
   }
 }
 
-async function chmod0600(path: string): Promise<void> {
-  const { chmod } = await import("node:fs/promises")
-  await chmod(path, 0o600)
+async function assertSafeConfigFile(path: string, repairPermissions: boolean): Promise<boolean> {
+  let info
+  try {
+    info = await lstat(path)
+  } catch (error) {
+    if ((error as { code?: unknown }).code === "ENOENT") return false
+    throw error
+  }
+  if (!info.isFile() || info.isSymbolicLink()) {
+    throw new Error(`Refusing non-regular or symlinked config file: ${path}`)
+  }
+  assertOwnedByCurrentUser(path, info.uid)
+  if (process.platform !== "win32" && (info.mode & 0o077) !== 0) {
+    if (!repairPermissions) throw new Error(`Config file permissions are too broad: ${path}`)
+    await chmod(path, 0o600)
+    const secured = await lstat(path)
+    if (!secured.isFile() || secured.isSymbolicLink() || (secured.mode & 0o077) !== 0) {
+      throw new Error(`Could not secure config file: ${path}`)
+    }
+  }
+  return true
+}
+
+async function atomicWritePrivate(path: string, payload: string): Promise<void> {
+  await ensureDir()
+  await assertSafeConfigFile(path, true)
+  const temporary = join(dirname(path), `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`)
+  let handle: Awaited<ReturnType<typeof open>> | null = null
+  try {
+    handle = await open(temporary, "wx", 0o600)
+    await handle.writeFile(payload, { encoding: "utf8" })
+    await handle.sync()
+    await handle.close()
+    handle = null
+    if (process.platform !== "win32") await chmod(temporary, 0o600)
+    await rename(temporary, path)
+    await assertSafeConfigFile(path, false)
+    if (process.platform !== "win32") {
+      const directory = await open(dirname(path), "r")
+      try {
+        await directory.sync()
+      } finally {
+        await directory.close()
+      }
+    }
+  } finally {
+    if (handle) await handle.close().catch(() => undefined)
+    await unlink(temporary).catch((error) => {
+      if ((error as { code?: unknown }).code !== "ENOENT") throw error
+    })
+  }
 }
 
 function keychainAccount(providerId: string, key: SecretKey): string {
@@ -79,11 +139,54 @@ function keychainRef(providerId: string, key: SecretKey): string {
 }
 
 function isNotFoundError(error: unknown): boolean {
-  const candidate = error as { code?: unknown; stderr?: unknown; message?: unknown }
+  const candidate = error as { code?: unknown; message?: unknown }
   const code = typeof candidate.code === "number" ? candidate.code : undefined
-  const stderr = typeof candidate.stderr === "string" ? candidate.stderr : ""
   const message = typeof candidate.message === "string" ? candidate.message : ""
-  return code === 44 || /could not be found|not found/i.test(`${stderr}\n${message}`)
+  return code === 44 || /could not be found|not found/i.test(message)
+}
+
+class KeychainCommandError extends Error {
+  constructor(readonly code: number | null, reason = "macOS Keychain command failed") {
+    super(reason)
+    this.name = "KeychainCommandError"
+  }
+}
+
+const runSecurityCommand: SecurityCommandRunner = (args, input) => new Promise((resolve, reject) => {
+  const child = spawn(SECURITY_EXECUTABLE, args, { stdio: ["pipe", "pipe", "pipe"] })
+  const stdout: Buffer[] = []
+  let outputBytes = 0
+  const timeout = setTimeout(() => {
+    child.kill()
+    reject(new KeychainCommandError(null, "macOS Keychain command timed out"))
+  }, 30_000)
+  child.stdout.on("data", (chunk: Buffer) => {
+    outputBytes += chunk.length
+    if (outputBytes <= MAX_SECURITY_OUTPUT_BYTES) stdout.push(chunk)
+    else child.kill()
+  })
+  // Drain stderr, but never retain or re-emit it: native errors can include
+  // sensitive command context.
+  child.stderr.resume()
+  child.once("error", () => {
+    clearTimeout(timeout)
+    reject(new KeychainCommandError(null))
+  })
+  child.once("close", (code) => {
+    clearTimeout(timeout)
+    if (outputBytes > MAX_SECURITY_OUTPUT_BYTES) {
+      reject(new KeychainCommandError(code, "macOS Keychain output exceeded its limit"))
+    } else if (code !== 0) {
+      reject(new KeychainCommandError(code))
+    } else {
+      resolve({ stdout: Buffer.concat(stdout).toString("utf8") })
+    }
+  })
+  child.stdin.end(input)
+})
+
+function securityCommand(args: string[], input?: string): Promise<SecurityCommandResult> {
+  return (securityCommandRunnerOverride ?? runSecurityCommand)(args, input)
 }
 
 class MacOSKeychainSecretStore implements SecretStore {
@@ -96,10 +199,8 @@ class MacOSKeychainSecretStore implements SecretStore {
   async get(providerId: string, key: SecretKey): Promise<string | undefined> {
     this.assertSupported()
     try {
-      const { stdout } = await execFileAsync(
-        "security",
+      const { stdout } = await securityCommand(
         ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", keychainAccount(providerId, key), "-w"],
-        { maxBuffer: 1024 * 1024 },
       )
       const value = String(stdout).replace(/\r?\n$/, "")
       return value.length > 0 ? value : undefined
@@ -111,20 +212,17 @@ class MacOSKeychainSecretStore implements SecretStore {
 
   async set(providerId: string, key: SecretKey, value: string): Promise<void> {
     this.assertSupported()
-    await execFileAsync(
-      "security",
-      ["add-generic-password", "-U", "-s", KEYCHAIN_SERVICE, "-a", keychainAccount(providerId, key), "-w", value],
-      { maxBuffer: 1024 * 1024 },
+    await securityCommand(
+      ["add-generic-password", "-U", "-s", KEYCHAIN_SERVICE, "-a", keychainAccount(providerId, key), "-w"],
+      `${value}\n`,
     )
   }
 
   async delete(providerId: string, key: SecretKey): Promise<void> {
     this.assertSupported()
     try {
-      await execFileAsync(
-        "security",
+      await securityCommand(
         ["delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", keychainAccount(providerId, key)],
-        { maxBuffer: 1024 * 1024 },
       )
     } catch (error) {
       if (!isNotFoundError(error)) throw error
@@ -191,6 +289,7 @@ export async function load(): Promise<BridgeConfig> {
   const backend = currentSecretBackend()
   if (loaded && cache && loadedPath === path && loadedBackend === backend) return cache
   try {
+    await assertSafeConfigFile(path, true)
     const raw = await readFile(path, "utf8")
     const parsed = JSON.parse(raw) as Partial<BridgeConfig>
     cache = await hydrateSecrets({
@@ -215,15 +314,21 @@ export async function load(): Promise<BridgeConfig> {
   loaded = true
   loadedPath = path
   loadedBackend = backend
+  if (
+    backend === "keychain"
+    && Object.values(cache.providers).some((provider) =>
+      Boolean((provider.apiKey && !provider.apiKeyRef) || (provider.oauth && !provider.oauthRef)),
+    )
+  ) {
+    await save(cache)
+  }
   return cache
 }
 
 export async function save(config: BridgeConfig): Promise<void> {
-  await ensureDir()
   const stored = await serializeForStorage(config)
   const payload = JSON.stringify(stored, null, 2)
-  await writeFile(currentConfigPath(), payload, "utf8")
-  await applyPerms()
+  await atomicWritePrivate(currentConfigPath(), payload)
   cache = await hydrateSecrets(stored)
   loaded = true
   loadedPath = currentConfigPath()
@@ -237,26 +342,29 @@ export async function getProvider(id: string): Promise<StoredProviderConfig | un
 
 export async function setProvider(id: string, input: {
   apiKey?: string | null
+  clearApiKey?: boolean
   baseURL?: string | null
   defaultModel?: string | null
 }): Promise<StoredProviderConfig> {
   const config = await load()
   const existing = config.providers[id] ?? {}
-  // An empty/null apiKey means "keep existing"; send empty string "" to clear.
+  if (input.clearApiKey && input.apiKey) {
+    throw new Error("clearApiKey cannot be combined with apiKey")
+  }
   const next: StoredProviderConfig = {
     ...existing,
     baseURL: input.baseURL === undefined ? existing.baseURL : input.baseURL ? input.baseURL : undefined,
     defaultModel:
       input.defaultModel === undefined ? existing.defaultModel : input.defaultModel ? input.defaultModel : undefined,
   }
-  if (input.apiKey === undefined) {
-    // keep existing
-  } else if (input.apiKey === null || input.apiKey === "") {
+  if (input.clearApiKey) {
     if (currentSecretBackend() === "keychain") {
       await selectedSecretStore().delete(id, "apiKey")
     }
     next.apiKey = undefined
     next.apiKeyRef = undefined
+  } else if (input.apiKey === undefined || input.apiKey === null || input.apiKey === "") {
+    // keep existing
   } else {
     next.apiKey = input.apiKey
   }
@@ -327,10 +435,15 @@ export function _setSecretStoreForTest(store: SecretStore | null): void {
   secretStoreOverride = store
 }
 
+export function _setSecurityCommandRunnerForTest(runner: SecurityCommandRunner | null): void {
+  securityCommandRunnerOverride = runner
+}
+
 export function _resetForTest(): void {
   cache = null
   loaded = false
   loadedPath = null
   loadedBackend = null
   secretStoreOverride = null
+  securityCommandRunnerOverride = null
 }

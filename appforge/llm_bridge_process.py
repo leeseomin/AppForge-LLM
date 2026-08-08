@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import subprocess
 import threading
 import time
@@ -12,6 +13,46 @@ from . import llm_bridge
 from .util import command_exists
 
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+BRIDGE_ENV_KEYS = {
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "SYSTEMROOT",
+    "COMSPEC",
+    "APPFORGE_LLM_CONFIG_DIR",
+    "APPFORGE_LLM_CONFIG",
+    "APPFORGE_LLM_SECRET_BACKEND",
+    "APPFORGE_MODELS_DEV_CACHE",
+    "APPFORGE_MODELS_DEV_URL",
+    "APPFORGE_LLM_BRIDGE_HEARTBEAT_MS",
+    "APPFORGE_LLM_BRIDGE_IDLE_TIMEOUT",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GOOGLE_GENERATIVE_AI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "XAI_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "GROQ_API_KEY",
+    "CEREBRAS_API_KEY",
+    "TOGETHERAI_API_KEY",
+    "FIREWORKS_API_KEY",
+    "DEEPINFRA_API_KEY",
+    "BASETEN_API_KEY",
+}
+
+
+def _bridge_environment(bind_host: str, bind_port: str, auth_token: str) -> dict[str, str]:
+    """Build the least-privilege environment for the trusted bridge process."""
+
+    env = {key: value for key, value in os.environ.items() if key in BRIDGE_ENV_KEYS}
+    env["APPFORGE_LLM_BRIDGE_HOST"] = bind_host
+    env["APPFORGE_LLM_BRIDGE_PORT"] = bind_port
+    env["APPFORGE_LLM_BRIDGE_TOKEN"] = auth_token
+    return env
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -39,13 +80,26 @@ def _env_float(name: str, default: float, *, minimum: float = 0.1) -> float:
 
 def _bridge_bind(base_url: str) -> tuple[str, str]:
     parsed = urlparse(base_url)
+    if (
+        parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise llm_bridge.BridgeError(
+            "로컬 LLM 브릿지 자동 시작 URL 형식이 올바르지 않습니다.",
+            payload={
+                "action": "APPFORGE_LLM_BRIDGE_URL을 http://127.0.0.1:8788 형식으로 설정하세요.",
+                "reason": "invalid_local_bridge_url",
+            },
+        )
     if parsed.scheme != "http":
         raise llm_bridge.BridgeError(
             "로컬 LLM 브릿지는 http URL에서만 자동 시작할 수 있습니다.",
             payload={
                 "action": "APPFORGE_LLM_BRIDGE_URL을 http://127.0.0.1:8788 형식으로 설정하거나 브릿지를 직접 실행하세요.",
                 "reason": "unsupported_scheme",
-                "bridge_url": base_url,
             },
         )
     host = parsed.hostname or ""
@@ -55,7 +109,6 @@ def _bridge_bind(base_url: str) -> tuple[str, str]:
             payload={
                 "action": "원격 브릿지 서버를 직접 실행한 뒤 APPFORGE_LLM_BRIDGE_URL이 올바른지 확인하세요.",
                 "reason": "non_loopback_url",
-                "bridge_url": base_url,
             },
         )
     port = parsed.port or 8788
@@ -85,26 +138,36 @@ class LLMBridgeProcessManager:
         self.timeout = timeout if timeout is not None else _env_float("APPFORGE_BRIDGE_TIMEOUT", 15.0)
         self._lock = threading.RLock()
         self._process: subprocess.Popen[bytes] | None = None
+        self.auth_token = os.environ.get("APPFORGE_LLM_BRIDGE_TOKEN") or secrets.token_urlsafe(48)
+        self._registered_urls: set[str] = set()
 
     def ensure_running(
         self,
         base_url: str,
         initial_error: llm_bridge.BridgeError | None = None,
     ) -> None:
-        if not self.enabled:
+        if len(self.auth_token) < 32:
             raise llm_bridge.BridgeError(
-                "LLM 브릿지 자동 시작이 비활성화되어 있습니다.",
-                payload={
-                    "action": "APPFORGE_LLM_BRIDGE_AUTOSTART=1로 실행하거나 llm_bridge에서 bun run start를 직접 실행하세요.",
-                    "reason": "autostart_disabled",
-                    "initial_error": str(initial_error) if initial_error else None,
-                },
+                "LLM 브릿지 인증 token은 32자 이상이어야 합니다.",
+                payload={"error": {"code": "BRIDGE_AUTH_TOKEN_WEAK"}},
             )
-
+        llm_bridge.register_bridge_token(base_url, self.auth_token)
+        self._registered_urls.add(base_url)
         with self._lock:
             self._forget_exited_process()
             if self._is_healthy(base_url):
                 return
+            if not self.enabled:
+                llm_bridge.unregister_bridge_token(base_url, self.auth_token)
+                self._registered_urls.discard(base_url)
+                raise llm_bridge.BridgeError(
+                    "LLM 브릿지 자동 시작이 비활성화되어 있습니다.",
+                    payload={
+                        "action": "APPFORGE_LLM_BRIDGE_AUTOSTART=1로 실행하거나 동일한 APPFORGE_LLM_BRIDGE_TOKEN으로 브릿지를 직접 실행하세요.",
+                        "reason": "autostart_disabled",
+                        "initial_error": str(initial_error) if initial_error else None,
+                    },
+                )
 
             process = self._process or self._start_process(base_url)
             deadline = time.monotonic() + self.timeout
@@ -118,6 +181,7 @@ class LLMBridgeProcessManager:
                     )
                 try:
                     llm_bridge.ping(base_url, timeout=1.0)
+                    llm_bridge.ready(base_url, timeout=1.0)
                     return
                 except llm_bridge.BridgeError as exc:
                     last_error = exc
@@ -134,19 +198,30 @@ class LLMBridgeProcessManager:
             process = self._process
             self._process = None
         if not process or process.poll() is not None:
-            return
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=5)
+            process = None
+        if process:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        for base_url in self._registered_urls:
+            llm_bridge.unregister_bridge_token(base_url, self.auth_token)
+        self._registered_urls.clear()
 
     def _is_healthy(self, base_url: str) -> bool:
         try:
             llm_bridge.ping(base_url, timeout=1.0)
+            llm_bridge.ready(base_url, timeout=1.0)
             return True
-        except llm_bridge.BridgeError:
+        except llm_bridge.BridgeError as exc:
+            if exc.status_code in {401, 403}:
+                raise llm_bridge.BridgeError(
+                    "실행 중인 LLM 브릿지와 인증 token이 일치하지 않습니다.",
+                    status_code=exc.status_code,
+                    payload={"error": {"code": "BRIDGE_AUTH_MISMATCH"}},
+                ) from exc
             return False
 
     def _start_process(self, base_url: str) -> subprocess.Popen[bytes]:
@@ -179,12 +254,14 @@ class LLMBridgeProcessManager:
                 },
             )
 
-        self.runtime_dir.mkdir(parents=True, exist_ok=True)
+        self.runtime_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if os.name != "nt":
+            self.runtime_dir.chmod(0o700)
         log_path = self.runtime_dir / "llm-bridge.log"
-        env = os.environ.copy()
-        env["APPFORGE_LLM_BRIDGE_HOST"] = bind_host
-        env["APPFORGE_LLM_BRIDGE_PORT"] = bind_port
+        env = _bridge_environment(bind_host, bind_port, self.auth_token)
         with log_path.open("ab") as log:
+            if os.name != "nt":
+                log_path.chmod(0o600)
             log.write(b"\n--- appforge web autostart ---\n")
             process = subprocess.Popen(
                 ["bun", "run", "start"],

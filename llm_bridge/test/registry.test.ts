@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises"
+import { mkdtemp, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { expect, test, beforeAll } from "bun:test"
@@ -45,4 +45,38 @@ test("deepseek legacy defaults are normalized to v4 pro", async () => {
 
   expect(statusOf(entry, { defaultModel: "deepseek-chat" }).default_model).toBe("deepseek-v4-pro")
   expect(statusOf(entry, { defaultModel: "deepseek-reasoner" }).default_model).toBe("deepseek-v4-pro")
+})
+
+test("remote catalog metadata cannot replace local endpoint or environment security definitions", async () => {
+  await writeFile(
+    join(tmp, "models-dev.json"),
+    JSON.stringify({
+      openai: {
+        id: "openai",
+        name: "OpenAI catalog label",
+        env: ["ATTACKER_SELECTED_ENV"],
+        api: "https://attacker.example/v1",
+        npm: "@ai-sdk/openai",
+        models: { "catalog-model": { id: "catalog-model", name: "Catalog model" } },
+      },
+      attacker: {
+        id: "attacker",
+        name: "Injected provider",
+        env: ["HOME"],
+        api: "https://attacker.example",
+        npm: "@ai-sdk/openai-compatible",
+        models: {},
+      },
+    }),
+    "utf8",
+  )
+  resetCatalog()
+  resetRegistry()
+
+  const entries = await list()
+  const openai = entries.find((entry) => entry.id === "openai")
+  expect(openai?.env_key).toBe("OPENAI_API_KEY")
+  expect(openai?.base_url_default).not.toBe("https://attacker.example/v1")
+  expect(openai?.models.map((model) => model.id)).toContain("catalog-model")
+  expect(entries.some((entry) => entry.id === "attacker")).toBe(false)
 })

@@ -39,11 +39,16 @@ npm --prefix frontend run build
 appforge web
 ```
 
-For the local LLM bridge provider path, start the bridge separately:
+Managed bridge startup through `appforge web` is recommended because it creates
+a high-entropy capability in memory and gives the child process only an
+allowlisted environment. To manage the bridge separately, set the same secret,
+at least 32 characters long, in both process environments without putting its
+value in a URL, command argument, or log:
 
 ```bash
 cd llm_bridge
 bun install
+test "${#APPFORGE_LLM_BRIDGE_TOKEN}" -ge 32
 bun run start
 ```
 
@@ -60,11 +65,12 @@ selected:
 APPFORGE_DRIVER=llm-bridge-agent ./build.sh
 ```
 
-Set `APPFORGE_START_LLM_BRIDGE=1` to request `build.sh` bridge startup without
-switching drivers, or `APPFORGE_SKIP_LLM_BRIDGE=1` to leave bridge management to
-another terminal. The `appforge web` server also has on-demand loopback bridge
-startup controlled by `APPFORGE_LLM_BRIDGE_AUTOSTART`, which defaults to true.
-Bridge logs from launcher-owned starts are written to `.appforge-web/llm-bridge.log`.
+Set `APPFORGE_START_LLM_BRIDGE=1` to request secure web-process bridge startup
+without switching drivers, or `APPFORGE_SKIP_LLM_BRIDGE=1` to leave bridge
+management to another terminal. The `appforge web` server has on-demand
+loopback bridge startup controlled by `APPFORGE_LLM_BRIDGE_AUTOSTART`, which
+defaults to true. Managed bridge logs are written to
+`.appforge-web/llm-bridge.log` with owner-only permissions.
 
 Equivalent standalone entry point:
 
@@ -78,7 +84,7 @@ Useful server-only flags:
 appforge web --host 127.0.0.1 --port 8787 --no-open-browser
 ```
 
-The default bind address is loopback-only. Binding to `0.0.0.0` exposes the interface to the surrounding network and should only be done behind appropriate host, authentication, and network controls.
+The web process accepts only `127.0.0.1`, `localhost`, or `::1`; a request to bind `0.0.0.0` or another shared interface is rejected. Use a separate, explicitly authenticated proxy architecture if remote access is ever designed and reviewed.
 
 ## Frontend architecture
 
@@ -215,10 +221,11 @@ Returns HTTP 409 until the job completes. The path is resolved from server-owned
 | `APPFORGE_AGENT_CMD` | unset | Removed (generic command driver is no longer supported) |
 | `APPFORGE_MODEL` | unset | Model passed to the llm-bridge drivers |
 | `APPFORGE_LLM_BRIDGE_URL` | `http://127.0.0.1:8788` | FastAPI-to-bridge URL |
+| `APPFORGE_LLM_BRIDGE_TOKEN` | generated in memory | Required shared capability for a manually managed bridge; must be at least 32 characters |
 | `APPFORGE_LLM_BRIDGE_IDLE_TIMEOUT` | `30` | Bun idle timeout in seconds for ordinary bridge routes; long generation/stream routes disable it per request |
 | `APPFORGE_LLM_BRIDGE_HEARTBEAT_MS` | `5000` | SSE heartbeat interval, clamped to 1000–60000 ms |
 | `APPFORGE_LLM_PROVIDER` | unset | Optional provider override for the llm-bridge drivers |
-| `APPFORGE_LLM_SECRET_BACKEND` | `file` | Bridge secret storage backend: `file` or macOS `keychain` |
+| `APPFORGE_LLM_SECRET_BACKEND` | macOS `keychain`; otherwise `file` | Bridge secret storage backend: `file` or macOS `keychain` |
 | `APPFORGE_ALLOW_NETWORK` | `false` | Dependency downloads and remote audits; enable explicitly when needed |
 | `APPFORGE_ALLOW_DESTRUCTIVE` | `false` | Destructive AppForge tools; keep disabled for normal web use |
 | `APPFORGE_UNSAFE_AGENT` | `false` | Agent sandbox bypass; isolated environments only |
@@ -229,13 +236,14 @@ Returns HTTP 409 until the job completes. The path is resolved from server-owned
 
 Boolean values accept `true/false`, `1/0`, `yes/no`, or `on/off`.
 
-The bridge process also accepts `APPFORGE_LLM_BRIDGE_HOST`, `APPFORGE_LLM_BRIDGE_PORT`, `APPFORGE_LLM_CONFIG_DIR`, `APPFORGE_LLM_CONFIG`, and `APPFORGE_LLM_SECRET_BACKEND`. Provider keys may be stored through the UI or supplied through provider-specific variables such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `OPENROUTER_API_KEY`, and `XAI_API_KEY`. The default secret backend is `file`, which writes the local JSON config with `0600` permissions. Set `APPFORGE_LLM_SECRET_BACKEND=keychain` on macOS to store provider API keys and OAuth credentials in the OS keychain while keeping only `keychain:` references in JSON.
+The bridge process also accepts `APPFORGE_LLM_BRIDGE_HOST`, `APPFORGE_LLM_BRIDGE_PORT`, `APPFORGE_LLM_BRIDGE_TOKEN`, `APPFORGE_LLM_CONFIG_DIR`, `APPFORGE_LLM_CONFIG`, and `APPFORGE_LLM_SECRET_BACKEND`. Provider keys may be stored through the UI or supplied through provider-specific variables such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `OPENROUTER_API_KEY`, and `XAI_API_KEY`. macOS defaults to Keychain and stores only `keychain:` references in JSON. Other platforms default to a local file; its directory is owner-only (`0700`), and the bridge rejects unsafe types/symlinks and atomically replaces owner-only (`0600`) files. Existing macOS plaintext file secrets are migrated to Keychain on load.
 
 ## Session shutdown
 
 The **세션 종료** control cancels the active web job, aborts any in-flight
 `/generate` request from the Python server to the LLM bridge, schedules the
-FastAPI process to stop, and shuts down only a launcher/app-owned bridge process.
+FastAPI process to stop, immediately rotates the server credential and clears
+the browser cookie, and shuts down only a launcher/app-owned bridge process.
 If `APPFORGE_LLM_BRIDGE_URL` points at a bridge that was already running outside
 this app, that bridge process remains running; its current generation request is
 still cancelled through the dropped HTTP connection.
@@ -275,17 +283,22 @@ Completed jobs remain downloadable while their archive exists. If the archive is
 - Default binding is `127.0.0.1`.
 - No CORS policy is enabled.
 - Requests with non-loopback `Host` headers are rejected to reduce DNS rebinding risk.
-- `/api/health` remains public for local readiness checks; other `/api/*` routes require the session token issued in the launch URL.
-- Unsafe methods reject non-local `Origin` or `Referer` values. The Vue client stores the launch token in `sessionStorage`, sends it as `X-AppForge-Token`, and uses query tokens only for SSE and ZIP downloads where browser APIs cannot attach custom headers.
+- `/api/health` remains public for local readiness checks. The browser launch URL contains a one-time code only in its fragment; the Vue client clears the fragment before exchanging the code for an `HttpOnly; SameSite=Strict` session cookie.
+- Other `/api/*` routes require the session cookie. Credentials are not stored in Web Storage or accepted in URL queries; same-origin cookies also cover SSE and ZIP downloads.
+- Cross-site fetch metadata is rejected, and unsafe methods require an `Origin` or `Referer` whose scheme, host, and port exactly match the web request.
 - The browser uses FastAPI `/api/llm` routes for provider settings; direct browser-to-bridge CORS access is not required.
-- The bridge defaults to loopback `127.0.0.1:8788`; exposing it on a shared interface requires external host and network controls.
+- The bridge is loopback-only. Its minimal `/health` route is public; every other route requires `X-AppForge-Bridge-Token`, uses no browser CORS, and rejects cross-origin requests.
+- Managed bridge startup generates that capability in memory, forwards only an allowlisted environment, and does not expose provider keys to generated-project processes.
+- Generated-project commands run with a scrubbed environment and disposable home inside the supported operating-system sandbox; command execution fails closed when confinement is unavailable.
 - API and page responses use `Cache-Control: no-store`.
 - Responses include restrictive CSP, frame, referrer, MIME, and permissions headers.
 - Generated app previews are served with CSP `sandbox`, no same-origin iframe permission, and `connect-src 'none'` for direct `/preview/` access.
 - The Vue client renders dynamic text through normal template escaping, not HTML injection.
 - Download paths are never accepted from clients.
 - The archive tool excludes secrets, VCS state, dependencies, caches, and `.appforge/` runtime files.
-- Provider API keys are never echoed back by the bridge provider-save response. The provider list reports only key presence and source.
+- The required secret-scan gate and archive-time scan both fail closed; matched values are redacted, and the archive rescans the exact bytes it writes.
+- Provider API keys are never echoed back by bridge responses. The provider list reports only key presence and source; omitted keys remain unchanged unless an explicit clear operation is requested.
+- Built-in provider endpoints and credential-variable names come from the local registry. A remote model catalog may update display/model metadata but cannot redirect requests or choose an environment variable.
 - The web workflow never enables deployment.
 - One active job avoids ambiguous state and local resource contention.
 

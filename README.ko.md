@@ -78,7 +78,7 @@ npm --prefix frontend run build
 AppForge-LLM v7는 파이프라인의 모든 단계를 로컬 LLM 브릿지(`llm_bridge/`)를 거쳐 **외부 LLM API**로만 실행합니다. Codex CLI / Claude Code CLI / 사용자 정의 명령(`APPFORGE_AGENT_CMD`) 드라이버는 제거되었습니다.
 
 1. 브릿지 의존성 설치: `cd llm_bridge && bun install`
-2. `appforge web` 실행 — 웹앱이 loopback 브릿지를 자동으로 시작합니다(또는 `bun run dev`로 직접 실행).
+2. `appforge web` 실행 — 웹앱이 고강도 일회성 capability로 loopback 브릿지를 자동 시작합니다. 직접 실행할 때는 브릿지와 AppForge에 동일한 32자 이상의 `APPFORGE_LLM_BRIDGE_TOKEN`을 안전하게 설정해야 합니다.
 3. 웹앱 상단의 LLM 연결 설정 패널에서 프로바이더·API 키·모델을 선택합니다.
 4. 선택한 프로바이더/모델이 활성화되면 준비 완료 상태가 되고 파이프라인을 시작할 수 있습니다.
 
@@ -90,7 +90,9 @@ APPFORGE_DATA_DIR              웹 작업 상태 경로, 기본값 .appforge-web
 APPFORGE_DRIVER                llm-bridge-agent 기본값, auto는 동일한 브릿지 에이전트 경로 별칭
 APPFORGE_MODEL                 브릿지에 전달할 모델 이름 (선택)
 APPFORGE_LLM_BRIDGE_URL        FastAPI→브릿지 URL, 기본값 http://127.0.0.1:8788
+APPFORGE_LLM_BRIDGE_TOKEN      수동 관리 브릿지에 필수, 자동 시작 시 메모리에서 생성
 APPFORGE_LLM_PROVIDER          활성 프로바이더 덮어쓰기 (선택)
+APPFORGE_LLM_SECRET_BACKEND    macOS는 keychain 기본, 그 외 OS는 보호된 file 기본
 APPFORGE_LLM_BRIDGE_AUTOSTART  appforge web의 loopback 브릿지 자동 시작, 기본값 true
 APPFORGE_LLM_BRIDGE_IDLE_TIMEOUT 일반 관리 경로의 Bun 유휴 제한, 기본값 30초
 APPFORGE_LLM_BRIDGE_HEARTBEAT_MS SSE 하트비트 간격, 기본값 5000ms(1000~60000 범위)
@@ -103,6 +105,8 @@ APPFORGE_PROMPT_MAX_CHARS      요청 입력 제한, 기본값 20000
 ```
 
 > 참고: `codex`, `claude`, `generic`을 `APPFORGE_DRIVER`에 지정하면 거부됩니다. 외부 LLM 프로바이더 API 키만 지원합니다.
+
+API 키는 브라우저로 다시 반환되지 않습니다. macOS에서는 Keychain이 기본 저장소이며, 다른 운영체제의 파일 백엔드는 설정 디렉터리 `0700`·원자적 설정 파일 `0600` 권한을 사용합니다. 웹 세션 값은 URL 쿼리나 Web Storage에 저장하지 않고, 한 번만 교환되는 URL fragment와 `HttpOnly; SameSite=Strict` 쿠키로 전달합니다.
 
 ## 기존 CLI 호환성
 

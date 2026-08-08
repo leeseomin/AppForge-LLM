@@ -4,6 +4,7 @@ import os
 import re
 import shlex
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,8 @@ from typing import Sequence
 from appforge.constants import DEFAULT_COMMAND_TIMEOUT, MAX_CAPTURE_CHARS
 from appforge.models import ToolResult
 from appforge.util import redact, truncate
+
+from .sandbox import ExecutionSandboxUnavailable, sandbox_invocation, sanitized_path
 
 _BLOCKED_PATTERNS = [
     re.compile(r"(^|\s)sudo(\s|$)", re.I),
@@ -33,16 +36,12 @@ _DESTRUCTIVE_EXECUTABLES = {"rm", "rmdir", "shred", "truncate", "unlink"}
 _PACKAGE_MANAGERS = {"npm", "pnpm", "yarn", "bun", "cargo", "go", "gradle", "mvn", "flutter", "dart"}
 _DEPENDENCY_INSTALL_VERBS = {"install", "ci", "add", "fetch", "download", "get", "restore", "sync"}
 
-SAFE_ENV_KEYS = {
-    "PATH",
-    "HOME",
-    "USER",
-    "TMPDIR",
-    "TEMP",
-    "TMP",
-    "SYSTEMROOT",
-    "COMSPEC",
-}
+_PROTECTED_ENV_KEYS = {"PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TEMP", "TMP"}
+_SENSITIVE_ENV_NAME = re.compile(
+    r"(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH|COOKIE)",
+    re.I,
+)
+_VALID_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # Test runners such as vitest and jest default to an interactive watch loop, which
 # never exits and would hang a gate until its timeout. Every major runner treats
@@ -196,36 +195,98 @@ def run_command(
     policy = policy or CommandPolicy()
     argv = normalize_command(command)
     validate_command(argv, policy, workspace=workspace)
-    merged_env = {
-        key: value
-        for key, value in os.environ.items()
-        if key in SAFE_ENV_KEYS
-    }
-    merged_env.update(NON_INTERACTIVE_ENV)
-    if env:
-        merged_env.update({str(k): str(v) for k, v in env.items()})
     started = time.monotonic()
-    try:
-        completed = subprocess.run(
-            argv,
-            cwd=workspace,
-            env=merged_env,
-            text=True,
-            capture_output=True,
-            timeout=max(1, int(policy.timeout_seconds)),
-            shell=False,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        stdout = redact(truncate(exc.stdout or "", MAX_CAPTURE_CHARS))
-        stderr = redact(truncate(exc.stderr or "", MAX_CAPTURE_CHARS))
-        return ToolResult(
-            success=False,
-            error=f"Command timed out after {policy.timeout_seconds}s",
-            data={"stdout": stdout, "stderr": stderr, "timed_out": True},
-            duration_seconds=round(time.monotonic() - started, 4),
-            command=argv,
-        )
+    workspace = workspace.resolve()
+    with tempfile.TemporaryDirectory(prefix="appforge-command-") as temporary:
+        sandbox_home = Path(temporary).resolve()
+        (sandbox_home / "tmp").mkdir(mode=0o700)
+        merged_env = {
+            "PATH": sanitized_path(workspace),
+            "HOME": str(sandbox_home),
+            "USER": "appforge-sandbox",
+            "LOGNAME": "appforge-sandbox",
+            "TMPDIR": str(sandbox_home / "tmp"),
+            "TEMP": str(sandbox_home / "tmp"),
+            "TMP": str(sandbox_home / "tmp"),
+            **NON_INTERACTIVE_ENV,
+        }
+        if env:
+            for raw_key, raw_value in env.items():
+                key = str(raw_key)
+                if not _VALID_ENV_NAME.fullmatch(key):
+                    raise PermissionError(f"Invalid environment variable name: {key!r}")
+                if key in _PROTECTED_ENV_KEYS:
+                    raise PermissionError(f"Project commands cannot override protected environment variable {key}")
+                if _SENSITIVE_ENV_NAME.search(key):
+                    raise PermissionError(f"Project commands cannot receive secret-like environment variable {key}")
+                merged_env[key] = str(raw_value)
+        try:
+            invocation = sandbox_invocation(
+                workspace,
+                sandbox_home,
+                argv,
+                allow_network=(
+                    policy.allow_network
+                    or (
+                        policy.allow_dependency_install
+                        and _is_workspace_dependency_install(argv, workspace)
+                    )
+                ),
+            )
+        except ExecutionSandboxUnavailable as exc:
+            return ToolResult(
+                success=False,
+                error="Secure project execution sandbox is unavailable",
+                data={
+                    "stdout": "",
+                    "stderr": "",
+                    "timed_out": False,
+                    "code": "EXECUTION_SANDBOX_UNAVAILABLE",
+                    "reason": str(exc),
+                },
+                duration_seconds=round(time.monotonic() - started, 4),
+                command=argv,
+            )
+        try:
+            completed = subprocess.run(
+                invocation.argv,
+                cwd=workspace,
+                env=merged_env,
+                text=True,
+                capture_output=True,
+                timeout=max(1, int(policy.timeout_seconds)),
+                shell=False,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = redact(truncate(exc.stdout or "", MAX_CAPTURE_CHARS))
+            stderr = redact(truncate(exc.stderr or "", MAX_CAPTURE_CHARS))
+            return ToolResult(
+                success=False,
+                error=f"Command timed out after {policy.timeout_seconds}s",
+                data={
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "timed_out": True,
+                    "sandbox": invocation.backend,
+                },
+                duration_seconds=round(time.monotonic() - started, 4),
+                command=argv,
+            )
+        except FileNotFoundError:
+            return ToolResult(
+                success=False,
+                error="Command runner is unavailable",
+                data={
+                    "returncode": 127,
+                    "stdout": "",
+                    "stderr": "command not found",
+                    "timed_out": False,
+                    "sandbox": invocation.backend,
+                },
+                duration_seconds=round(time.monotonic() - started, 4),
+                command=argv,
+            )
     stdout = redact(truncate(completed.stdout, MAX_CAPTURE_CHARS))
     stderr = redact(truncate(completed.stderr, MAX_CAPTURE_CHARS))
     return ToolResult(
@@ -236,6 +297,7 @@ def run_command(
             "stdout": stdout,
             "stderr": stderr,
             "timed_out": False,
+            "sandbox": invocation.backend,
         },
         duration_seconds=round(time.monotonic() - started, 4),
         command=argv,

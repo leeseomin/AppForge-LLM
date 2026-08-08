@@ -16,11 +16,19 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import socket
 import threading
 import time
 from typing import Any, Iterator
 from urllib.parse import quote, urlsplit
+
+
+BRIDGE_TOKEN_HEADER = "X-AppForge-Bridge-Token"
+BRIDGE_TOKEN_ENV = "APPFORGE_LLM_BRIDGE_TOKEN"
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+_bridge_tokens: dict[str, str] = {}
+_bridge_tokens_lock = threading.RLock()
 
 
 class BridgeError(RuntimeError):
@@ -57,6 +65,81 @@ class BridgeCancelled(BridgeError):
         )
 
 
+def _bridge_key(base_url: str) -> str:
+    parsed = urlsplit(base_url.rstrip("/"))
+    host = (parsed.hostname or "").casefold()
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return f"{parsed.scheme.casefold()}://{host}:{port}{parsed.path.rstrip('/')}"
+
+
+def register_bridge_token(base_url: str, token: str) -> None:
+    """Register an in-memory capability token for one bridge origin.
+
+    The token is intentionally not placed in browser state or generated-project
+    environments.  An explicit environment token remains supported for a bridge
+    that the operator starts manually.
+    """
+
+    if not token:
+        raise ValueError("LLM bridge token cannot be empty")
+    with _bridge_tokens_lock:
+        _bridge_tokens[_bridge_key(base_url)] = token
+
+
+def unregister_bridge_token(base_url: str, token: str | None = None) -> None:
+    key = _bridge_key(base_url)
+    with _bridge_tokens_lock:
+        if token is None or _bridge_tokens.get(key) == token:
+            _bridge_tokens.pop(key, None)
+
+
+def _validate_bridge_url(base_url: str) -> tuple[Any, bool]:
+    parsed = urlsplit(base_url.rstrip("/"))
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or not parsed.hostname:
+        raise BridgeError(
+            "LLM 브릿지 URL 형식이 올바르지 않습니다.",
+            payload={"error": {"code": "INVALID_BRIDGE_URL"}},
+        )
+    if parsed.username is not None or parsed.password is not None:
+        raise BridgeError(
+            "LLM 브릿지 URL에 사용자 정보나 비밀번호를 넣을 수 없습니다.",
+            payload={"error": {"code": "INVALID_BRIDGE_URL"}},
+        )
+    loopback = parsed.hostname.casefold() in _LOOPBACK_HOSTS
+    if parsed.scheme == "http" and not loopback:
+        raise BridgeError(
+            "원격 LLM 브릿지는 HTTPS로만 연결할 수 있습니다.",
+            payload={"error": {"code": "INSECURE_BRIDGE_URL"}},
+        )
+    return parsed, loopback
+
+
+def _auth_token(base_url: str) -> str | None:
+    with _bridge_tokens_lock:
+        registered = _bridge_tokens.get(_bridge_key(base_url))
+    return registered or os.environ.get(BRIDGE_TOKEN_ENV)
+
+
+def _request_headers(base_url: str, path: str, accept: str) -> dict[str, str]:
+    headers = {"Accept": accept}
+    normalized_path = "/" + path.lstrip("/")
+    if normalized_path.rstrip("/") == "/health":
+        return headers
+    token = _auth_token(base_url)
+    if not token:
+        raise BridgeError(
+            "LLM 브릿지 인증 token이 설정되지 않았습니다.",
+            payload={
+                "error": {
+                    "code": "BRIDGE_AUTH_TOKEN_MISSING",
+                    "message": "Set APPFORGE_LLM_BRIDGE_TOKEN or use the managed local bridge.",
+                }
+            },
+        )
+    headers[BRIDGE_TOKEN_HEADER] = token
+    return headers
+
+
 def _normalize_response_format(response_format: dict[str, Any] | None) -> dict[str, Any] | None:
     """Convert OpenAI-style JSON schema hints to the local bridge contract."""
     if not isinstance(response_format, dict):
@@ -84,14 +167,12 @@ def _request(
     if cancel_event is not None and cancel_event.is_set():
         raise BridgeCancelled()
 
-    parsed_url = urlsplit(base_url.rstrip("/"))
-    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
-        raise BridgeError(f"Invalid LLM bridge URL: {base_url}")
+    parsed_url, _loopback = _validate_bridge_url(base_url)
 
     root_path = parsed_url.path.rstrip("/")
     request_path = f"{root_path}/{path.lstrip('/')}" or "/"
     data: bytes | None = None
-    headers = {"Accept": "application/json"}
+    headers = _request_headers(base_url, path, "application/json")
     if body is not None:
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"
@@ -139,7 +220,11 @@ def _request(
             except json.JSONDecodeError:
                 parsed = None
             error_payload = parsed.get("error") if parsed else None
-            message = error_payload.get("message") if isinstance(error_payload, dict) else raw
+            message = (
+                error_payload.get("message")
+                if isinstance(error_payload, dict)
+                else f"bridge returned HTTP {response.status}"
+            )
             raise BridgeError(
                 str(message or f"bridge returned HTTP {response.status}"),
                 status_code=response.status,
@@ -174,9 +259,7 @@ def _request(
 
 
 def _open_connection(base_url: str, timeout: float) -> tuple[http.client.HTTPConnection | http.client.HTTPSConnection, str]:
-    parsed_url = urlsplit(base_url.rstrip("/"))
-    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
-        raise BridgeError(f"Invalid LLM bridge URL: {base_url}")
+    parsed_url, _loopback = _validate_bridge_url(base_url)
     connection_class = http.client.HTTPSConnection if parsed_url.scheme == "https" else http.client.HTTPConnection
     connection = connection_class(parsed_url.hostname, parsed_url.port, timeout=timeout)
     return connection, parsed_url.path.rstrip("/")
@@ -196,7 +279,7 @@ def _sse_request(
     connection, root_path = _open_connection(base_url, timeout)
     request_path = f"{root_path}/{path.lstrip('/')}" or "/"
     data: bytes | None = None
-    headers = {"Accept": "text/event-stream"}
+    headers = _request_headers(base_url, path, "text/event-stream")
     if body is not None:
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"
@@ -444,6 +527,11 @@ def ping(base_url: str, *, timeout: float = 2.0) -> dict[str, Any]:
     return _request(base_url, "GET", "/health", timeout=timeout)
 
 
+def ready(base_url: str, *, timeout: float = 2.0) -> dict[str, Any]:
+    """Check the authenticated bridge capability without loading credentials."""
+    return _request(base_url, "GET", "/ready", timeout=timeout)
+
+
 def list_providers(base_url: str, *, timeout: float = 5.0) -> dict[str, Any]:
     return _request(base_url, "GET", "/providers", timeout=timeout)
 
@@ -457,6 +545,7 @@ def upsert_provider(
     provider_id: str,
     *,
     api_key: str | None = None,
+    clear_api_key: bool = False,
     base_url_override: str | None = None,
     default_model: str | None = None,
     timeout: float = 5.0,
@@ -464,6 +553,8 @@ def upsert_provider(
     body: dict[str, Any] = {}
     if api_key is not None:
         body["apiKey"] = api_key
+    if clear_api_key:
+        body["clearApiKey"] = True
     if base_url_override is not None:
         body["baseURL"] = base_url_override
     if default_model is not None:

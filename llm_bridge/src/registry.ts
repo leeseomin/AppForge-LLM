@@ -29,121 +29,6 @@ export interface RegistryEntry extends ProviderDescriptor {
 
 const m = (id: string, name?: string, cost?: ProviderModel["cost"]): ProviderModel => ({ id, name, cost })
 
-const DOCS_URLS: Record<string, string> = {
-  openai: "https://platform.openai.com/api-keys",
-  anthropic: "https://console.anthropic.com/settings/keys",
-  google: "https://aistudio.google.com/app/apikey",
-  openrouter: "https://openrouter.ai/settings/keys",
-  xai: "https://console.x.ai",
-  deepseek: "https://platform.deepseek.com/api_keys",
-  groq: "https://console.groq.com/keys",
-  cerebras: "https://cloud.cerebras.ai",
-  togetherai: "https://api.together.ai/settings/api-keys",
-  fireworks: "https://fireworks.ai/account/api-keys",
-  deepinfra: "https://deepinfra.com/dash/api_keys",
-  baseten: "https://www.baseten.co/library/api-key/",
-}
-
-const SUPPORTED_NPM = new Set([
-  "@ai-sdk/openai",
-  "@ai-sdk/anthropic",
-  "@ai-sdk/google",
-  "@openrouter/ai-sdk-provider",
-  "@ai-sdk/xai",
-  "@ai-sdk/openai-compatible",
-  "@ai-sdk/github-copilot",
-])
-
-const COMPAT_PROFILE_IDS = new Set([
-  "baseten",
-  "cerebras",
-  "deepinfra",
-  "deepseek",
-  "fireworks",
-  "groq",
-  "togetherai",
-])
-
-interface CompatFacade {
-  configure: (input: { apiKey: string; baseURL?: string }) => { model: (id: string) => Model }
-}
-
-const COMPAT_BUILDERS: Record<string, CompatFacade> = {
-  baseten: OpenAICompatible.baseten,
-  cerebras: OpenAICompatible.cerebras,
-  deepinfra: OpenAICompatible.deepinfra,
-  deepseek: OpenAICompatible.deepseek,
-  fireworks: OpenAICompatible.fireworks,
-  groq: OpenAICompatible.groq,
-  togetherai: OpenAICompatible.togetherai,
-}
-
-function isSupportedProvider(p: catalog.CatalogProvider): boolean {
-  if (p.npm && SUPPORTED_NPM.has(p.npm)) return true
-  return COMPAT_PROFILE_IDS.has(p.id)
-}
-
-type BuildFn = RegistryEntry["build"]
-
-function buildForCatalog(p: catalog.CatalogProvider): BuildFn {
-  const npm = p.npm
-  const resolveBase = (override?: string): string | undefined => override ?? p.api
-  switch (npm) {
-    case "@ai-sdk/openai":
-      return (id, o) => OpenAI.configure({ apiKey: o.apiKey, baseURL: resolveBase(o.baseURL) }).model(id)
-    case "@ai-sdk/anthropic":
-      return (id, o) => Anthropic.configure({ apiKey: o.apiKey, baseURL: resolveBase(o.baseURL) }).model(id)
-    case "@ai-sdk/google":
-      return (id, o) => Google.configure({ apiKey: o.apiKey, baseURL: resolveBase(o.baseURL) }).model(id)
-    case "@openrouter/ai-sdk-provider":
-      return (id, o) => OpenRouter.configure({ apiKey: o.apiKey, baseURL: resolveBase(o.baseURL) }).model(id)
-    case "@ai-sdk/xai":
-      return (id, o) => XAI.configure({ apiKey: o.apiKey, baseURL: resolveBase(o.baseURL) }).model(id)
-    case "@ai-sdk/github-copilot":
-    case "@ai-sdk/openai-compatible":
-    default: {
-      const profileBuilder = COMPAT_BUILDERS[p.id]
-      if (profileBuilder) {
-        return (id, o) => profileBuilder.configure({ apiKey: o.apiKey, baseURL: resolveBase(o.baseURL) }).model(id)
-      }
-      return (id, o) =>
-        OpenAICompatible.configure({
-          apiKey: o.apiKey,
-          baseURL: resolveBase(o.baseURL) ?? "",
-          provider: p.id,
-        }).model(id)
-    }
-  }
-}
-
-function buildEntriesFromCatalog(cat: catalog.Catalog): RegistryEntry[] {
-  const entries: RegistryEntry[] = []
-  for (const [id, p] of Object.entries(cat)) {
-    if (!p || typeof p !== "object") continue
-    if (!isSupportedProvider(p)) continue
-    const models: ProviderModel[] = Object.entries(p.models ?? {}).map(([mid, cm]) =>
-      m(mid, cm?.name, cm?.cost),
-    )
-    const kind: ProviderKind = p.npm === "@ai-sdk/openai-compatible" && !COMPAT_PROFILE_IDS.has(id)
-      ? "openai-compatible"
-      : "api-key"
-    const baseRequired = !p.api && !COMPAT_PROFILE_IDS.has(id)
-    entries.push({
-      id,
-      name: p.name || id,
-      kind,
-      env_key: p.env?.[0],
-      base_url_default: p.api,
-      base_url_required: baseRequired || undefined,
-      docs_url: DOCS_URLS[id],
-      models,
-      build: buildForCatalog(p),
-    })
-  }
-  entries.sort((a, b) => a.name.localeCompare(b.name))
-  return entries
-}
-
 const STATIC_ENTRIES: RegistryEntry[] = [
   {
     id: "openai",
@@ -219,6 +104,7 @@ const STATIC_ENTRIES: RegistryEntry[] = [
     id: "deepseek",
     name: "DeepSeek",
     kind: "openai-compatible",
+    env_key: "DEEPSEEK_API_KEY",
     base_url_default: "https://api.deepseek.com/v1",
     docs_url: "https://platform.deepseek.com/api_keys",
     default_model: "deepseek-v4-pro",
@@ -234,6 +120,7 @@ const STATIC_ENTRIES: RegistryEntry[] = [
     id: "groq",
     name: "Groq",
     kind: "openai-compatible",
+    env_key: "GROQ_API_KEY",
     base_url_default: "https://api.groq.com/openai/v1",
     docs_url: "https://console.groq.com/keys",
     models: [m("llama-3.3-70b-versatile", "Llama 3.3 70B"), m("llama-3.1-8b-instant", "Llama 3.1 8B")],
@@ -243,6 +130,7 @@ const STATIC_ENTRIES: RegistryEntry[] = [
     id: "cerebras",
     name: "Cerebras",
     kind: "openai-compatible",
+    env_key: "CEREBRAS_API_KEY",
     base_url_default: "https://api.cerebras.ai/v1",
     docs_url: "https://cloud.cerebras.ai",
     models: [m("llama3.1-70b", "Llama 3.1 70B"), m("llama3.1-8b", "Llama 3.1 8B")],
@@ -252,6 +140,7 @@ const STATIC_ENTRIES: RegistryEntry[] = [
     id: "togetherai",
     name: "Together AI",
     kind: "openai-compatible",
+    env_key: "TOGETHERAI_API_KEY",
     base_url_default: "https://api.together.xyz/v1",
     docs_url: "https://api.together.ai/settings/api-keys",
     models: [m("meta.llama/Llama-3.3-70B-Instruct-Turbo", "Llama 3.3 70B Turbo")],
@@ -261,6 +150,7 @@ const STATIC_ENTRIES: RegistryEntry[] = [
     id: "fireworks",
     name: "Fireworks AI",
     kind: "openai-compatible",
+    env_key: "FIREWORKS_API_KEY",
     base_url_default: "https://api.fireworks.ai/inference/v1",
     docs_url: "https://fireworks.ai/account/api-keys",
     models: [m("accounts/fireworks/models/llama-v3p1-70b-instruct", "Llama 3.1 70B")],
@@ -270,6 +160,7 @@ const STATIC_ENTRIES: RegistryEntry[] = [
     id: "deepinfra",
     name: "DeepInfra",
     kind: "openai-compatible",
+    env_key: "DEEPINFRA_API_KEY",
     base_url_default: "https://api.deepinfra.com/v1/openai",
     docs_url: "https://deepinfra.com/dash/api_keys",
     models: [m("meta-llama/Meta-Llama-3.1-70B-Instruct", "Llama 3.1 70B")],
@@ -309,6 +200,36 @@ const STATIC_ENTRIES: RegistryEntry[] = [
   },
 ]
 
+function safeCatalogModels(provider: catalog.CatalogProvider | undefined): ProviderModel[] {
+  if (!provider || !provider.models || typeof provider.models !== "object") return []
+  const models: ProviderModel[] = []
+  for (const [id, candidate] of Object.entries(provider.models)) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/.test(id)) continue
+    const name = typeof candidate?.name === "string" && candidate.name.length <= 256
+      ? candidate.name
+      : undefined
+    models.push(m(id, name, candidate?.cost))
+  }
+  return models
+}
+
+function mergeCatalogMetadata(cat: catalog.Catalog): RegistryEntry[] {
+  return STATIC_ENTRIES.map((entry) => {
+    const remote = cat[entry.id]
+    const models = safeCatalogModels(remote)
+    return {
+      ...entry,
+      // The remote catalog is presentation/model metadata only. Endpoint,
+      // environment variable, provider implementation and credential kind stay
+      // owned by this local registry.
+      name: typeof remote?.name === "string" && remote.name.length <= 128
+        ? remote.name
+        : entry.name,
+      models: models.length > 0 ? models : entry.models,
+    }
+  })
+}
+
 let loadedEntries: RegistryEntry[] | null = null
 let loadedFromCatalog = false
 
@@ -316,7 +237,7 @@ async function loadEntries(): Promise<RegistryEntry[]> {
   if (loadedEntries) return loadedEntries
   const cat = await catalog.getCatalog()
   if (cat) {
-    loadedEntries = buildEntriesFromCatalog(cat)
+    loadedEntries = mergeCatalogMetadata(cat)
     loadedFromCatalog = true
   } else {
     loadedEntries = STATIC_ENTRIES
@@ -349,7 +270,7 @@ export function _resetForTest(): void {
 
 export async function refreshCatalog(): Promise<boolean> {
   const cat = await catalog.fetchCatalog(true)
-  loadedEntries = cat ? buildEntriesFromCatalog(cat) : STATIC_ENTRIES
+  loadedEntries = cat ? mergeCatalogMetadata(cat) : STATIC_ENTRIES
   loadedFromCatalog = Boolean(cat)
   byIdCache = loadedEntries ? indexEntries(loadedEntries) : null
   return loadedFromCatalog
@@ -389,7 +310,9 @@ function resolveKey(entry: RegistryEntry, stored: StoredProviderConfig | undefin
 }
 
 function resolveBaseURL(entry: RegistryEntry, stored: StoredProviderConfig | undefined): string | undefined {
-  if (stored?.baseURL && stored.baseURL.length > 0) return stored.baseURL
+  if (entry.id === "openai-compatible" && stored?.baseURL && stored.baseURL.length > 0) {
+    return stored.baseURL
+  }
   return entry.base_url_default
 }
 

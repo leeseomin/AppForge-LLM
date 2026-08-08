@@ -7,7 +7,7 @@ OpenAppForge treats the coding agent as a powerful but fallible worker. Agent ou
 - Workspace file paths are resolved against the adopted project root.
 - AppForge network tools are disabled unless `allow_network=true` reaches the tool contract.
 - Tools marked destructive require `allow_destructive=true`.
-- Command execution uses argument vectors with `shell=False`, bounded timeouts, and captured/redacted output.
+- Generated-project command execution uses argument vectors with `shell=False`, bounded timeouts, captured/redacted output, a scrubbed environment, a disposable home directory, and an operating-system sandbox. Execution fails closed when a supported sandbox is unavailable.
 - Dependency installation is a capability of its own, `allow_dependency_install`, enabled by
   default and disabled with `--no-dependency-install` or `APPFORGE_ALLOW_DEPENDENCY_INSTALL=false`.
   It permits package managers to resolve dependencies whose writes land inside the workspace
@@ -21,19 +21,20 @@ OpenAppForge treats the coding agent as a powerful but fallible worker. Agent ou
   runners terminate instead of hanging a gate until its timeout.
 - Known destructive system, disk, force-push, and pipe-to-shell patterns are blocked by the command policy.
 - Codex/Claude/generic local coding-agent CLI drivers were removed; each pipeline stage runs through the local LLM bridge against a configured external provider API key.
-- The bridge binds to the loopback interface only; provider API keys are persisted in a `0600`-permission config file and are never sent to the browser.
+- The bridge binds to loopback only. Except for its minimal `/health` response, every route requires a separate high-entropy capability token. Managed startup keeps that capability in process memory and forwards only an allowlisted environment to the bridge.
+- Provider API keys are never sent back to the browser. macOS uses Keychain by default; the file backend uses a `0700` directory, rejects symlinks and unsafe ownership/type, and atomically replaces `0600` files.
 - `--unsafe-agent` is retained only for isolated environments and never bypasses artifact or gate validation.
 
 The external LLM provider may produce incorrect or unsafe code. Its output is treated as untrusted text until AppForge's schema, gate, and review layers validate it. AppForge never lets the model execute commands or edit files directly; the bridge only returns a JSON envelope that the runner applies. Run untrusted application requests in a disposable workspace or container.
 
-`--allow-network` governs AppForge's declared network tools; it is not an operating-system firewall. Repository test and build commands execute project code and can create subprocesses or network connections permitted by the host. Use a container, VM, or host firewall when the repository or generated code is untrusted.
+`--allow-network` governs declared network tools and sandbox egress. On macOS, generated commands remain unable to reach loopback services and receive remote egress only when network access is enabled. Linux uses Bubblewrap with a private network namespace and currently fails closed rather than offering remote egress; unsupported hosts also fail closed. A disposable container or VM remains useful defense in depth for highly untrusted input.
 
 
 ## Web application boundary
 
-The v5 web server binds to `127.0.0.1` by default and has no built-in multi-user authentication. Do not bind it to a public or shared network interface unless an authenticated reverse proxy, host firewall, and operating-system isolation are in place.
+The v7 web server binds to `127.0.0.1` by default and has process-scoped single-user session protection, not account-based multi-user authentication. A one-time launch fragment is cleared before exchange for an `HttpOnly; SameSite=Strict` cookie. Protected routes also enforce loopback `Host` and exact scheme/host/port origin checks. Do not bind it to a public or shared network interface unless an authenticated reverse proxy, host firewall, and operating-system isolation are in place.
 
-The web workflow enables AppForge network-dependent tools by default to make dependency installation and release checks achievable through the single-click path. Set `APPFORGE_ALLOW_NETWORK=false` to restore an offline tool policy. This setting is still not an operating-system firewall and does not constrain arbitrary network activity performed by repository build scripts or the LLM bridge process.
+The web workflow leaves AppForge network-dependent tools disabled by default. Set `APPFORGE_ALLOW_NETWORK=true` only after reviewing the generated workspace and dependency sources. The trusted LLM bridge has independent provider-network access; generated-project processes do not receive its capability token or provider-key environment.
 
 The web layer accepts only the natural-language request from the browser. Pipeline selection, project paths, driver configuration, safety flags, and archive paths are server-owned. Downloads are limited to the completed job's `.appforge/reports/` directory and remain unavailable until ZIP integrity verification succeeds.
 
@@ -52,7 +53,7 @@ These actions require separate, explicit user approval outside the ordinary `for
 
 ## Secrets
 
-Captured command output is redacted for common key/token/password patterns. The release process scans text source for likely private keys, cloud access keys, GitHub-style tokens, and generic credential assignments.
+Captured command output is redacted for common key/token/password patterns. Before release, the required secret-scan gate checks the source, and the archiver scans the exact inclusion set and the exact bytes it writes. It covers common provider keys, private keys, cloud credentials, bearer/JWT/npm tokens, and generic credential assignments without echoing matched secret text. Unreadable or oversized unscannable files fail closed.
 
 The source archiver excludes:
 
@@ -63,7 +64,7 @@ The source archiver excludes:
 - dependency, build, coverage, and cache directories;
 - the complete `.appforge/` control directory.
 
-Secret scanning is heuristic and cannot prove absence. Use a dedicated organizational secret scanner before public release when available.
+Secret scanning is heuristic and cannot prove absence. The archive is blocked on a finding or unscannable input, but a dedicated organizational secret scanner is still recommended before public release.
 
 ## Evidence integrity
 

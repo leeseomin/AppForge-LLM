@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto"
 import * as registry from "./registry"
 import * as store from "./config"
 import * as catalog from "./catalog"
@@ -21,6 +22,8 @@ const PORT = Number(process.env.PORT || process.env.APPFORGE_LLM_BRIDGE_PORT || 
 const HOST = process.env.HOST || process.env.APPFORGE_LLM_BRIDGE_HOST || "127.0.0.1"
 const DEFAULT_IDLE_TIMEOUT_SECONDS = 30
 const DEFAULT_SSE_HEARTBEAT_MS = 5_000
+const BRIDGE_TOKEN_HEADER = "x-appforge-bridge-token"
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"])
 
 function heartbeatIntervalMs(): number {
   const raw = process.env.APPFORGE_LLM_BRIDGE_HEARTBEAT_MS
@@ -50,6 +53,7 @@ interface Route {
 
 const ROUTES: Route[] = [
   { method: "GET", pattern: /^\/health\/?$/, handler: health },
+  { method: "GET", pattern: /^\/ready\/?$/, handler: ready },
   { method: "GET", pattern: /^\/providers\/?$/, handler: listProviders },
   { method: "POST", pattern: /^\/catalog\/refresh\/?$/, handler: refreshCatalog },
   { method: "PUT", pattern: /^\/providers\/([^/]+)\/?$/, handler: upsertProvider },
@@ -81,16 +85,46 @@ function errorResponse(message: string, status = 400, code = "BRIDGE_ERROR"): Re
   return json({ error: { code, message } }, status)
 }
 
+function redactSensitiveError(message: string): string {
+  return message
+    .replace(/\b(?:sk-(?:ant-|or-v1-|proj-|svcacct-)?|xai-)[A-Za-z0-9_-]{12,}\b/gi, "[REDACTED]")
+    .replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, "[REDACTED]")
+    .replace(/\bBearer\s+[^\s,;]+/gi, "Bearer [REDACTED]")
+    .replace(/:\/\/[^/@\s]+:[^/@\s]+@/g, "://[REDACTED]@")
+    .slice(0, 500)
+}
+
+function publicErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof registry.BridgeRegistryError) {
+    return redactSensitiveError(error.message)
+  }
+  if (error instanceof BridgeLLMError) {
+    return redactSensitiveError(error.message || fallback)
+  }
+  return fallback
+}
+
 function cors(response: Response): Response {
-  response.headers.set("access-control-allow-methods", "GET, POST, PUT, DELETE, OPTIONS")
-  response.headers.set("access-control-allow-headers", "content-type, authorization")
-  response.headers.set("vary", "origin")
+  response.headers.set("cache-control", "no-store")
+  response.headers.set("x-content-type-options", "nosniff")
+  response.headers.set("referrer-policy", "no-referrer")
   return response
 }
 
 async function readJsonBody(request: Request): Promise<Record<string, unknown>> {
+  const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase()
+  if (contentType !== "application/json") {
+    throw new BridgeHttpError(
+      "Requests with a body must use application/json.",
+      415,
+      "JSON_CONTENT_TYPE_REQUIRED",
+    )
+  }
   if (!request.body) return {}
   const text = await request.text()
+  if (text.length > 1_000_000) {
+    throw new BridgeHttpError("JSON body is too large.", 413, "REQUEST_BODY_TOO_LARGE")
+  }
   if (!text) return {}
   try {
     const parsed = JSON.parse(text)
@@ -287,18 +321,17 @@ function toolResultPart(call: { id: string; name: string }, envelope: AgentToolR
 
 
 async function health(): Promise<Response> {
-  const active = await store.getActive()
   return cors(
     json({
       ok: true,
       service: "appforge-llm-bridge",
       version: VERSION,
-      config_path: store.configPath(),
-      catalog_path: catalog.catalogPath(),
-      catalog_loaded: registry.isCatalogLoaded(),
-      active,
     }),
   )
+}
+
+async function ready(): Promise<Response> {
+  return cors(json({ ok: true, service: "appforge-llm-bridge", version: VERSION }))
 }
 
 async function listProviders(request: Request): Promise<Response> {
@@ -337,10 +370,28 @@ async function upsertProvider(request: Request, match: RegExpMatchArray): Promis
   const entry = await registry.get(id)
   if (!entry) return cors(errorResponse(`Unknown provider '${id}'`, 404, "UNKNOWN_PROVIDER"))
   const body = await readJsonBody(request)
+  const has = (key: string) => Object.prototype.hasOwnProperty.call(body, key)
+  const requestedBaseURL = typeof body.baseURL === "string" ? body.baseURL.trim() : undefined
+  if (
+    id !== "openai-compatible"
+    && requestedBaseURL
+    && requestedBaseURL !== entry.base_url_default
+  ) {
+    return cors(errorResponse(
+      "Built-in providers use their fixed local endpoint definition.",
+      422,
+      "CUSTOM_BASE_URL_NOT_ALLOWED",
+    ))
+  }
   await store.setProvider(id, {
-    apiKey: typeof body.apiKey === "string" ? body.apiKey : null,
-    baseURL: typeof body.baseURL === "string" ? body.baseURL : null,
-    defaultModel: typeof body.defaultModel === "string" ? body.defaultModel : null,
+    apiKey: has("apiKey") && typeof body.apiKey === "string" ? body.apiKey : undefined,
+    clearApiKey: body.clearApiKey === true,
+    baseURL: id === "openai-compatible" && has("baseURL")
+      ? (typeof body.baseURL === "string" ? body.baseURL : null)
+      : undefined,
+    defaultModel: has("defaultModel")
+      ? (typeof body.defaultModel === "string" ? body.defaultModel : null)
+      : undefined,
   })
   const config = await store.load()
   return cors(json({ status: registry.statusOf(entry, config.providers[id]) }))
@@ -376,16 +427,42 @@ async function testProvider(request: Request, match: RegExpMatchArray): Promise<
   const body = await readJsonBody(request)
   const payload = body as unknown as TestRequest
   const stored = await store.getProvider(id)
+  const requestedBaseURL = typeof payload.baseURL === "string" ? payload.baseURL.trim() : undefined
+  const explicitKey = typeof payload.apiKey === "string" && payload.apiKey.length > 0
+    ? payload.apiKey
+    : undefined
+  if (id !== "openai-compatible" && requestedBaseURL && requestedBaseURL !== entry.base_url_default) {
+    return cors(errorResponse(
+      "Built-in providers use their fixed local endpoint definition.",
+      422,
+      "CUSTOM_BASE_URL_NOT_ALLOWED",
+    ))
+  }
+  if (
+    id === "openai-compatible"
+    && requestedBaseURL
+    && requestedBaseURL !== stored?.baseURL
+    && !explicitKey
+  ) {
+    return cors(errorResponse(
+      "Testing a new custom endpoint requires an API key in the same request.",
+      422,
+      "EXPLICIT_KEY_REQUIRED_FOR_CUSTOM_ENDPOINT",
+    ))
+  }
   const tempConfig = {
-    apiKey: payload.apiKey ?? stored?.apiKey,
-    baseURL: payload.baseURL ?? stored?.baseURL,
+    apiKey: explicitKey ?? stored?.apiKey,
+    baseURL: id === "openai-compatible" ? (requestedBaseURL ?? stored?.baseURL) : undefined,
     defaultModel: stored?.defaultModel,
   }
   let resolved
   try {
     resolved = await registry.resolveForGeneration(id, payload.model, tempConfig)
   } catch (error) {
-    const out: TestResponse = { ok: false, error: error instanceof Error ? error.message : String(error) }
+    const out: TestResponse = {
+      ok: false,
+      error: publicErrorMessage(error, "Provider configuration could not be resolved."),
+    }
     return cors(json(out))
   }
   try {
@@ -398,7 +475,7 @@ async function testProvider(request: Request, match: RegExpMatchArray): Promise<
     const out: TestResponse = { ok: true, text: result.text.trim(), provider: id, model: resolved.modelId }
     return cors(json(out))
   } catch (error) {
-    const message = error instanceof BridgeLLMError ? error.message : error instanceof Error ? error.message : String(error)
+    const message = publicErrorMessage(error, "Provider connection test failed.")
     const out: TestResponse = { ok: false, error: message, provider: id, model: resolved.modelId }
     return cors(json(out))
   }
@@ -417,7 +494,7 @@ async function generateHandler(request: Request): Promise<Response> {
     if (error instanceof BridgeLLMCancelled) {
       return cors(errorResponse(error.message, 499, "LLM_CANCELLED"))
     }
-    const message = error instanceof Error ? error.message : String(error)
+    const message = publicErrorMessage(error, "LLM generation failed.")
     const status = error instanceof BridgeLLMError ? 502 : 400
     return cors(errorResponse(message, status, "LLM_ERROR"))
   }
@@ -473,7 +550,7 @@ async function streamHandler(request: Request): Promise<Response> {
           send("cancelled", { type: "cancelled", message: error.message })
           return
         }
-        const message = error instanceof Error ? error.message : String(error)
+        const message = publicErrorMessage(error, "LLM streaming failed.")
         send("error", { type: "error", code: "LLM_STREAM_ERROR", message })
       } finally {
         request.signal.removeEventListener("abort", abortFromRequest)
@@ -577,7 +654,7 @@ async function agentEvents(request: Request, match: RegExpMatchArray): Promise<R
           send("cancelled", { type: "cancelled", message: error.message })
           return
         }
-        const message = error instanceof Error ? error.message : String(error)
+        const message = publicErrorMessage(error, "Agent streaming failed.")
         send("error", { type: "error", code: "AGENT_STREAM_ERROR", message })
       } finally {
         request.signal.removeEventListener("abort", abortFromRequest)
@@ -756,9 +833,8 @@ async function oauthStart(request: Request): Promise<Response> {
   try {
     const result = await oauth.startOAuthFlow(providerId, method as "browser" | "device-code", { enterpriseDomain })
     return cors(json(result))
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    return cors(errorResponse(message, 500, "OAUTH_START_FAILED"))
+  } catch {
+    return cors(errorResponse("OAuth authorization could not be started.", 500, "OAUTH_START_FAILED"))
   }
 }
 
@@ -795,9 +871,8 @@ async function oauthRefresh(_request: Request, match: RegExpMatchArray): Promise
   let refreshed: OAuthCredential
   try {
     refreshed = await oauth.refreshOAuthToken(providerId, existing.refresh)
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    return cors(errorResponse(message, 500, "OAUTH_REFRESH_FAILED"))
+  } catch {
+    return cors(errorResponse("OAuth credential refresh failed.", 500, "OAUTH_REFRESH_FAILED"))
   }
   try {
     await store.setOAuthCredential(providerId, refreshed)
@@ -811,11 +886,66 @@ async function oauthRefresh(_request: Request, match: RegExpMatchArray): Promise
   return cors(json(publicOAuthRefreshResult(providerId, refreshed)))
 }
 
-async function dispatch(request: Request): Promise<Response> {
-  if (request.method === "OPTIONS") {
-    return cors(new Response(null, { status: 204 }))
+function loopbackHost(value: string): boolean {
+  const trimmed = value.trim().toLowerCase()
+  if (trimmed.startsWith("[")) return LOOPBACK_HOSTS.has(trimmed.slice(1, trimmed.indexOf("]")))
+  return LOOPBACK_HOSTS.has(trimmed.split(":", 1)[0] ?? "")
+}
+
+function sameLoopbackOrigin(requestUrl: URL, value: string): boolean {
+  try {
+    const url = new URL(value)
+    const port = url.port || (url.protocol === "https:" ? "443" : "80")
+    const requestPort = requestUrl.port || (requestUrl.protocol === "https:" ? "443" : "80")
+    return (
+      (url.protocol === "http:" || url.protocol === "https:")
+      && LOOPBACK_HOSTS.has(url.hostname)
+      && url.protocol === requestUrl.protocol
+      && url.hostname === requestUrl.hostname
+      && port === requestPort
+    )
+  } catch {
+    return false
   }
+}
+
+function tokenMatches(supplied: string | null, expected: string): boolean {
+  if (!supplied) return false
+  const suppliedHash = createHash("sha256").update(supplied).digest()
+  const expectedHash = createHash("sha256").update(expected).digest()
+  return timingSafeEqual(suppliedHash, expectedHash)
+}
+
+function configuredBridgeToken(): string {
+  const token = process.env.APPFORGE_LLM_BRIDGE_TOKEN?.trim() ?? ""
+  if (token.length < 32) {
+    throw new Error("APPFORGE_LLM_BRIDGE_TOKEN must be set to at least 32 characters")
+  }
+  return token
+}
+
+function publicInternalError(): Response {
+  return cors(errorResponse("The bridge could not complete the request.", 500, "INTERNAL"))
+}
+
+async function dispatch(request: Request, authToken: string): Promise<Response> {
   const url = new URL(request.url)
+  const host = request.headers.get("host") || url.host
+  if (!loopbackHost(host)) {
+    return cors(errorResponse("Forbidden Host header.", 403, "FORBIDDEN_HOST"))
+  }
+  const origin = request.headers.get("origin")
+  const fetchSite = request.headers.get("sec-fetch-site")?.toLowerCase()
+  if ((origin && !sameLoopbackOrigin(url, origin)) || fetchSite === "cross-site") {
+    return cors(errorResponse("Cross-origin bridge requests are forbidden.", 403, "FORBIDDEN_ORIGIN"))
+  }
+  const path = url.pathname.replace(/\/+$/, "") || "/"
+  if (path !== "/health" && !tokenMatches(request.headers.get(BRIDGE_TOKEN_HEADER), authToken)) {
+    return cors(errorResponse("Bridge authentication is required.", 401, "BRIDGE_AUTH_REQUIRED"))
+  }
+  if (request.method === "OPTIONS") {
+    return cors(errorResponse("CORS preflight is not supported.", 405, "METHOD_NOT_ALLOWED"))
+  }
   for (const route of ROUTES) {
     if (route.method !== request.method) continue
     const match = route.pattern.exec(url.pathname)
@@ -825,8 +955,7 @@ async function dispatch(request: Request): Promise<Response> {
       return response
     } catch (error) {
       if (error instanceof BridgeHttpError) return cors(errorResponse(error.message, error.status, error.code))
-      const message = error instanceof Error ? error.message : String(error)
-      return cors(errorResponse(message, 500, "INTERNAL"))
+      return publicInternalError()
     }
   }
   return cors(errorResponse("Not found", 404, "NOT_FOUND"))
@@ -841,6 +970,10 @@ function isLongRunningRequest(request: Request): boolean {
 }
 
 export function start(): void {
+  if (!LOOPBACK_HOSTS.has(HOST.toLowerCase())) {
+    throw new Error("APPFORGE_LLM_BRIDGE_HOST must be a loopback address")
+  }
+  const authToken = configuredBridgeToken()
   const server = Bun.serve({
     port: PORT,
     hostname: HOST,
@@ -851,7 +984,7 @@ export function start(): void {
       // be quiet for much longer, so disable the per-request idle timer while
       // retaining a bounded global timeout for ordinary management routes.
       if (isLongRunningRequest(request)) server.timeout(request, 0)
-      return dispatch(request)
+      return dispatch(request, authToken)
     },
   })
   console.log(
@@ -861,5 +994,6 @@ export function start(): void {
 }
 
 export function createApp() {
-  return { fetch: dispatch }
+  const authToken = configuredBridgeToken()
+  return { fetch: (request: Request) => dispatch(request, authToken) }
 }

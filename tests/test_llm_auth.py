@@ -1,6 +1,19 @@
 from __future__ import annotations
 
+import pytest
+
 from appforge import llm_auth
+
+BRIDGE_URL = "http://127.0.0.1:8788"
+
+
+@pytest.fixture(autouse=True)
+def authenticated_bridge_readiness(monkeypatch):
+    """Keep CLI unit tests on the authenticated readiness contract."""
+
+    monkeypatch.setattr(llm_auth.llm_bridge, "ready", lambda *a, **k: {"ok": True})
+    yield
+    llm_auth.llm_bridge.unregister_bridge_token(BRIDGE_URL)
 
 
 class FakePrompt:

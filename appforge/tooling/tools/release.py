@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import tempfile
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -10,6 +12,7 @@ from appforge.util import atomic_write_json, iter_files, safe_resolve
 
 from ..base import Tool
 from ..detection import detect_stack
+from .security import scan_file_bytes, scan_paths_for_secrets
 
 
 class ArtifactInventoryTool(Tool):
@@ -79,6 +82,7 @@ class ArchiveWorkspaceTool(Tool):
         sensitive_names = {
             ".env", ".env.local", ".env.production", ".env.development", ".env.test",
             "id_rsa", "id_ed25519", "credentials", "credentials.json", "service-account.json",
+            ".npmrc", ".pypirc", ".netrc", "auth.json",
         }
 
         def safe_for_archive(path: Path) -> bool:
@@ -99,9 +103,105 @@ class ArchiveWorkspaceTool(Tool):
             for path in iter_files(workspace, ignored_dirs=IGNORED_DIRS, max_files=100_000)
             if safe_for_archive(path)
         ]
-        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-            for path in files:
-                archive.write(path, arcname=path.relative_to(workspace).as_posix())
+        max_file_bytes = int(inputs.get("max_file_bytes", 20_000_000))
+        findings = scan_paths_for_secrets(
+            workspace,
+            files,
+            max_file_bytes=max_file_bytes,
+        )
+        if findings:
+            return ToolResult(
+                success=False,
+                error=f"Archive blocked by {len(findings)} secret-scan finding(s)",
+                data={
+                    "code": "ARCHIVE_SECRET_SCAN_FAILED",
+                    "passed": False,
+                    "findings": findings,
+                },
+            )
+
+        temporary_handle = tempfile.NamedTemporaryFile(
+            prefix=f".{output.name}.",
+            suffix=".tmp",
+            dir=output.parent,
+            delete=False,
+        )
+        temporary = Path(temporary_handle.name)
+        temporary_handle.close()
+        expected_names = [path.relative_to(workspace).as_posix() for path in files]
+        try:
+            exact_findings: list[dict[str, Any]] = []
+            with zipfile.ZipFile(
+                temporary,
+                "w",
+                compression=zipfile.ZIP_DEFLATED,
+                compresslevel=9,
+            ) as archive:
+                for path, relative in zip(files, expected_names, strict=True):
+                    try:
+                        raw = path.read_bytes()
+                    except OSError:
+                        exact_findings.append(
+                            {
+                                "rule": "unreadable_file",
+                                "path": relative,
+                                "line": None,
+                                "preview": "[REDACTED]",
+                            }
+                        )
+                        break
+                    exact_findings.extend(
+                        scan_file_bytes(raw, relative, max_file_bytes=max_file_bytes)
+                    )
+                    if exact_findings:
+                        break
+                    archive.writestr(relative, raw)
+            if exact_findings:
+                return ToolResult(
+                    success=False,
+                    error=f"Archive blocked by {len(exact_findings)} secret-scan finding(s)",
+                    data={
+                        "code": "ARCHIVE_SECRET_SCAN_FAILED",
+                        "passed": False,
+                        "findings": exact_findings,
+                    },
+                )
+            with zipfile.ZipFile(temporary, "r") as archive:
+                actual_names = archive.namelist()
+                if actual_names != expected_names or any(
+                    name.startswith("/") or ".." in Path(name).parts
+                    for name in actual_names
+                ):
+                    return ToolResult(
+                        success=False,
+                        error="Archive manifest verification failed",
+                        data={"code": "ARCHIVE_MANIFEST_MISMATCH", "passed": False},
+                    )
+                archived_findings: list[dict[str, Any]] = []
+                for relative in actual_names:
+                    archived_findings.extend(
+                        scan_file_bytes(
+                            archive.read(relative),
+                            relative,
+                            max_file_bytes=max_file_bytes,
+                        )
+                    )
+                if archived_findings:
+                    return ToolResult(
+                        success=False,
+                        error=(
+                            "Archive blocked by "
+                            f"{len(archived_findings)} post-write secret-scan finding(s)"
+                        ),
+                        data={
+                            "code": "ARCHIVE_SECRET_SCAN_FAILED",
+                            "passed": False,
+                            "findings": archived_findings,
+                        },
+                    )
+            os.replace(temporary, output)
+        finally:
+            temporary.unlink(missing_ok=True)
         manifest = {"archive": output.relative_to(workspace).as_posix(), "files": len(files), "bytes": output.stat().st_size}
         atomic_write_json(output.with_suffix(output.suffix + ".manifest.json"), manifest)
         return ToolResult(success=True, data=manifest, artifacts=[str(output), str(output.with_suffix(output.suffix + ".manifest.json"))])

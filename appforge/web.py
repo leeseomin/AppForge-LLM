@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import mimetypes
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 SSE_KEEPALIVE_SECONDS = 15.0
+SESSION_COOKIE_NAME = "appforge_session"
 
 
 def _host_without_port(value: str) -> str:
@@ -49,13 +51,43 @@ def _is_loopback_host(value: str | None) -> bool:
     return _host_without_port(value).casefold() in LOCAL_HOSTS
 
 
-def _origin_host(value: str | None) -> str | None:
+def _origin_matches_request(request: Request, value: str | None) -> bool:
     if not value:
-        return None
+        return False
     try:
-        return urlparse(value).hostname
+        candidate = urlparse(value)
+        expected = request.url
+        candidate_port = candidate.port or (443 if candidate.scheme == "https" else 80)
+        expected_port = expected.port or (443 if expected.scheme == "https" else 80)
+        return (
+            candidate.scheme.casefold() == expected.scheme.casefold()
+            and (candidate.hostname or "").casefold() == (expected.hostname or "").casefold()
+            and candidate_port == expected_port
+        )
     except Exception:
-        return None
+        return False
+
+
+def _public_bridge_context(exc: llm_bridge.BridgeError) -> dict[str, Any]:
+    context: dict[str, Any] = {}
+    code = exc.code
+    if code:
+        context["bridge_code"] = code
+    if exc.status_code or not isinstance(exc.payload, dict):
+        return context
+    for key in ("reason", "action"):
+        value = exc.payload.get(key)
+        if isinstance(value, str):
+            context[key] = value[:500]
+    return context
+
+
+def _public_bridge_message(exc: llm_bridge.BridgeError) -> str:
+    if exc.status_code:
+        return "LLM 브릿지 요청을 안전하게 처리하지 못했습니다. 연결 설정을 확인하세요."
+    # Connection/process-manager errors are authored locally and never include
+    # request headers or provider credentials.
+    return str(exc)[:500]
 
 
 class CreateJobRequest(BaseModel):
@@ -89,6 +121,7 @@ class UpdateJobRequest(BaseModel):
 
 class UpsertProviderRequest(BaseModel):
     apiKey: str | None = None
+    clearApiKey: bool = False
     baseURL: str | None = None
     defaultModel: str | None = None
 
@@ -117,6 +150,10 @@ class OAuthStartRequest(BaseModel):
     enterpriseDomain: str | None = None
 
 
+class BootstrapSessionRequest(BaseModel):
+    code: str
+
+
 def _web_file(filename: str, media_type: str) -> FileResponse:
     path = WEB_DIR / filename
     if not path.is_file():
@@ -140,6 +177,7 @@ def create_app(
     llm_bridge_manager: LLMBridgeProcessManager | None = None,
     shutdown_callback: Callable[[], None] | None = None,
     session_token: str | None = None,
+    bootstrap_token: str | None = None,
 ) -> FastAPI:
     resolved_config = config or WebConfig.from_env()
     resolved_session_token = session_token or secrets.token_urlsafe(32)
@@ -167,6 +205,13 @@ def create_app(
     app.state.llm_bridge_manager = resolved_bridge_manager
     app.state.shutdown_callback = shutdown_callback or _request_process_shutdown
     app.state.session_token = resolved_session_token
+    app.state.bootstrap_token_hash = (
+        hashlib.sha256(bootstrap_token.encode("utf-8")).digest()
+        if bootstrap_token
+        else None
+    )
+    app.state.bootstrap_consumed = False
+    app.state.bootstrap_lock = threading.Lock()
 
     def _apply_security_headers(request: Request, response: Any) -> Any:
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -231,25 +276,27 @@ def create_app(
         if request.method.upper() not in SAFE_METHODS:
             origin = request.headers.get("origin")
             referer = request.headers.get("referer")
-            origin_host = _origin_host(origin)
-            referer_host = _origin_host(referer)
-            if origin and (not origin_host or origin_host.casefold() not in LOCAL_HOSTS):
+            if origin and not _origin_matches_request(request, origin):
                 return _guard_response(request, "FORBIDDEN_ORIGIN", "허용되지 않은 Origin입니다.")
             if (
                 not origin
                 and referer
-                and (not referer_host or referer_host.casefold() not in LOCAL_HOSTS)
+                and not _origin_matches_request(request, referer)
             ):
                 return _guard_response(request, "FORBIDDEN_REFERER", "허용되지 않은 Referer입니다.")
+            if request.headers.get("sec-fetch-site", "").casefold() == "cross-site":
+                return _guard_response(request, "FORBIDDEN_ORIGIN", "교차 사이트 요청은 허용되지 않습니다.")
 
-        protected = path.startswith("/api/") and path not in {"/api/health"}
+        protected = path.startswith("/api/") and path not in {
+            "/api/health",
+            "/api/session/bootstrap",
+        }
         if protected:
             expected = str(request.app.state.session_token)
-            supplied = request.headers.get("x-appforge-token")
-            if request.method.upper() == "GET" and (
-                path.endswith("/events") or path.endswith("/download")
-            ):
-                supplied = supplied or request.query_params.get("token")
+            supplied = (
+                request.headers.get("x-appforge-token")
+                or request.cookies.get(SESSION_COOKIE_NAME)
+            )
             if not supplied or not secrets.compare_digest(supplied, expected):
                 return _guard_response(
                     request,
@@ -301,6 +348,38 @@ def create_app(
             except llm_bridge.BridgeError:
                 pass
         return resolved_manager.health()
+
+    @app.post("/api/session/bootstrap")
+    async def bootstrap_session(
+        payload: BootstrapSessionRequest,
+        request: Request,
+    ) -> JSONResponse:
+        expected_hash = request.app.state.bootstrap_token_hash
+        supplied_hash = hashlib.sha256(payload.code.encode("utf-8")).digest()
+        with request.app.state.bootstrap_lock:
+            valid = (
+                isinstance(expected_hash, bytes)
+                and not request.app.state.bootstrap_consumed
+                and secrets.compare_digest(supplied_hash, expected_hash)
+            )
+            if valid:
+                request.app.state.bootstrap_consumed = True
+        if not valid:
+            return _guard_response(
+                request,
+                "INVALID_BOOTSTRAP_CODE",
+                "부트스트랩 코드가 없거나 이미 사용되었습니다.",
+            )
+        response = JSONResponse({"ok": True})
+        response.set_cookie(
+            SESSION_COOKIE_NAME,
+            str(request.app.state.session_token),
+            httponly=True,
+            samesite="strict",
+            secure=request.url.scheme == "https",
+            path="/",
+        )
+        return response
 
     @app.post("/api/jobs", status_code=202)
     async def create_job(payload: CreateJobRequest) -> dict[str, Any]:
@@ -369,16 +448,30 @@ def create_app(
         )
 
     @app.post("/api/session/end")
-    async def end_session(request: Request) -> dict[str, Any]:
+    async def end_session(request: Request) -> JSONResponse:
+        # Revoke the current credential before scheduling process shutdown so
+        # even the short shutdown window cannot reuse a copied cookie/header.
+        request.app.state.session_token = secrets.token_urlsafe(32)
+        request.app.state.bootstrap_consumed = True
         resolved_manager.shutdown()
         resolved_bridge_manager.shutdown()
         timer = threading.Timer(0.25, request.app.state.shutdown_callback)
         timer.daemon = True
         timer.start()
-        return {
-            "closing": True,
-            "message": "세션을 종료합니다. 잠시 뒤 로컬 서버가 중지됩니다.",
-        }
+        response = JSONResponse(
+            {
+                "closing": True,
+                "message": "세션을 종료합니다. 잠시 뒤 로컬 서버가 중지됩니다.",
+            }
+        )
+        response.delete_cookie(
+            SESSION_COOKIE_NAME,
+            path="/",
+            secure=request.url.scheme == "https",
+            httponly=True,
+            samesite="strict",
+        )
+        return response
 
     @app.get("/api/jobs/{job_id}/download")
     async def download(job_id: str) -> FileResponse:
@@ -491,20 +584,17 @@ def create_app(
     @app.exception_handler(llm_bridge.BridgeError)
     async def bridge_error_handler(_request: Request, exc: llm_bridge.BridgeError) -> JSONResponse:
         status = 502 if exc.status_code == 0 else exc.status_code
-        action = (
-            exc.payload.get("action")
-            if isinstance(exc.payload, dict) and isinstance(exc.payload.get("action"), str)
-            else "llm_bridge 서비스가 실행 중인지 확인하세요."
-        )
+        context = _public_bridge_context(exc)
+        action = context.pop("action", "llm_bridge 서비스가 실행 중인지 확인하세요.")
         return JSONResponse(
             status_code=status,
             content={
                 "error": {
                     "code": "LLM_BRIDGE_ERROR",
                     "title": "LLM 브릿지 오류",
-                    "message": str(exc),
+                    "message": _public_bridge_message(exc),
                     "action": action,
-                    "context": exc.payload,
+                    "context": context,
                 }
             },
         )
@@ -528,6 +618,7 @@ def create_app(
             llm_bridge.upsert_provider,
             provider_id,
             api_key=payload.apiKey,
+            clear_api_key=payload.clearApiKey,
             base_url_override=payload.baseURL,
             default_model=payload.defaultModel,
         )
@@ -589,22 +680,21 @@ def create_app(
     @app.post("/api/llm/quick-connect")
     async def llm_quick_connect(payload: QuickConnectRequest, request: Request) -> dict[str, Any]:
         """One-shot connect: save key → test → activate. Mirrors `appforge auth login`."""
-        bridge_url = _bridge_url(request)
         try:
-            await run_in_threadpool(
+            await _bridge_call(
+                request,
                 llm_bridge.upsert_provider,
-                bridge_url,
                 payload.provider,
                 api_key=payload.apiKey,
                 base_url_override=payload.baseURL,
                 default_model=payload.model,
             )
         except llm_bridge.BridgeError as exc:
-            return {"ok": False, "step": "save", "error": str(exc), "provider": payload.provider}
+            return {"ok": False, "step": "save", "error": _public_bridge_message(exc), "provider": payload.provider}
         try:
-            test_result = await run_in_threadpool(
+            test_result = await _bridge_call(
+                request,
                 llm_bridge.test_provider,
-                bridge_url,
                 payload.provider,
                 api_key=payload.apiKey,
                 base_url_override=payload.baseURL,
@@ -612,7 +702,7 @@ def create_app(
                 timeout=30.0,
             )
         except llm_bridge.BridgeError as exc:
-            return {"ok": False, "step": "test", "error": str(exc), "provider": payload.provider}
+            return {"ok": False, "step": "test", "error": _public_bridge_message(exc), "provider": payload.provider}
         if not test_result.get("ok"):
             return {
                 "ok": False,
@@ -624,14 +714,14 @@ def create_app(
             }
         chosen_model = payload.model or test_result.get("model")
         try:
-            await run_in_threadpool(
+            await _bridge_call(
+                request,
                 llm_bridge.set_active,
-                bridge_url,
                 payload.provider,
                 chosen_model,
             )
         except llm_bridge.BridgeError as exc:
-            return {"ok": False, "step": "activate", "error": str(exc), "provider": payload.provider, "test": test_result}
+            return {"ok": False, "step": "activate", "error": _public_bridge_message(exc), "provider": payload.provider, "test": test_result}
         return {
             "ok": True,
             "step": "done",
@@ -675,13 +765,22 @@ def serve(
     open_browser: bool = True,
     log_level: str = "info",
 ) -> None:
+    if host.casefold() not in LOCAL_HOSTS:
+        raise ValueError("AppForge Web UI는 loopback 주소에만 바인딩할 수 있습니다.")
     config = WebConfig.from_env()
-    token = secrets.token_urlsafe(32)
-    app = create_app(config, session_token=token)
-    url = f"http://{host}:{port}/?token={token}"
-    logger.info("Open AppForge Web UI: %s", url)
+    session_token = secrets.token_urlsafe(32)
+    bootstrap_token = secrets.token_urlsafe(32)
+    app = create_app(
+        config,
+        session_token=session_token,
+        bootstrap_token=bootstrap_token,
+    )
+    url_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    base_url = f"http://{url_host}:{port}/"
+    browser_url = f"{base_url}#bootstrap={bootstrap_token}"
+    logger.info("Open AppForge Web UI: %s", base_url)
     if open_browser:
-        timer = threading.Timer(0.8, lambda: webbrowser.open(url))
+        timer = threading.Timer(0.8, lambda: webbrowser.open(browser_url))
         timer.daemon = True
         timer.start()
     uvicorn.run(app, host=host, port=port, log_level=log_level)

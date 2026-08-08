@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
+import socket
+import subprocess
 import sys
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -62,7 +66,78 @@ def test_secret_scan_redacts_preview(tmp_path) -> None:
     assert not result.success
     rendered = str(result.data)
     assert secret not in rendered
-    assert "redacted" in rendered
+    assert "redacted" in rendered.casefold()
+
+
+def test_secret_scan_detects_unquoted_provider_key_without_echoing_it(tmp_path) -> None:
+    secret = "sk-proj-" + ("a" * 48)
+    (tmp_path / "settings.txt").write_text(
+        f"OPENAI_API_KEY={secret}\n",
+        encoding="utf-8",
+    )
+
+    result = ToolRegistry().get("secret_scan").run(tmp_path, {})
+
+    assert not result.success
+    assert any(item["rule"] == "openai_api_key" for item in result.data["findings"])
+    assert secret not in str(result.data)
+
+
+def test_secret_scan_detects_hardcoded_fallback_next_to_environment_lookup(tmp_path) -> None:
+    secret = "sk-proj-" + ("b" * 48)
+    (tmp_path / "settings.js").write_text(
+        f'const key = process.env.OPENAI_API_KEY || "{secret}";\n',
+        encoding="utf-8",
+    )
+
+    result = ToolRegistry().get("secret_scan").run(tmp_path, {})
+
+    assert not result.success
+    assert any(item["rule"] == "openai_api_key" for item in result.data["findings"])
+    assert secret not in str(result.data)
+
+
+def test_secret_scan_ignores_secret_named_variable_references(tmp_path) -> None:
+    (tmp_path / "settings.py").write_text(
+        "api_key = payload.api_key\ntoken = resolve_token\n",
+        encoding="utf-8",
+    )
+
+    result = ToolRegistry().get("secret_scan").run(tmp_path, {})
+
+    assert result.success, result.data
+
+
+def test_secret_scan_detects_unquoted_generic_config_secret(tmp_path) -> None:
+    value = "correct" + "-horse-1234"
+    (tmp_path / "settings.yaml").write_text(
+        f"password: {value}\n",
+        encoding="utf-8",
+    )
+
+    result = ToolRegistry().get("secret_scan").run(tmp_path, {})
+
+    assert not result.success
+    assert result.data["findings"][0]["rule"] == "generic_secret"
+
+
+def test_secret_scan_fails_closed_for_an_unscannable_large_file(tmp_path) -> None:
+    (tmp_path / "opaque.bin").write_bytes(b"\x00" + (b"x" * 128))
+
+    result = ToolRegistry().get("secret_scan").run(
+        tmp_path,
+        {"max_file_bytes": 32},
+    )
+
+    assert not result.success
+    assert result.data["findings"] == [
+        {
+            "rule": "unscannable_large_file",
+            "path": "opaque.bin",
+            "line": None,
+            "preview": "[REDACTED]",
+        }
+    ]
 
 
 def test_archive_excludes_secret_material_and_internal_state(tmp_path) -> None:
@@ -97,6 +172,22 @@ def test_archive_excludes_secret_material_and_internal_state(tmp_path) -> None:
     assert not any(name.startswith(".appforge-web/") for name in names)
     assert not any(name.startswith("projects/") for name in names)
     assert not any(name.startswith("package.egg-info/") for name in names)
+
+
+def test_archive_blocks_a_secret_hidden_in_an_ordinary_source_file(tmp_path) -> None:
+    (tmp_path / "src").mkdir()
+    secret = "sk-or-v1-" + ("b" * 48)
+    (tmp_path / "src" / "settings.py").write_text(
+        f'API_KEY = "{secret}"\n',
+        encoding="utf-8",
+    )
+
+    result = ToolRegistry().get("archive_workspace").run(tmp_path, {})
+
+    assert not result.success
+    assert result.data["code"] == "ARCHIVE_SECRET_SCAN_FAILED"
+    assert secret not in str(result.data)
+    assert not (tmp_path / ".appforge" / "reports" / f"{tmp_path.name}-source.zip").exists()
 
 
 def test_command_policy_blocks_network_and_destructive_patterns(tmp_path) -> None:
@@ -201,6 +292,99 @@ def test_commands_run_non_interactively(tmp_path) -> None:
 
     assert result.success, result.error
     assert result.data["stdout"].strip() == "true"
+
+
+def test_run_command_cannot_read_a_host_file_outside_the_workspace(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "host-secret.txt"
+    outside.write_text("must-not-be-readable", encoding="utf-8")
+    script = workspace / "probe.py"
+    script.write_text(
+        (
+            "from pathlib import Path\n"
+            f"path = Path({json.dumps(str(outside))})\n"
+            "try:\n"
+            "    path.read_text(encoding='utf-8')\n"
+            "except OSError:\n"
+            "    print('outside-denied')\n"
+            "else:\n"
+            "    print('outside-readable')\n"
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_command(workspace, [sys.executable, "probe.py"], policy=CommandPolicy())
+
+    assert result.success, result.error
+    assert result.data["stdout"].strip() == "outside-denied"
+
+
+def test_run_command_replaces_the_host_home_with_an_ephemeral_home(tmp_path) -> None:
+    script = tmp_path / "show_home.py"
+    script.write_text("from pathlib import Path\nprint(Path.home())\n", encoding="utf-8")
+
+    result = run_command(tmp_path, [sys.executable, "show_home.py"], policy=CommandPolicy())
+
+    assert result.success, result.error
+    assert result.data["stdout"].strip() != str(Path.home())
+
+
+def test_run_command_blocks_host_loopback_even_when_remote_network_is_allowed(tmp_path) -> None:
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    script = tmp_path / "probe_loopback.py"
+    script.write_text(
+        (
+            "import socket\n"
+            "sock = socket.socket()\n"
+            f"result = sock.connect_ex(('127.0.0.1', {port}))\n"
+            "print('loopback-denied' if result else 'loopback-reachable')\n"
+        ),
+        encoding="utf-8",
+    )
+    try:
+        result = run_command(
+            tmp_path,
+            [sys.executable, "probe_loopback.py"],
+            policy=CommandPolicy(allow_network=True),
+        )
+    finally:
+        listener.close()
+
+    assert result.success, result.error
+    assert result.data["stdout"].strip() == "loopback-denied"
+
+
+def test_run_command_cannot_inspect_another_process_environment(tmp_path) -> None:
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(10)"],
+        env={"PATH": "/usr/bin:/bin", "APPFORGE_PROCESS_BOUNDARY_SECRET": "hidden-value"},
+    )
+    script = tmp_path / "probe_process.py"
+    script.write_text(
+        (
+            "import subprocess\n"
+            "try:\n"
+            f"    result = subprocess.run(['/bin/ps', 'eww', '{child.pid}'], capture_output=True, text=True)\n"
+            "    output = result.stdout + result.stderr\n"
+            "except OSError:\n"
+            "    output = ''\n"
+            "print('process-secret-visible' if 'APPFORGE_PROCESS_BOUNDARY_SECRET=' in output "
+            "else 'process-secret-denied')\n"
+        ),
+        encoding="utf-8",
+    )
+    try:
+        result = run_command(tmp_path, [sys.executable, "probe_process.py"], policy=CommandPolicy())
+    finally:
+        child.terminate()
+        child.wait(timeout=5)
+
+    assert result.success, result.error
+    assert result.data["stdout"].strip() == "process-secret-denied"
 
 
 def test_explicit_env_overrides_non_interactive_defaults(tmp_path) -> None:

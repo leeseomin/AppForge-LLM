@@ -2,13 +2,11 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import {
   ApiError,
-  bootstrapSessionToken,
   cancelJob,
   createJob,
   endSession,
   getHealth,
   getJob,
-  getSessionToken,
 } from './api';
 import ComposerCard from './components/ComposerCard.vue';
 import HealthBanner from './components/HealthBanner.vue';
@@ -30,8 +28,6 @@ if (storedJobId && !window.localStorage.getItem(STORAGE_KEY)) {
   window.localStorage.setItem(STORAGE_KEY, storedJobId);
   window.localStorage.removeItem(LEGACY_STORAGE_KEY);
 }
-
-bootstrapSessionToken();
 
 const health = ref<HealthPayload | null>(null);
 const serverError = ref('');
@@ -194,9 +190,7 @@ function openEventStream(jobId: string) {
   closeEventStream();
   eventJobId = jobId;
   const url = new URL(`/api/jobs/${encodeURIComponent(jobId)}/events`, window.location.origin);
-  const token = getSessionToken();
   const lastEventId = lastEventIds.get(jobId);
-  if (token) url.searchParams.set('token', token);
   if (lastEventId) url.searchParams.set('lastEventId', lastEventId);
   eventSource = new EventSource(url.toString());
 

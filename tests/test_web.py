@@ -807,7 +807,9 @@ def test_session_end_shuts_down_managers_and_schedules_process_stop(tmp_path: Pa
         payload = response.json()
         assert payload["closing"] is True
         assert "세션" in payload["message"]
+        assert "max-age=0" in response.headers["set-cookie"].casefold()
         assert bridge_manager.shutdown_calls == 1
+        assert client.get("/api/jobs").status_code == 403
 
         deadline = time.monotonic() + 2
         while time.monotonic() < deadline and not callbacks:
@@ -823,6 +825,49 @@ def test_mutating_api_requires_session_token(tmp_path: Path) -> None:
     )
     with TestClient(app, base_url="http://127.0.0.1") as client:
         response = client.post("/api/session/end")
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "INVALID_SESSION_TOKEN"
+
+
+def test_one_time_bootstrap_exchanges_fragment_code_for_http_only_cookie(tmp_path: Path) -> None:
+    app = create_app(
+        _fixture_config(tmp_path),
+        llm_bridge_manager=_FakeBridgeManager(),
+        session_token=SESSION_TOKEN,
+        bootstrap_token="one-time-bootstrap-code-0123456789abcdef",
+    )
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        response = client.post(
+            "/api/session/bootstrap",
+            json={"code": "one-time-bootstrap-code-0123456789abcdef"},
+            headers={"origin": "http://127.0.0.1"},
+        )
+        assert response.status_code == 200, response.text
+        cookie = response.headers["set-cookie"].casefold()
+        assert "httponly" in cookie
+        assert "samesite=strict" in cookie
+        assert "one-time-bootstrap-code" not in response.text
+
+        authorized = client.get("/api/jobs")
+        assert authorized.status_code == 200, authorized.text
+
+        replay = client.post(
+            "/api/session/bootstrap",
+            json={"code": "one-time-bootstrap-code-0123456789abcdef"},
+            headers={"origin": "http://127.0.0.1"},
+        )
+        assert replay.status_code == 403
+
+
+def test_event_stream_rejects_legacy_query_token(tmp_path: Path) -> None:
+    app = create_app(
+        _fixture_config(tmp_path),
+        llm_bridge_manager=_FakeBridgeManager(),
+        session_token=SESSION_TOKEN,
+    )
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        response = client.get(f"/api/jobs/missing/events?token={SESSION_TOKEN}")
 
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "INVALID_SESSION_TOKEN"
@@ -852,6 +897,25 @@ def test_rejects_cross_origin_post(tmp_path: Path) -> None:
             "/api/session/end",
             headers={
                 "origin": "https://evil.example",
+                "X-AppForge-Token": SESSION_TOKEN,
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "FORBIDDEN_ORIGIN"
+
+
+def test_rejects_a_different_loopback_origin_port(tmp_path: Path) -> None:
+    app = create_app(
+        _fixture_config(tmp_path),
+        llm_bridge_manager=_FakeBridgeManager(),
+        session_token=SESSION_TOKEN,
+    )
+    with TestClient(app, base_url="http://127.0.0.1:8787") as client:
+        response = client.post(
+            "/api/session/end",
+            headers={
+                "origin": "http://127.0.0.1:9999",
                 "X-AppForge-Token": SESSION_TOKEN,
             },
         )
@@ -1247,8 +1311,41 @@ def test_llm_provider_api_does_not_autostart_bridge_http_errors(
         response = client.get("/api/llm/providers/missing/models")
 
     assert response.status_code == 404
-    assert response.json()["error"]["message"] == "Unknown provider 'missing'"
+    assert response.json()["error"]["message"] == "LLM 브릿지 요청을 안전하게 처리하지 못했습니다. 연결 설정을 확인하세요."
+    assert response.json()["error"]["context"] == {"bridge_code": "UNKNOWN_PROVIDER"}
     assert bridge_manager.ensure_calls == []
+
+
+def test_bridge_http_error_does_not_echo_remote_secret_fields(tmp_path: Path, monkeypatch) -> None:
+    leaked = "sk-proj-" + ("a" * 40)
+    monkeypatch.setattr(
+        llm_bridge,
+        "provider_models",
+        lambda url, provider_id: (_ for _ in ()).throw(
+            llm_bridge.BridgeError(
+                f"provider rejected {leaked}",
+                status_code=502,
+                payload={
+                    "action": f"retry with {leaked}",
+                    "reason": leaked,
+                    "error": {"code": "PROVIDER_ERROR", "message": leaked},
+                },
+            )
+        ),
+    )
+    config = WebConfig(
+        projects_dir=tmp_path / "projects",
+        data_dir=tmp_path / "web-state",
+        llm_bridge_url="http://127.0.0.1:8788",
+    )
+    app = create_app(config, llm_bridge_manager=_FakeBridgeManager(), session_token=SESSION_TOKEN)
+
+    with _client(app) as client:
+        response = client.get("/api/llm/providers/openai/models")
+
+    assert response.status_code == 502
+    assert leaked not in response.text
+    assert response.json()["error"]["context"] == {"bridge_code": "PROVIDER_ERROR"}
 
 
 def test_unexpected_error_response_is_generic(tmp_path: Path) -> None:

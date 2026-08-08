@@ -27,7 +27,7 @@ AppForge does not automatically deploy the generated app or mutate production da
 
 ```text
 Vue browser UI
-      │ session-token API + SSE
+      │ HttpOnly session cookie + same-origin API/SSE
       ▼
 FastAPI web server
       ├─ JobManager: queue, durable job state, preview, ZIP
@@ -75,14 +75,16 @@ APPFORGE_SKIP_INSTALL=1 APPFORGE_SKIP_FRONTEND_BUILD=1 ./build.sh --smoke
 | Generated projects | `projects/` |
 | Web job state and logs | `.appforge-web/` |
 | Pipeline artifacts and checkpoints | `projects/<project>/.appforge/` |
-| Provider configuration | `~/.appforge/llm/providers.json` by default |
+| Provider configuration | macOS Keychain by default; protected local file elsewhere |
 | Current browser job | job ID in `localStorage` |
-| Web session credential | token in `sessionStorage` |
+| Web session credential | process-scoped `HttpOnly; SameSite=Strict` cookie |
 
 - The web server and bridge bind to loopback by default.
-- Protected API requests require a per-process session token and local host/origin checks.
-- Provider secrets are not returned to the browser. File-backed secrets use `0600`; macOS Keychain is optional.
+- The launch URL carries a one-time bootstrap code in its fragment. The UI clears it before exchanging it for an `HttpOnly` cookie; credentials are not stored in Web Storage or URL queries.
+- Protected web requests require that cookie plus exact same-origin host/port checks. Protected bridge routes require a separate high-entropy capability token.
+- Provider secrets are not returned to the browser. macOS uses Keychain by default; the fallback file uses `0700` directories and `0600` atomic files.
 - Network-capable and destructive AppForge tools are disabled by default.
+- Generated-project commands run inside an operating-system sandbox with a scrubbed environment and fail closed when a supported sandbox is unavailable.
 - Generated previews run with a restrictive sandbox and content security policy.
 
 Important configuration:
@@ -92,9 +94,10 @@ APPFORGE_WEB_PORT             web port; default 8787
 APPFORGE_PROJECTS_DIR         generated workspaces; default projects/
 APPFORGE_DATA_DIR             durable web jobs; default .appforge-web/
 APPFORGE_LLM_BRIDGE_URL       bridge URL; default http://127.0.0.1:8788
+APPFORGE_LLM_BRIDGE_TOKEN     required for a manually managed bridge; generated in memory for autostart
 APPFORGE_ALLOW_NETWORK        allow dependency/network tools; default false
 APPFORGE_ALLOW_DESTRUCTIVE    allow destructive AppForge tools; default false
-APPFORGE_LLM_SECRET_BACKEND   file or macOS keychain; default file
+APPFORGE_LLM_SECRET_BACKEND   keychain on macOS, protected file elsewhere
 ```
 
 See [docs/WEB_APP.md](docs/WEB_APP.md) for the complete configuration and API behavior.

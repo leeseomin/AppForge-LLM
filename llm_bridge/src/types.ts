@@ -34,6 +34,7 @@ export interface ProviderDescriptor {
 
 export interface ProviderConfigInput {
   apiKey?: string | null
+  clearApiKey?: boolean
   baseURL?: string | null
   defaultModel?: string | null
 }

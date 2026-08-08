@@ -38,7 +38,11 @@ class RunSummary:
     failure: dict[str, Any] | None = None
 
 
-_ENVIRONMENT_BLOCK_CODES = {"TOOLCHAIN_UNAVAILABLE", "DEPENDENCY_INSTALL_DISABLED"}
+_ENVIRONMENT_BLOCK_CODES = {
+    "TOOLCHAIN_UNAVAILABLE",
+    "DEPENDENCY_INSTALL_DISABLED",
+    "EXECUTION_SANDBOX_UNAVAILABLE",
+}
 
 
 def _environment_blockers(records: list[dict[str, Any]]) -> list[str]:

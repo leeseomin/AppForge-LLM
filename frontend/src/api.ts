@@ -33,29 +33,31 @@ export class ApiError extends Error {
   }
 }
 
-const TOKEN_KEY = 'appforge.sessionToken';
-
-export function bootstrapSessionToken(): void {
+export async function bootstrapSession(): Promise<void> {
   const url = new URL(window.location.href);
-  const token = url.searchParams.get('token');
-  if (!token) return;
-  sessionStorage.setItem(TOKEN_KEY, token);
-  url.searchParams.delete('token');
+  const fragment = new URLSearchParams(url.hash.replace(/^#/, ''));
+  const code = fragment.get('bootstrap');
+  if (!code) return;
+  url.hash = '';
   window.history.replaceState({}, document.title, url.toString());
-}
-
-export function getSessionToken(): string | null {
-  return sessionStorage.getItem(TOKEN_KEY);
+  const response = await fetch('/api/session/bootstrap', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  });
+  if (!response.ok) {
+    throw new Error(translateCurrent('api.requestFailed'));
+  }
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const token = getSessionToken();
   const response = await fetch(path, {
     ...options,
+    credentials: 'same-origin',
     headers: {
       Accept: 'application/json',
       ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-      ...(token ? { 'X-AppForge-Token': token } : {}),
       ...(options.headers || {}),
     },
   });
@@ -174,7 +176,7 @@ export function getProviderModels(providerId: string): Promise<ProviderModelsPay
 
 export function saveProvider(
   providerId: string,
-  body: { apiKey?: string; baseURL?: string; defaultModel?: string },
+  body: { apiKey?: string; clearApiKey?: boolean; baseURL?: string; defaultModel?: string },
 ): Promise<{ status: ProvidersPayload['providers'][number] }> {
   return request(`/api/llm/providers/${encodeURIComponent(providerId)}`, {
     method: 'PUT',
