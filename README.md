@@ -1,5 +1,7 @@
 # AppForge-LLM
 
+![AppForge-LLM local AI app builder interface](intro.webp)
+
 A local AI app builder that turns one prompt into a planned, tested, and previewable source project.
 
 ## Requirements
