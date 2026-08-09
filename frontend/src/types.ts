@@ -253,7 +253,7 @@ export interface ProviderStatus {
   docs_url?: string | null;
   default_model?: string | null;
   has_key: boolean;
-  key_source: 'stored' | 'env' | 'oauth' | 'none';
+  key_source: 'stored' | 'env' | 'none';
   configured: boolean;
   models?: ProviderModel[];
   model_count?: number;
@@ -289,41 +289,4 @@ export interface QuickConnectResult {
   provider: string;
   model?: string | null;
   test?: TestResult;
-}
-
-export interface OAuthMethod {
-  id: 'browser' | 'device-code';
-  label: string;
-}
-
-export interface OAuthProvider {
-  id: string;
-  name: string;
-  methods: OAuthMethod[];
-}
-
-export interface OAuthProvidersPayload {
-  providers: OAuthProvider[];
-}
-
-export interface OAuthStartResult {
-  pollId: string;
-  method: string;
-  url: string;
-  instructions: string;
-}
-
-export interface OAuthPollResult {
-  status: 'pending' | 'success' | 'failed';
-  provider?: string;
-  error?: string;
-  accountId?: string;
-  expires?: number;
-}
-
-export interface OAuthRefreshResult {
-  ok: true;
-  provider: string;
-  accountId?: string;
-  expires: number;
 }

@@ -10,10 +10,6 @@ import type {
   RunMode,
   WorkspaceFilePayload,
   WorkspaceTreePayload,
-  OAuthProvidersPayload,
-  OAuthStartResult,
-  OAuthPollResult,
-  OAuthRefreshResult,
   ProviderModelsPayload,
   ProvidersPayload,
   QuickConnectResult,
@@ -220,29 +216,6 @@ export function quickConnect(body: {
     body: JSON.stringify(body),
   });
 }
-
-export function getOAuthProviders(): Promise<OAuthProvidersPayload> {
-  return request<OAuthProvidersPayload>('/api/llm/oauth/providers');
-}
-
-export function startOAuth(body: {
-  provider: string;
-  method: string;
-}): Promise<OAuthStartResult> {
-  return request<OAuthStartResult>('/api/llm/oauth/start', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
-}
-
-export function pollOAuth(provider: string, pollId: string): Promise<OAuthPollResult> {
-  return request<OAuthPollResult>(`/api/llm/oauth/poll/${encodeURIComponent(provider)}/${encodeURIComponent(pollId)}`);
-}
-
-export function refreshOAuth(provider: string): Promise<OAuthRefreshResult> {
-  return request<OAuthRefreshResult>(`/api/llm/oauth/refresh/${encodeURIComponent(provider)}`, { method: 'POST' });
-}
-
 
 export function buildPreview(jobId: string): Promise<PreviewState> {
   return request<PreviewState>(`/api/jobs/${encodeURIComponent(jobId)}/preview/build`, { method: 'POST' });

@@ -457,14 +457,11 @@ def preflight(project: Path = typer.Argument(Path("."), help="Project path")) ->
 @auth_app.command("login")
 def auth_login(
     provider: str | None = typer.Option(None, "--provider", "-p", help="Provider id to connect (skips interactive selection)"),
-    oauth: bool = typer.Option(False, "--oauth", help="Use OAuth login (OpenAI ChatGPT)"),
     llm_bridge_url: str = typer.Option(DEFAULT_LLM_BRIDGE_URL, "--llm-bridge-url"),
 ) -> None:
     """Connect an external LLM provider: pick → API key → test → activate model."""
     from . import llm_auth
 
-    if oauth:
-        raise typer.Exit(llm_auth.cmd_login_oauth(llm_bridge_url, provider_id=provider))
     raise typer.Exit(llm_auth.cmd_login(llm_bridge_url, provider_id=provider))
 
 

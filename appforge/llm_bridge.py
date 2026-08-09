@@ -750,26 +750,3 @@ def agent_tool_result(
 
 def agent_stop(base_url: str, session_id: str, *, timeout: float = 5.0) -> dict[str, Any]:
     return _request(base_url, "DELETE", f"/agent/{quote(session_id)}", timeout=timeout)
-
-
-def oauth_providers(base_url: str, *, timeout: float = 5.0) -> dict[str, Any]:
-    return _request(base_url, "GET", "/oauth/providers", timeout=timeout)
-
-
-def oauth_start(
-    base_url: str,
-    *,
-    provider: str,
-    method: str = "browser",
-    timeout: float = 10.0,
-) -> dict[str, Any]:
-    body: dict[str, Any] = {"provider": provider, "method": method}
-    return _request(base_url, "POST", "/oauth/start", body=body, timeout=timeout)
-
-
-def oauth_poll(base_url: str, provider: str, poll_id: str, *, timeout: float = 5.0) -> dict[str, Any]:
-    return _request(base_url, "GET", f"/oauth/poll/{quote(provider)}/{quote(poll_id)}", timeout=timeout)
-
-
-def oauth_refresh(base_url: str, provider: str, *, timeout: float = 15.0) -> dict[str, Any]:
-    return _request(base_url, "POST", f"/oauth/refresh/{quote(provider)}", timeout=timeout)

@@ -138,3 +138,40 @@ test("omitted or null keys preserve the credential and explicit clearing removes
   await setProvider("openai", { clearApiKey: true })
   expect((await getProvider("openai"))?.apiKey).toBeUndefined()
 })
+
+test("legacy OAuth fields are discarded while API-key settings are preserved", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "appforge-bridge-legacy-oauth-"))
+  process.env.APPFORGE_LLM_CONFIG = join(dir, "providers.json")
+  process.env.APPFORGE_LLM_SECRET_BACKEND = "file"
+  await writeFile(
+    configPath(),
+    JSON.stringify({
+      providers: {
+        openai: {
+          apiKey: "sk-existing",
+          defaultModel: "gpt-4o-mini",
+          oauth: {
+            type: "oauth",
+            access: "legacy-access-token",
+            refresh: "legacy-refresh-token",
+            expires: 1_900_000_000_000,
+          },
+          oauthRef: "keychain:appforge-llm/openai/oauth",
+        },
+      },
+      active: { provider: "openai", model: "gpt-4o-mini" },
+    }),
+    "utf8",
+  )
+  _resetForTest()
+
+  const provider = await getProvider("openai")
+  expect((provider as unknown as Record<string, unknown>).oauth).toBeUndefined()
+  expect((provider as unknown as Record<string, unknown>).oauthRef).toBeUndefined()
+  expect(provider?.apiKey).toBe("sk-existing")
+
+  await setProvider("openai", { defaultModel: "gpt-4.1-mini" })
+  const raw = await readFile(configPath(), "utf8")
+  expect(raw.toLowerCase()).not.toContain("oauth")
+  expect(JSON.parse(raw).providers.openai.apiKey).toBe("sk-existing")
+})

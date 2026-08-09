@@ -2,8 +2,6 @@ import { createHash, timingSafeEqual } from "node:crypto"
 import * as registry from "./registry"
 import * as store from "./config"
 import * as catalog from "./catalog"
-import * as oauth from "./oauth"
-import { publicOAuthPollResult, publicOAuthRefreshResult } from "./oauth/public"
 import { BridgeLLMCancelled, BridgeLLMError, generate, runOnce, stream, type StreamEvent } from "./llm"
 import { VERSION } from "./version"
 import type {
@@ -12,7 +10,6 @@ import type {
   ChatMessageInput,
   GenerateRequest,
   GenerationOptions,
-  OAuthCredential,
   ProviderStatus,
   TestRequest,
   TestResponse,
@@ -68,10 +65,6 @@ const ROUTES: Route[] = [
   { method: "GET", pattern: /^\/agent\/([^/]+)\/events\/?$/, handler: agentEvents },
   { method: "POST", pattern: /^\/agent\/([^/]+)\/tool_result\/?$/, handler: agentToolResult },
   { method: "DELETE", pattern: /^\/agent\/([^/]+)\/?$/, handler: agentDelete },
-  { method: "GET", pattern: /^\/oauth\/providers\/?$/, handler: oauthProviders },
-  { method: "POST", pattern: /^\/oauth\/start\/?$/, handler: oauthStart },
-  { method: "GET", pattern: /^\/oauth\/poll\/([^/]+)\/([^/]+)\/?$/, handler: oauthPoll },
-  { method: "POST", pattern: /^\/oauth\/refresh\/([^/]+)\/?$/, handler: oauthRefresh },
 ]
 
 function json(body: unknown, status = 200): Response {
@@ -817,73 +810,6 @@ async function agentDelete(_request: Request, match: RegExpMatchArray): Promise<
   return cors(json({ ok: true, session_id: id }))
 }
 
-
-async function oauthProviders(): Promise<Response> {
-  return cors(json({ providers: oauth.listOAuthProviders() }))
-}
-
-async function oauthStart(request: Request): Promise<Response> {
-  const body = await readJsonBody(request)
-  const providerId = typeof body.provider === "string" ? body.provider : ""
-  const method = body.method === "browser" || body.method === "device-code" ? body.method : "browser"
-  if (!oauth.isOAuthProvider(providerId)) {
-    return cors(errorResponse(`No OAuth handler for '${providerId}'`, 404, "UNKNOWN_OAUTH_PROVIDER"))
-  }
-  try {
-    const result = await oauth.startOAuthFlow(providerId, method as "browser" | "device-code")
-    return cors(json(result))
-  } catch {
-    return cors(errorResponse("OAuth authorization could not be started.", 500, "OAUTH_START_FAILED"))
-  }
-}
-
-async function oauthPoll(_request: Request, match: RegExpMatchArray): Promise<Response> {
-  const providerId = decodeParam(match[1] ?? "")
-  const pollId = decodeParam(match[2] ?? "")
-  const result = oauth.pollOAuthFlow(providerId, pollId)
-  if (result.status === "success") {
-    if (!result.credential) {
-      return cors(errorResponse("OAuth completed without a credential.", 502, "OAUTH_RESULT_INVALID"))
-    }
-    try {
-      await store.setOAuthCredential(providerId, result.credential)
-    } catch {
-      return cors(errorResponse(
-        "OAuth credential could not be stored securely.",
-        500,
-        "OAUTH_CREDENTIAL_STORAGE_FAILED",
-      ))
-    }
-  }
-  return cors(json(publicOAuthPollResult(result, providerId)))
-}
-
-async function oauthRefresh(_request: Request, match: RegExpMatchArray): Promise<Response> {
-  const providerId = decodeParam(match[1] ?? "")
-  if (!oauth.isOAuthProvider(providerId)) {
-    return cors(errorResponse(`No OAuth handler for '${providerId}'`, 404, "UNKNOWN_OAUTH_PROVIDER"))
-  }
-  const existing = await store.getOAuthCredential(providerId)
-  if (!existing) {
-    return cors(errorResponse(`No OAuth credential stored for '${providerId}'`, 404, "NO_OAUTH_CREDENTIAL"))
-  }
-  let refreshed: OAuthCredential
-  try {
-    refreshed = await oauth.refreshOAuthToken(providerId, existing.refresh)
-  } catch {
-    return cors(errorResponse("OAuth credential refresh failed.", 500, "OAUTH_REFRESH_FAILED"))
-  }
-  try {
-    await store.setOAuthCredential(providerId, refreshed)
-  } catch {
-    return cors(errorResponse(
-      "Refreshed OAuth credential could not be stored securely.",
-      500,
-      "OAUTH_CREDENTIAL_STORAGE_FAILED",
-    ))
-  }
-  return cors(json(publicOAuthRefreshResult(providerId, refreshed)))
-}
 
 function loopbackHost(value: string): boolean {
   const trimmed = value.trim().toLowerCase()

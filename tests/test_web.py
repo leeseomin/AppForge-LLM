@@ -115,6 +115,18 @@ def test_web_config_llm_router_default_matches_env(monkeypatch) -> None:
     assert WebConfig().llm_router is WebConfig.from_env().llm_router
 
 
+def test_web_app_does_not_register_oauth_routes(tmp_path: Path) -> None:
+    app = create_app(
+        _fixture_config(tmp_path),
+        llm_bridge_manager=_FakeBridgeManager(),
+        session_token=SESSION_TOKEN,
+    )
+
+    paths = {getattr(route, "path", "") for route in app.routes}
+
+    assert not any("/oauth" in path for path in paths)
+
+
 def _mock_ready_bridge(
     monkeypatch,
     *,

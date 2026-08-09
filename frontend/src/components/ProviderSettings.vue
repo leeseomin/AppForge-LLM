@@ -5,22 +5,16 @@ import {
   ApiError,
   deleteProvider,
   getActiveProvider,
-  getOAuthProviders,
   getProviderModels,
   getProviders,
-  pollOAuth,
   quickConnect,
-  refreshOAuth,
   saveProvider,
   setActiveProvider,
-  startOAuth,
   testProvider,
 } from '../api';
 import { useI18n } from '../i18n';
 import type {
   ActiveSelection,
-  OAuthProvider,
-  OAuthPollResult,
   ProviderModel,
   ProviderStatus,
   QuickConnectResult,
@@ -133,19 +127,6 @@ const modelLoadErrors = ref<Record<string, string>>({});
 const expandedChips = ref<Set<string>>(new Set());
 const MODEL_CHIPS_LIMIT = 10;
 
-// OAuth state
-const oauthProviders = ref<OAuthProvider[]>([]);
-const oauthProviderId = ref<string>('');
-const oauthMethod = ref<string>('browser');
-const oauthBusy = ref(false);
-const oauthResult = ref<OAuthPollResult | null>(null);
-const oauthInstructions = ref<string>('');
-const oauthUrl = ref<string>('');
-let oauthPollTimer: ReturnType<typeof setInterval> | null = null;
-
-const oauthProviderEntry = computed(() => oauthProviders.value.find((p) => p.id === oauthProviderId.value) ?? null);
-const oauthMethodOptions = computed(() => oauthProviderEntry.value?.methods ?? []);
-
 onMounted(async () => {
   await reload();
 });
@@ -154,10 +135,9 @@ async function reload() {
   loading.value = true;
   loadError.value = '';
   try {
-    const [providersPayload, activePayload, oauthPayload] = await Promise.all([
+    const [providersPayload, activePayload] = await Promise.all([
       getProviders(),
       getActiveProvider(),
-      getOAuthProviders().catch(() => ({ providers: [] })),
     ]);
     providers.value = providersPayload.providers;
     active.value = activePayload;
@@ -165,11 +145,6 @@ async function reload() {
     activeModel.value = activePayload.model ?? '';
     if (!qcProvider.value) qcProvider.value = activePayload.provider ?? providers.value[0]?.id ?? '';
     qcBaseURL.value = qcProviderEntry.value?.base_url ?? '';
-    oauthProviders.value = oauthPayload.providers;
-    if (!oauthProviderId.value && oauthProviders.value.length > 0) {
-      oauthProviderId.value = oauthProviders.value[0].id;
-      oauthMethod.value = oauthProviders.value[0].methods[0]?.id ?? 'browser';
-    }
   } catch (error) {
     loadError.value = readableError(error, t('settings.providerLoadError'));
   } finally {
@@ -182,79 +157,6 @@ function onQcProviderChange() {
   qcResult.value = null;
   qcBaseURL.value = qcProviderEntry.value?.base_url ?? '';
   if (qcProvider.value) ensureModels(qcProvider.value);
-}
-
-function onOauthProviderChange() {
-  oauthResult.value = null;
-  oauthInstructions.value = '';
-  oauthUrl.value = '';
-  stopOAuthPoll();
-  const methods = oauthProviderEntry.value?.methods ?? [];
-  oauthMethod.value = methods[0]?.id ?? 'browser';
-}
-
-function stopOAuthPoll() {
-  if (oauthPollTimer) {
-    clearInterval(oauthPollTimer);
-    oauthPollTimer = null;
-  }
-}
-
-async function runOAuthLogin() {
-  if (!oauthProviderId.value) return;
-  oauthBusy.value = true;
-  oauthResult.value = null;
-  oauthInstructions.value = '';
-  oauthUrl.value = '';
-  stopOAuthPoll();
-  try {
-    const result = await startOAuth({
-      provider: oauthProviderId.value,
-      method: oauthMethod.value,
-    });
-    oauthInstructions.value = result.instructions;
-    oauthUrl.value = result.url;
-    if (oauthMethod.value === 'browser' && result.url) {
-      window.open(result.url, '_blank', 'noopener,noreferrer');
-    }
-    const providerId = oauthProviderId.value;
-    const pollId = result.pollId;
-    oauthPollTimer = setInterval(async () => {
-      try {
-        const pollResult = await pollOAuth(providerId, pollId);
-        if (pollResult.status === 'success') {
-          stopOAuthPoll();
-          oauthResult.value = pollResult;
-          oauthBusy.value = false;
-          emit('toast', t('settings.oauthLoginSuccessToast', { provider: providerId }));
-          emit('changed');
-          await reload();
-        } else if (pollResult.status === 'failed') {
-          stopOAuthPoll();
-          oauthResult.value = pollResult;
-          oauthBusy.value = false;
-          emit('toast', t('settings.oauthLoginFailureToast', { error: pollResult.error || t('settings.unknownError') }));
-        }
-      } catch {
-        // keep polling on transient errors
-      }
-    }, 2000);
-  } catch (error) {
-    const message = readableError(error, t('settings.oauthStartError'));
-    oauthResult.value = { status: 'failed', error: message };
-    oauthBusy.value = false;
-    emit('toast', message);
-  }
-}
-
-async function doRefreshOAuth() {
-  if (!oauthProviderId.value) return;
-  try {
-    await refreshOAuth(oauthProviderId.value);
-    emit('toast', t('settings.tokenRefreshed', { provider: oauthProviderId.value }));
-  } catch (error) {
-    emit('toast', readableError(error, t('settings.tokenRefreshError')));
-  }
 }
 
 async function runQuickConnect() {
@@ -557,57 +459,6 @@ function readableError(error: unknown, fallback: string) {
           </template>
           <template v-else>
             ✕ {{ t('settings.failure', { step: quickConnectStepLabel(qcResult.step), error: qcResult.error || t('settings.unknownError') }) }}
-          </template>
-        </p>
-      </section>
-
-      <section v-if="!loading && !loadError && oauthProviders.length > 0" class="oauth-block">
-        <h3>{{ t('settings.oauthTitle') }}</h3>
-        <p class="settings-hint">{{ t('settings.oauthHelp') }}</p>
-        <div class="qc-row">
-          <label class="qc-field">
-            <span>{{ t('settings.provider') }}</span>
-            <select v-model="oauthProviderId" @change="onOauthProviderChange">
-              <option v-for="p in oauthProviders" :key="p.id" :value="p.id">
-                {{ p.name || p.id }}
-              </option>
-            </select>
-          </label>
-          <label class="qc-field">
-            <span>{{ t('settings.method') }}</span>
-            <select v-model="oauthMethod">
-              <option v-for="m in oauthMethodOptions" :key="m.id" :value="m.id">{{ m.label }}</option>
-            </select>
-          </label>
-        </div>
-        <div class="qc-actions">
-          <button
-            class="primary-button"
-            type="button"
-            :disabled="!oauthProviderId || oauthBusy"
-            @click="runOAuthLogin"
-          >
-            {{ oauthBusy ? t('settings.oauthWaiting') : t('settings.oauthLogin') }}
-          </button>
-          <button
-            class="ghost-button"
-            type="button"
-            :disabled="!oauthProviderId || oauthBusy"
-            @click="doRefreshOAuth"
-          >
-            {{ t('settings.refreshToken') }}
-          </button>
-        </div>
-        <p v-if="oauthInstructions" class="form-hint">{{ oauthInstructions }}</p>
-        <p v-if="oauthUrl" class="form-hint">
-          <a :href="oauthUrl" target="_blank" rel="noopener noreferrer">{{ t('settings.openAuth') }}</a>
-        </p>
-        <p v-if="oauthResult" class="test-result" :class="{ ok: oauthResult.status === 'success' }">
-          <template v-if="oauthResult.status === 'success'">
-            ✓ {{ t('settings.oauthSuccess', { provider: oauthResult.provider || oauthProviderId }) }}
-          </template>
-          <template v-else-if="oauthResult.status === 'failed'">
-            ✕ {{ t('settings.oauthFailure', { error: oauthResult.error || t('settings.unknownError') }) }}
           </template>
         </p>
       </section>

@@ -4,7 +4,6 @@ import { tmpdir } from "node:os"
 import { expect, test } from "bun:test"
 import { _resetForTest as resetRegistry } from "../src/registry"
 import { _resetForTest as resetCatalog } from "../src/catalog"
-import * as oauth from "../src/oauth"
 import * as store from "../src/config"
 
 const BRIDGE_TOKEN = "test-bridge-capability-0123456789abcdef0123456789"
@@ -79,65 +78,21 @@ test("all-provider model catalog endpoint is not exposed", async () => {
   expect(response.status).toBe(404)
 })
 
-test("OAuth poll and refresh responses never expose stored credentials", async () => {
-  const app = await createIsolatedApp("appforge-llm-bridge-oauth-")
-  const handler = oauth.getOAuthProvider("openai")
-  if (!handler) throw new Error("openai OAuth handler missing")
-  const originalPoll = handler.poll
-  const originalRefresh = handler.refresh
-  const initial = {
-    type: "oauth" as const,
-    refresh: "initial-refresh-secret",
-    access: "initial-access-secret",
-    expires: 1_900_000_000_000,
-    accountId: "acct-initial",
-  }
-  const refreshed = {
-    ...initial,
-    refresh: "refreshed-refresh-secret",
-    access: "refreshed-access-secret",
-    expires: initial.expires + 60_000,
-    accountId: "acct-refreshed",
-  }
+test("OAuth routes are not exposed", async () => {
+  const app = await createIsolatedApp("appforge-llm-bridge-api-key-only-")
+  const requests = [
+    authorizedRequest("http://127.0.0.1/oauth/providers"),
+    authorizedRequest("http://127.0.0.1/oauth/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider: "openai", method: "browser" }),
+    }),
+    authorizedRequest("http://127.0.0.1/oauth/poll/openai/poll-1"),
+    authorizedRequest("http://127.0.0.1/oauth/refresh/openai", { method: "POST" }),
+  ]
 
-  try {
-    handler.poll = () => ({ status: "success", provider: "openai", credential: initial })
-    handler.refresh = async () => refreshed
-
-    const pollResponse = await app.fetch(
-      authorizedRequest("http://127.0.0.1/oauth/poll/openai/poll-1"),
-    )
-    expect(pollResponse.status).toBe(200)
-    const pollRaw = await pollResponse.text()
-    expect(pollRaw).not.toContain(initial.access)
-    expect(pollRaw).not.toContain(initial.refresh)
-    expect(pollRaw).not.toContain("credential")
-    expect(JSON.parse(pollRaw)).toEqual({
-      status: "success",
-      provider: "openai",
-      accountId: "acct-initial",
-      expires: initial.expires,
-    })
-    expect((await store.getOAuthCredential("openai"))?.access).toBe(initial.access)
-
-    const refreshResponse = await app.fetch(
-      authorizedRequest("http://127.0.0.1/oauth/refresh/openai", { method: "POST" }),
-    )
-    expect(refreshResponse.status).toBe(200)
-    const refreshRaw = await refreshResponse.text()
-    expect(refreshRaw).not.toContain(refreshed.access)
-    expect(refreshRaw).not.toContain(refreshed.refresh)
-    expect(refreshRaw).not.toContain("credential")
-    expect(JSON.parse(refreshRaw)).toEqual({
-      ok: true,
-      provider: "openai",
-      accountId: "acct-refreshed",
-      expires: refreshed.expires,
-    })
-    expect((await store.getOAuthCredential("openai"))?.access).toBe(refreshed.access)
-  } finally {
-    handler.poll = originalPoll
-    handler.refresh = originalRefresh
+  for (const request of requests) {
+    expect((await app.fetch(request)).status).toBe(404)
   }
 })
 

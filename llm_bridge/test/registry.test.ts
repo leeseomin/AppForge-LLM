@@ -41,8 +41,8 @@ test("removed providers are not exposed by the registry", async () => {
   }
 })
 
-test("stored OAuth credentials are ignored for providers without OAuth support", async () => {
-  const entry = await get("xai")
+test("legacy non-API credentials cannot configure OpenAI", async () => {
+  const entry = await get("openai")
   expect(entry).toBeDefined()
   if (!entry) return
 
@@ -53,11 +53,11 @@ test("stored OAuth credentials are ignored for providers without OAuth support",
       refresh: "removed-xai-refresh-token",
       expires: 0,
     },
-  })
+  } as never)
 
   expect(status.configured).toBe(false)
   expect(status.key_source).toBe("none")
-  expect(status.oauth).toBe(false)
+  expect(status).not.toHaveProperty("oauth")
 })
 
 test("deepseek defaults to v4 pro and keeps it selectable", async () => {

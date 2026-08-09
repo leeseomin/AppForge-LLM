@@ -6,7 +6,6 @@ import * as OpenRouter from "@opencode-ai/llm/providers/openrouter"
 import * as XAI from "@opencode-ai/llm/providers/xai"
 import * as OpenAICompatible from "@opencode-ai/llm/providers/openai-compatible"
 import type {
-  OAuthCredential,
   ProviderDescriptor,
   ProviderKind,
   ProviderModel,
@@ -14,8 +13,6 @@ import type {
   StoredProviderConfig,
 } from "./types"
 import * as catalog from "./catalog"
-import * as oauth from "./oauth"
-import * as store from "./config"
 
 export interface BuildOptions {
   apiKey: string
@@ -227,11 +224,8 @@ function envKey(entry: RegistryEntry): string | undefined {
 
 function resolveKey(entry: RegistryEntry, stored: StoredProviderConfig | undefined): {
   value: string
-  source: "stored" | "env" | "oauth" | "none"
+  source: "stored" | "env" | "none"
 } {
-  if (oauth.isOAuthProvider(entry.id) && stored?.oauth?.access && stored.oauth.access.length > 0) {
-    return { value: stored.oauth.access, source: "oauth" }
-  }
   if (stored?.apiKey && stored.apiKey.length > 0) return { value: stored.apiKey, source: "stored" }
   const env = envKey(entry)
   if (env) {
@@ -268,7 +262,6 @@ export function statusOf(
   const baseURL = resolveBaseURL(entry, stored)
   const hasBaseURL = entry.base_url_required ? Boolean(baseURL) : true
   const configured = key.value.length > 0 && hasBaseURL
-  const hasOAuth = Boolean(stored?.oauth && oauth.isOAuthProvider(entry.id))
   return {
     id: entry.id,
     name: entry.name,
@@ -284,8 +277,6 @@ export function statusOf(
     configured,
     models: options?.includeModels ? entry.models : [],
     model_count: entry.models.length,
-    oauth: hasOAuth,
-    oauth_account_id: hasOAuth ? stored?.oauth?.accountId : undefined,
   }
 }
 
@@ -305,24 +296,7 @@ export async function resolveForGeneration(
   const entry = await get(providerId)
   if (!entry) throw new BridgeRegistryError(`Unknown provider '${providerId}'`)
 
-  let effectiveStored = stored
-  if (stored?.oauth?.access) {
-    const cred = stored.oauth
-    const needsRefresh = cred.expires > 0 && cred.expires <= Date.now()
-    if (needsRefresh && oauth.isOAuthProvider(providerId)) {
-      try {
-        const refreshed = await oauth.refreshOAuthToken(providerId, cred.refresh)
-        await store.setOAuthCredential(providerId, refreshed)
-        effectiveStored = { ...stored, oauth: refreshed }
-      } catch (err) {
-        throw new BridgeRegistryError(
-          `OAuth token refresh failed for '${providerId}': ${err instanceof Error ? err.message : String(err)}`,
-        )
-      }
-    }
-  }
-
-  const key = resolveKey(entry, effectiveStored)
+  const key = resolveKey(entry, stored)
   if (!key.value) {
     throw new BridgeRegistryError(
       entry.env_key
@@ -330,11 +304,11 @@ export async function resolveForGeneration(
         : `No API key stored for '${providerId}'.`,
     )
   }
-  const baseURL = resolveBaseURL(entry, effectiveStored)
+  const baseURL = resolveBaseURL(entry, stored)
   if (entry.base_url_required && !baseURL) {
     throw new BridgeRegistryError(`Provider '${providerId}' requires a base URL.`)
   }
-  const chosenModel = modelId || defaultModelOf(entry, effectiveStored) || entry.models[0]?.id
+  const chosenModel = modelId || defaultModelOf(entry, stored) || entry.models[0]?.id
   if (!chosenModel) throw new BridgeRegistryError(`No model specified for '${providerId}'.`)
   const model = entry.build(chosenModel, {
     apiKey: key.value,

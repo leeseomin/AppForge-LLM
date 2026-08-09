@@ -3,12 +3,12 @@ import { homedir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
 import { spawn } from "node:child_process"
 import { chmod, lstat, mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises"
-import type { ActiveSelection, OAuthCredential, StoredProviderConfig } from "./types"
+import type { ActiveSelection, StoredProviderConfig } from "./types"
 
 const KEYCHAIN_SERVICE = "appforge-llm"
 const SECURITY_EXECUTABLE = "/usr/bin/security"
 const MAX_SECURITY_OUTPUT_BYTES = 1024 * 1024
-type SecretKey = "apiKey" | "oauth"
+type SecretKey = "apiKey"
 type SecretBackend = "file" | "keychain"
 interface SecurityCommandResult { stdout: string }
 type SecurityCommandRunner = (args: string[], input?: string) => Promise<SecurityCommandResult>
@@ -25,6 +25,26 @@ export interface BridgeConfig {
 }
 
 const EMPTY: BridgeConfig = { providers: {}, active: { provider: null, model: null } }
+
+function normalizedProvider(value: unknown): StoredProviderConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {}
+  const input = value as Record<string, unknown>
+  const provider: StoredProviderConfig = {}
+  if (typeof input.apiKey === "string" && input.apiKey.length > 0) provider.apiKey = input.apiKey
+  if (typeof input.apiKeyRef === "string" && input.apiKeyRef.length > 0) provider.apiKeyRef = input.apiKeyRef
+  if (typeof input.baseURL === "string" && input.baseURL.length > 0) provider.baseURL = input.baseURL
+  if (typeof input.defaultModel === "string" && input.defaultModel.length > 0) {
+    provider.defaultModel = input.defaultModel
+  }
+  return provider
+}
+
+function normalizedProviders(value: unknown): Record<string, StoredProviderConfig> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {}
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([id, provider]) => [id, normalizedProvider(provider)]),
+  )
+}
 
 let cache: BridgeConfig | null = null
 let loaded = false
@@ -240,13 +260,9 @@ async function hydrateSecrets(config: BridgeConfig): Promise<BridgeConfig> {
   const store = selectedSecretStore()
   const providers: Record<string, StoredProviderConfig> = {}
   for (const [id, provider] of Object.entries(config.providers)) {
-    const next: StoredProviderConfig = { ...provider }
+    const next = normalizedProvider(provider)
     if (next.apiKeyRef && !next.apiKey) {
       next.apiKey = await store.get(id, "apiKey")
-    }
-    if (next.oauthRef && !next.oauth) {
-      const raw = await store.get(id, "oauth")
-      if (raw) next.oauth = JSON.parse(raw) as OAuthCredential
     }
     providers[id] = next
   }
@@ -257,9 +273,8 @@ async function serializeForStorage(config: BridgeConfig): Promise<BridgeConfig> 
   if (currentSecretBackend() === "file") {
     const providers: Record<string, StoredProviderConfig> = {}
     for (const [id, provider] of Object.entries(config.providers)) {
-      const next: StoredProviderConfig = { ...provider }
+      const next = normalizedProvider(provider)
       delete next.apiKeyRef
-      delete next.oauthRef
       providers[id] = next
     }
     return { providers, active: { ...config.active } }
@@ -268,17 +283,12 @@ async function serializeForStorage(config: BridgeConfig): Promise<BridgeConfig> 
   const store = selectedSecretStore()
   const providers: Record<string, StoredProviderConfig> = {}
   for (const [id, provider] of Object.entries(config.providers)) {
-    const next: StoredProviderConfig = { ...provider }
+    const next = normalizedProvider(provider)
     if (next.apiKey && next.apiKey.length > 0) {
       await store.set(id, "apiKey", next.apiKey)
       next.apiKeyRef = keychainRef(id, "apiKey")
     }
-    if (next.oauth) {
-      await store.set(id, "oauth", JSON.stringify(next.oauth))
-      next.oauthRef = keychainRef(id, "oauth")
-    }
     delete next.apiKey
-    delete next.oauth
     providers[id] = next
   }
   return { providers, active: { ...config.active } }
@@ -293,7 +303,7 @@ export async function load(): Promise<BridgeConfig> {
     const raw = await readFile(path, "utf8")
     const parsed = JSON.parse(raw) as Partial<BridgeConfig>
     cache = await hydrateSecrets({
-      providers: parsed.providers && typeof parsed.providers === "object" ? (parsed.providers as BridgeConfig["providers"]) : {},
+      providers: normalizedProviders(parsed.providers),
       active: {
         provider: parsed.active?.provider ?? null,
         model: parsed.active?.model ?? null,
@@ -317,7 +327,7 @@ export async function load(): Promise<BridgeConfig> {
   if (
     backend === "keychain"
     && Object.values(cache.providers).some((provider) =>
-      Boolean((provider.apiKey && !provider.apiKeyRef) || (provider.oauth && !provider.oauthRef)),
+      Boolean(provider.apiKey && !provider.apiKeyRef),
     )
   ) {
     await save(cache)
@@ -377,36 +387,11 @@ export async function deleteProvider(id: string): Promise<void> {
   const config = await load()
   if (currentSecretBackend() === "keychain") {
     await selectedSecretStore().delete(id, "apiKey")
-    await selectedSecretStore().delete(id, "oauth")
   }
   delete config.providers[id]
   if (config.active.provider === id) {
     config.active = { provider: null, model: null }
   }
-  await save(config)
-}
-
-export async function setOAuthCredential(id: string, credential: OAuthCredential): Promise<void> {
-  const config = await load()
-  const existing = config.providers[id] ?? {}
-  config.providers[id] = { ...existing, oauth: credential }
-  await save(config)
-}
-
-export async function getOAuthCredential(id: string): Promise<OAuthCredential | undefined> {
-  const config = await load()
-  return config.providers[id]?.oauth
-}
-
-export async function deleteOAuthCredential(id: string): Promise<void> {
-  const config = await load()
-  const existing = config.providers[id]
-  if (!existing) return
-  if (currentSecretBackend() === "keychain") {
-    await selectedSecretStore().delete(id, "oauth")
-  }
-  delete existing.oauth
-  delete existing.oauthRef
   await save(config)
 }
 

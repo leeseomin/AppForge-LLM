@@ -144,11 +144,6 @@ class QuickConnectRequest(BaseModel):
     model: str | None = None
 
 
-class OAuthStartRequest(BaseModel):
-    provider: str
-    method: str = "browser"
-
-
 class BootstrapSessionRequest(BaseModel):
     code: str
 
@@ -653,27 +648,6 @@ def create_app(
             payload.provider,
             payload.model,
         )
-
-    @app.get("/api/llm/oauth/providers")
-    async def llm_oauth_providers(request: Request) -> dict[str, Any]:
-        return await _bridge_call(request, llm_bridge.oauth_providers)
-
-    @app.post("/api/llm/oauth/start")
-    async def llm_oauth_start(payload: OAuthStartRequest, request: Request) -> dict[str, Any]:
-        return await _bridge_call(
-            request,
-            llm_bridge.oauth_start,
-            provider=payload.provider,
-            method=payload.method,
-        )
-
-    @app.get("/api/llm/oauth/poll/{provider}/{poll_id}")
-    async def llm_oauth_poll(provider: str, poll_id: str, request: Request) -> dict[str, Any]:
-        return await _bridge_call(request, llm_bridge.oauth_poll, provider, poll_id)
-
-    @app.post("/api/llm/oauth/refresh/{provider}")
-    async def llm_oauth_refresh(provider: str, request: Request) -> dict[str, Any]:
-        return await _bridge_call(request, llm_bridge.oauth_refresh, provider)
 
     @app.post("/api/llm/quick-connect")
     async def llm_quick_connect(payload: QuickConnectRequest, request: Request) -> dict[str, Any]:

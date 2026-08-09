@@ -904,11 +904,6 @@ pre,
   background: rgba(214, 104, 83, 0.07);
 }
 
-.oauth-block {
-  border-color: rgba(47, 125, 93, 0.22);
-  background: rgba(47, 125, 93, 0.065);
-}
-
 .advanced-toggle {
   border-color: var(--line);
   color: var(--text-muted);

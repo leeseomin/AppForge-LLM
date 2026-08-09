@@ -126,7 +126,7 @@ drivers are not supported in v7.
 
 `llm_bridge/` is a Bun service that uses the vendored
 `@opencode-ai/llm` engine to normalize provider configuration, model catalogs,
-generation, streaming, OAuth, and tool-use sessions.
+generation, streaming, API-key authentication, and tool-use sessions.
 
 For the default loopback URL, `LLMBridgeProcessManager` starts the bundled
 service on demand with an allowlisted environment. FastAPI generates a
@@ -136,9 +136,9 @@ request. The bridge binds only to loopback and requires Bun plus the locked
 over HTTPS and must use a matching token.
 
 Provider metadata and the active model are stored under
-`~/.appforge/llm/providers.json` by default. On macOS, API keys and OAuth
-credentials use Keychain references by default. The file backend uses a
-user-owned private directory and atomic private file writes.
+`~/.appforge/llm/providers.json` by default. On macOS, API keys use Keychain
+references by default. The file backend uses a user-owned private directory and
+atomic private file writes.
 
 ### Workspace tools and gates
 
