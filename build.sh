@@ -15,7 +15,13 @@ APPFORGE_WEB_PORT_FALLBACK_LIMIT="${APPFORGE_WEB_PORT_FALLBACK_LIMIT:-20}"
 APPFORGE_LOG_LEVEL="${APPFORGE_LOG_LEVEL:-info}"
 APPFORGE_SMOKE_TIMEOUT="${APPFORGE_SMOKE_TIMEOUT:-30}"
 APPFORGE_BRIDGE_TIMEOUT="${APPFORGE_BRIDGE_TIMEOUT:-15}"
-APPFORGE_LLM_BRIDGE_URL="${APPFORGE_LLM_BRIDGE_URL:-http://127.0.0.1:8788}"
+APPFORGE_LLM_BRIDGE_PORT_FALLBACK_LIMIT="${APPFORGE_LLM_BRIDGE_PORT_FALLBACK_LIMIT:-20}"
+APPFORGE_LLM_BRIDGE_URL_EXPLICIT=0
+if [[ -n "${APPFORGE_LLM_BRIDGE_URL:-}" ]]; then
+  APPFORGE_LLM_BRIDGE_URL_EXPLICIT=1
+else
+  APPFORGE_LLM_BRIDGE_URL="http://127.0.0.1:8788"
+fi
 APPFORGE_RUNTIME_DIR="${APPFORGE_DATA_DIR:-.appforge-web}"
 
 APPFORGE_BIN="$ROOT_DIR/.venv/bin/appforge"
@@ -73,6 +79,8 @@ Environment:
   APPFORGE_START_LLM_BRIDGE=1       Request web-process-managed llm_bridge startup.
   APPFORGE_SKIP_LLM_BRIDGE=1        Disable managed bridge startup.
   APPFORGE_LLM_BRIDGE_URL           Bridge URL base, default http://127.0.0.1:8788.
+  APPFORGE_LLM_BRIDGE_PORT_FALLBACK_LIMIT
+                                      Additional local bridge ports to scan, default 20.
   APPFORGE_LLM_BRIDGE_TOKEN         Shared 32+ character capability for a manual bridge.
   APPFORGE_SMOKE_TIMEOUT            Smoke timeout in seconds, default 30.
   APPFORGE_BRIDGE_TIMEOUT           Bridge startup timeout in seconds, default 15.
@@ -146,6 +154,7 @@ validate_nonnegative_uint() {
 }
 
 validate_nonnegative_uint "APPFORGE_WEB_PORT_FALLBACK_LIMIT" "$APPFORGE_WEB_PORT_FALLBACK_LIMIT"
+validate_nonnegative_uint "APPFORGE_LLM_BRIDGE_PORT_FALLBACK_LIMIT" "$APPFORGE_LLM_BRIDGE_PORT_FALLBACK_LIMIT"
 
 cleanup() {
   local status=$?
@@ -177,12 +186,13 @@ http_ok() {
 }
 
 port_available() {
-  local port="$1"
+  local host="$1"
+  local port="$2"
   if have lsof; then
     ! lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
     return
   fi
-  "$ROOT_DIR/.venv/bin/python" -c 'import socket, sys; host=sys.argv[1]; port=int(sys.argv[2]); family=socket.AF_INET6 if ":" in host else socket.AF_INET; sock=socket.socket(family, socket.SOCK_STREAM); sock.bind((host, port)); sock.close()' "$APPFORGE_WEB_HOST" "$port"
+  "$ROOT_DIR/.venv/bin/python" -c 'import socket, sys; host=sys.argv[1]; port=int(sys.argv[2]); family=socket.AF_INET6 if ":" in host else socket.AF_INET; sock=socket.socket(family, socket.SOCK_STREAM); sock.bind((host, port)); sock.close()' "$host" "$port"
 }
 
 bridge_reserved_web_port() {
@@ -229,7 +239,7 @@ select_web_port() {
       fi
       continue
     fi
-    if port_available "$port"; then
+    if port_available "$APPFORGE_WEB_HOST" "$port"; then
       if (( port != requested_port )); then
         if [[ -z "$requested_reason" ]]; then
           requested_reason="already in use"
@@ -324,15 +334,41 @@ normalize_driver() {
   printf '%s' "${1:-auto}" | tr '[:upper:]_' '[:lower:]-'
 }
 
-maybe_start_bridge() {
+bridge_requested() {
   local driver
   driver="$(normalize_driver "${APPFORGE_DRIVER:-llm-bridge-agent}")"
-  local requested=0
-  if [[ "$driver" == "llm-bridge" || "$driver" == "llm-bridge-agent" || "$driver" == "auto" ]] || is_true "${APPFORGE_START_LLM_BRIDGE:-}"; then
-    requested=1
+  [[ "$driver" == "llm-bridge" || "$driver" == "llm-bridge-agent" || "$driver" == "auto" ]] || is_true "${APPFORGE_START_LLM_BRIDGE:-}"
+}
+
+select_managed_bridge_port() {
+  if ! bridge_requested || is_true "${APPFORGE_SKIP_LLM_BRIDGE:-}" || (( APPFORGE_LLM_BRIDGE_URL_EXPLICIT == 1 )); then
+    return
   fi
 
-  if (( requested == 0 )); then
+  local requested_port=8788
+  local fallback_limit=$((10#$APPFORGE_LLM_BRIDGE_PORT_FALLBACK_LIMIT))
+  local end_port=$((requested_port + fallback_limit))
+  local port
+  if (( end_port > 65535 )); then
+    end_port=65535
+  fi
+
+  for (( port = requested_port; port <= end_port; port++ )); do
+    if port_available "127.0.0.1" "$port"; then
+      if (( port != requested_port )); then
+        log "LLM bridge port $requested_port is already in use; using $port instead."
+      fi
+      APPFORGE_LLM_BRIDGE_URL="http://127.0.0.1:${port}"
+      export APPFORGE_LLM_BRIDGE_URL
+      return
+    fi
+  done
+
+  die "No available managed LLM bridge port found from $requested_port through $end_port. Set APPFORGE_LLM_BRIDGE_URL to an available loopback URL."
+}
+
+maybe_start_bridge() {
+  if ! bridge_requested; then
     return
   fi
 
@@ -423,6 +459,7 @@ run_foreground_web() {
 
 ensure_python_env
 ensure_frontend
+select_managed_bridge_port
 select_web_port
 maybe_start_bridge
 

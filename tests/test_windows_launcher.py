@@ -34,8 +34,13 @@ class WindowsLauncherContractTests(unittest.TestCase):
             "--no-open-browser",
             "/api/health",
             "Invoke-WebRequest",
+            "Select-ManagedBridgePort",
+            "BridgeUrlExplicit",
         ):
             self.assertIn(contract, launcher)
+
+        main = launcher.split("function Invoke-Main", maxsplit=1)[1]
+        self.assertLess(main.index("Select-ManagedBridgePort"), main.index("Select-WebPort"))
 
     def test_readme_exposes_the_one_click_windows_entrypoint(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")

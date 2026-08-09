@@ -230,10 +230,13 @@ function Get-LoopbackAddress {
 }
 
 function Test-PortAvailable {
-    param([Parameter(Mandatory = $true)][int]$Port)
+    param(
+        [Parameter(Mandatory = $true)][string]$HostName,
+        [Parameter(Mandatory = $true)][int]$Port
+    )
     $listener = $null
     try {
-        $address = Get-LoopbackAddress $script:WebHost
+        $address = Get-LoopbackAddress $HostName
         $listener = [Net.Sockets.TcpListener]::new($address, $Port)
         $listener.Server.ExclusiveAddressUse = $true
         $listener.Start()
@@ -283,7 +286,7 @@ function Select-WebPort {
             }
             continue
         }
-        if (Test-PortAvailable $port) {
+        if (Test-PortAvailable $script:WebHost $port) {
             if ($port -ne $script:RequestedWebPort) {
                 if ([string]::IsNullOrEmpty($requestedReason)) {
                     $requestedReason = "already in use"
@@ -302,11 +305,42 @@ function Select-WebPort {
     Stop-WithError "No available web port found from $($script:RequestedWebPort) through $endPort."
 }
 
-function Initialize-BridgeRuntime {
+function Test-BridgeRequested {
     $driver = (Get-EnvironmentValue "APPFORGE_DRIVER" "llm-bridge-agent").ToLowerInvariant().Replace("_", "-")
-    $bridgeRequested = @("llm-bridge", "llm-bridge-agent", "auto") -contains $driver
-    $bridgeRequested = $bridgeRequested -or (Test-Truthy ([Environment]::GetEnvironmentVariable("APPFORGE_START_LLM_BRIDGE")))
-    if (-not $bridgeRequested) {
+    $driverRequestsBridge = @("llm-bridge", "llm-bridge-agent", "auto") -contains $driver
+    $startupRequested = Test-Truthy ([Environment]::GetEnvironmentVariable("APPFORGE_START_LLM_BRIDGE"))
+    return $driverRequestsBridge -or $startupRequested
+}
+
+function Select-ManagedBridgePort {
+    if (-not (Test-BridgeRequested)) {
+        return
+    }
+    if (Test-Truthy ([Environment]::GetEnvironmentVariable("APPFORGE_SKIP_LLM_BRIDGE"))) {
+        return
+    }
+    if ($script:BridgeUrlExplicit) {
+        return
+    }
+
+    $requestedPort = 8788
+    $endPort = [Math]::Min(65535, $requestedPort + $script:BridgePortFallbackLimit)
+    for ($port = $requestedPort; $port -le $endPort; $port++) {
+        if (Test-PortAvailable "127.0.0.1" $port) {
+            if ($port -ne $requestedPort) {
+                Write-Log "LLM bridge port $requestedPort is already in use; using $port instead."
+            }
+            $script:BridgeUrl = "http://127.0.0.1:${port}"
+            $env:APPFORGE_LLM_BRIDGE_URL = $script:BridgeUrl
+            return
+        }
+    }
+
+    Stop-WithError "No available managed LLM bridge port found from $requestedPort through $endPort. Set APPFORGE_LLM_BRIDGE_URL to an available loopback URL."
+}
+
+function Initialize-BridgeRuntime {
+    if (-not (Test-BridgeRequested)) {
         return
     }
     if (Test-Truthy ([Environment]::GetEnvironmentVariable("APPFORGE_SKIP_LLM_BRIDGE"))) {
@@ -465,10 +499,13 @@ function Invoke-Main {
     }
     $script:WebPort = $script:RequestedWebPort
     $script:PortFallbackLimit = Convert-ToNonnegativeInteger "APPFORGE_WEB_PORT_FALLBACK_LIMIT" (Get-EnvironmentValue "APPFORGE_WEB_PORT_FALLBACK_LIMIT" "20")
+    $script:BridgePortFallbackLimit = Convert-ToNonnegativeInteger "APPFORGE_LLM_BRIDGE_PORT_FALLBACK_LIMIT" (Get-EnvironmentValue "APPFORGE_LLM_BRIDGE_PORT_FALLBACK_LIMIT" "20")
     $script:SmokeTimeout = Convert-ToPositiveInteger "APPFORGE_SMOKE_TIMEOUT" (Get-EnvironmentValue "APPFORGE_SMOKE_TIMEOUT" "30")
     [void](Convert-ToPositiveInteger "APPFORGE_BRIDGE_TIMEOUT" (Get-EnvironmentValue "APPFORGE_BRIDGE_TIMEOUT" "15"))
     $script:LogLevel = Get-EnvironmentValue "APPFORGE_LOG_LEVEL" "info"
-    $script:BridgeUrl = Get-EnvironmentValue "APPFORGE_LLM_BRIDGE_URL" "http://127.0.0.1:8788"
+    $bridgeUrlSetting = [Environment]::GetEnvironmentVariable("APPFORGE_LLM_BRIDGE_URL")
+    $script:BridgeUrlExplicit = -not [string]::IsNullOrWhiteSpace($bridgeUrlSetting)
+    $script:BridgeUrl = if ($script:BridgeUrlExplicit) { $bridgeUrlSetting } else { "http://127.0.0.1:8788" }
     $env:APPFORGE_LLM_BRIDGE_URL = $script:BridgeUrl
 
     $runtimeSetting = Get-EnvironmentValue "APPFORGE_DATA_DIR" ".appforge-web"
@@ -489,6 +526,7 @@ function Invoke-Main {
     try {
         Initialize-PythonEnvironment
         Initialize-Frontend
+        Select-ManagedBridgePort
         Select-WebPort
         Initialize-BridgeRuntime
 
