@@ -15,6 +15,10 @@ For a source checkout, use the launcher first:
 ./build.sh
 ```
 
+On Windows 11, double-click `build.bat` or run it from Command Prompt. The batch
+file starts the native PowerShell launcher in `build.ps1` and keeps the console
+open when startup fails.
+
 It syncs the Python environment, installs frontend packages when needed, builds
 the packaged Vue assets, and delegates to `appforge web`. When `uv sync` is not
 available or cannot be used locally, it falls back to `.venv` plus
@@ -208,11 +212,11 @@ Returns HTTP 409 until the job completes. The path is resolved from server-owned
 | `APPFORGE_PROJECTS_DIR` | `projects` | Generated workspaces |
 | `APPFORGE_DATA_DIR` | `.appforge-web` | Persisted web-job state |
 | `APPFORGE_DRIVER` | `llm-bridge-agent` | `llm-bridge-agent`, `llm-bridge`, or `auto` (same bridge-backed path); `codex`/`claude`/`generic` are rejected |
-| `APPFORGE_WEB_HOST` | `127.0.0.1` | `build.sh`/`appforge web` bind host |
-| `APPFORGE_WEB_PORT` | `8787` | `build.sh`/`appforge web` bind port |
-| `APPFORGE_NO_OPEN` | `false` | Suppress browser opening in `build.sh` normal mode |
-| `APPFORGE_SKIP_INSTALL` | `false` | Reuse the existing `.venv` in `build.sh` |
-| `APPFORGE_SKIP_FRONTEND_BUILD` | `false` | Reuse current packaged web assets in `build.sh` |
+| `APPFORGE_WEB_HOST` | `127.0.0.1` | Source launcher/`appforge web` bind host |
+| `APPFORGE_WEB_PORT` | `8787` | Source launcher/`appforge web` bind port |
+| `APPFORGE_NO_OPEN` | `false` | Suppress browser opening in normal launcher mode |
+| `APPFORGE_SKIP_INSTALL` | `false` | Reuse the launcher's existing `.venv` |
+| `APPFORGE_SKIP_FRONTEND_BUILD` | `false` | Reuse current packaged web assets in the source launcher |
 | `APPFORGE_START_LLM_BRIDGE` | `false` | Request launcher-owned bridge startup or reuse |
 | `APPFORGE_SKIP_LLM_BRIDGE` | `false` | Disable launcher-owned bridge startup |
 | `APPFORGE_LLM_BRIDGE_AUTOSTART` | `true` | Allow `appforge web` to start or reuse a local loopback bridge on demand |

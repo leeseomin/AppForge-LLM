@@ -6,6 +6,10 @@
 
 Python 3.11+, Node.js/npm, Bun, LLM API 키가 필요합니다.
 
+Windows 11에서는 `build.bat`을 더블클릭하세요.
+
+macOS/Linux에서는 다음 명령을 실행하세요.
+
 ```bash
 ./build.sh
 ```

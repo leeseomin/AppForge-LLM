@@ -42,6 +42,10 @@ appforge web
 
 소스에서 실행:
 
+Windows 11에서는 저장소의 `build.bat`을 더블클릭하면 의존성을 준비하고 웹앱을 엽니다.
+
+macOS/Linux:
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate
