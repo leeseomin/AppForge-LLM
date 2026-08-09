@@ -340,6 +340,20 @@ maybe_start_bridge() {
     log "Skipping llm_bridge startup because APPFORGE_SKIP_LLM_BRIDGE is set."
     return
   fi
+
+  have bun || die "Bun was not found. Install Bun and ensure it is available on PATH."
+
+  local bridge_dir="$ROOT_DIR/llm_bridge"
+  [[ -f "$bridge_dir/bun.lock" ]] || die "llm_bridge/bun.lock is missing."
+  if [[ ! -d "$bridge_dir/node_modules" ]]; then
+    log "Installing llm_bridge dependencies from bun.lock."
+    (
+      cd "$bridge_dir"
+      bun install --frozen-lockfile
+    ) || die "bun install --frozen-lockfile failed in llm_bridge."
+  fi
+  [[ -d "$bridge_dir/node_modules" ]] || die "Bun did not produce llm_bridge/node_modules."
+
   # The FastAPI process owns bridge startup so its high-entropy capability stays
   # in memory and the child receives an allowlisted environment. Starting Bun
   # here would either expose the capability in argv or forward the whole shell
