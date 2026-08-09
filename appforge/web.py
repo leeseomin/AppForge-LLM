@@ -147,7 +147,6 @@ class QuickConnectRequest(BaseModel):
 class OAuthStartRequest(BaseModel):
     provider: str
     method: str = "browser"
-    enterpriseDomain: str | None = None
 
 
 class BootstrapSessionRequest(BaseModel):
@@ -666,7 +665,6 @@ def create_app(
             llm_bridge.oauth_start,
             provider=payload.provider,
             method=payload.method,
-            enterprise_domain=payload.enterpriseDomain,
         )
 
     @app.get("/api/llm/oauth/poll/{provider}/{poll_id}")

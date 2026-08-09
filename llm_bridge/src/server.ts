@@ -826,12 +826,11 @@ async function oauthStart(request: Request): Promise<Response> {
   const body = await readJsonBody(request)
   const providerId = typeof body.provider === "string" ? body.provider : ""
   const method = body.method === "browser" || body.method === "device-code" ? body.method : "browser"
-  const enterpriseDomain = typeof body.enterpriseDomain === "string" ? body.enterpriseDomain : undefined
   if (!oauth.isOAuthProvider(providerId)) {
     return cors(errorResponse(`No OAuth handler for '${providerId}'`, 404, "UNKNOWN_OAUTH_PROVIDER"))
   }
   try {
-    const result = await oauth.startOAuthFlow(providerId, method as "browser" | "device-code", { enterpriseDomain })
+    const result = await oauth.startOAuthFlow(providerId, method as "browser" | "device-code")
     return cors(json(result))
   } catch {
     return cors(errorResponse("OAuth authorization could not be started.", 500, "OAUTH_START_FAILED"))

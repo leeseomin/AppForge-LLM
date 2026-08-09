@@ -457,7 +457,7 @@ def preflight(project: Path = typer.Argument(Path("."), help="Project path")) ->
 @auth_app.command("login")
 def auth_login(
     provider: str | None = typer.Option(None, "--provider", "-p", help="Provider id to connect (skips interactive selection)"),
-    oauth: bool = typer.Option(False, "--oauth", help="Use OAuth login (OpenAI ChatGPT, xAI Grok, GitHub Copilot)"),
+    oauth: bool = typer.Option(False, "--oauth", help="Use OAuth login (OpenAI ChatGPT)"),
     llm_bridge_url: str = typer.Option(DEFAULT_LLM_BRIDGE_URL, "--llm-bridge-url"),
 ) -> None:
     """Connect an external LLM provider: pick → API key → test → activate model."""

@@ -229,7 +229,7 @@ export const openaiOAuth = {
     { id: "browser" as const, label: "ChatGPT Pro/Plus (browser)" },
     { id: "device-code" as const, label: "ChatGPT Pro/Plus (headless)" },
   ],
-  start: (method: "browser" | "device-code", _options?: { enterpriseDomain?: string }) => (method === "browser" ? startBrowserFlow() : startDeviceFlow()),
+  start: (method: "browser" | "device-code") => (method === "browser" ? startBrowserFlow() : startDeviceFlow()),
   poll: pollFlow,
   refresh: refreshOpenAIToken,
 }

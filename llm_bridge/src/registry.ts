@@ -117,74 +117,6 @@ const STATIC_ENTRIES: RegistryEntry[] = [
     build: (id, options) => OpenAICompatible.deepseek.configure({ apiKey: options.apiKey, baseURL: options.baseURL }).model(id),
   },
   {
-    id: "groq",
-    name: "Groq",
-    kind: "openai-compatible",
-    env_key: "GROQ_API_KEY",
-    base_url_default: "https://api.groq.com/openai/v1",
-    docs_url: "https://console.groq.com/keys",
-    models: [m("llama-3.3-70b-versatile", "Llama 3.3 70B"), m("llama-3.1-8b-instant", "Llama 3.1 8B")],
-    build: (id, options) => OpenAICompatible.groq.configure({ apiKey: options.apiKey, baseURL: options.baseURL }).model(id),
-  },
-  {
-    id: "cerebras",
-    name: "Cerebras",
-    kind: "openai-compatible",
-    env_key: "CEREBRAS_API_KEY",
-    base_url_default: "https://api.cerebras.ai/v1",
-    docs_url: "https://cloud.cerebras.ai",
-    models: [m("llama3.1-70b", "Llama 3.1 70B"), m("llama3.1-8b", "Llama 3.1 8B")],
-    build: (id, options) => OpenAICompatible.cerebras.configure({ apiKey: options.apiKey, baseURL: options.baseURL }).model(id),
-  },
-  {
-    id: "togetherai",
-    name: "Together AI",
-    kind: "openai-compatible",
-    env_key: "TOGETHERAI_API_KEY",
-    base_url_default: "https://api.together.xyz/v1",
-    docs_url: "https://api.together.ai/settings/api-keys",
-    models: [m("meta.llama/Llama-3.3-70B-Instruct-Turbo", "Llama 3.3 70B Turbo")],
-    build: (id, options) => OpenAICompatible.togetherai.configure({ apiKey: options.apiKey, baseURL: options.baseURL }).model(id),
-  },
-  {
-    id: "fireworks",
-    name: "Fireworks AI",
-    kind: "openai-compatible",
-    env_key: "FIREWORKS_API_KEY",
-    base_url_default: "https://api.fireworks.ai/inference/v1",
-    docs_url: "https://fireworks.ai/account/api-keys",
-    models: [m("accounts/fireworks/models/llama-v3p1-70b-instruct", "Llama 3.1 70B")],
-    build: (id, options) => OpenAICompatible.fireworks.configure({ apiKey: options.apiKey, baseURL: options.baseURL }).model(id),
-  },
-  {
-    id: "deepinfra",
-    name: "DeepInfra",
-    kind: "openai-compatible",
-    env_key: "DEEPINFRA_API_KEY",
-    base_url_default: "https://api.deepinfra.com/v1/openai",
-    docs_url: "https://deepinfra.com/dash/api_keys",
-    models: [m("meta-llama/Meta-Llama-3.1-70B-Instruct", "Llama 3.1 70B")],
-    build: (id, options) => OpenAICompatible.deepinfra.configure({ apiKey: options.apiKey, baseURL: options.baseURL }).model(id),
-  },
-  {
-    id: "github-copilot",
-    name: "GitHub Copilot",
-    kind: "api-key",
-    base_url_default: "https://api.githubcopilot.com",
-    docs_url: "https://docs.github.com/en/copilot",
-    models: [
-      m("gpt-5.2", "GPT-5.2"),
-      m("gpt-4o", "GPT-4o"),
-      m("gpt-4o-mini", "GPT-4o mini"),
-    ],
-    build: (id, options) =>
-      OpenAICompatible.configure({
-        apiKey: options.apiKey,
-        baseURL: options.baseURL ?? "https://api.githubcopilot.com",
-        provider: "github-copilot",
-      }).model(id),
-  },
-  {
     id: "openai-compatible",
     name: "OpenAI 호환 (사용자 지정)",
     kind: "openai-compatible",
@@ -297,7 +229,7 @@ function resolveKey(entry: RegistryEntry, stored: StoredProviderConfig | undefin
   value: string
   source: "stored" | "env" | "oauth" | "none"
 } {
-  if (stored?.oauth?.access && stored.oauth.access.length > 0) {
+  if (oauth.isOAuthProvider(entry.id) && stored?.oauth?.access && stored.oauth.access.length > 0) {
     return { value: stored.oauth.access, source: "oauth" }
   }
   if (stored?.apiKey && stored.apiKey.length > 0) return { value: stored.apiKey, source: "stored" }
@@ -336,6 +268,7 @@ export function statusOf(
   const baseURL = resolveBaseURL(entry, stored)
   const hasBaseURL = entry.base_url_required ? Boolean(baseURL) : true
   const configured = key.value.length > 0 && hasBaseURL
+  const hasOAuth = Boolean(stored?.oauth && oauth.isOAuthProvider(entry.id))
   return {
     id: entry.id,
     name: entry.name,
@@ -351,8 +284,8 @@ export function statusOf(
     configured,
     models: options?.includeModels ? entry.models : [],
     model_count: entry.models.length,
-    oauth: Boolean(stored?.oauth),
-    oauth_account_id: stored?.oauth?.accountId,
+    oauth: hasOAuth,
+    oauth_account_id: hasOAuth ? stored?.oauth?.accountId : undefined,
   }
 }
 
@@ -397,13 +330,7 @@ export async function resolveForGeneration(
         : `No API key stored for '${providerId}'.`,
     )
   }
-  let baseURL = resolveBaseURL(entry, effectiveStored)
-  if (providerId === "github-copilot" && !baseURL) {
-    const enterpriseUrl = effectiveStored?.oauth?.metadata?.enterpriseUrl
-    baseURL = enterpriseUrl
-      ? `https://copilot-api.${enterpriseUrl}`
-      : "https://api.githubcopilot.com"
-  }
+  const baseURL = resolveBaseURL(entry, effectiveStored)
   if (entry.base_url_required && !baseURL) {
     throw new BridgeRegistryError(`Provider '${providerId}' requires a base URL.`)
   }

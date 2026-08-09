@@ -2,7 +2,7 @@
 
 The bridge is a Node/Bun service (``llm_bridge/``) that reuses the coco
 ``@opencode-ai/llm`` engine to connect to many external LLM providers
-(OpenAI, Anthropic, Google Gemini, OpenRouter, xAI, DeepSeek, Groq, ...).
+(OpenAI, Anthropic, Google Gemini, OpenRouter, xAI, DeepSeek, ...).
 
 The Python web server proxies provider management and generation through this
 module so the browser SPA stays same-origin, and the pipeline driver
@@ -761,12 +761,9 @@ def oauth_start(
     *,
     provider: str,
     method: str = "browser",
-    enterprise_domain: str | None = None,
     timeout: float = 10.0,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {"provider": provider, "method": method}
-    if enterprise_domain:
-        body["enterpriseDomain"] = enterprise_domain
     return _request(base_url, "POST", "/oauth/start", body=body, timeout=timeout)
 
 

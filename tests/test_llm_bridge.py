@@ -113,10 +113,20 @@ def test_plain_http_bridge_is_rejected_when_it_is_not_loopback(monkeypatch) -> N
 def test_bridge_process_environment_does_not_forward_arbitrary_host_secrets(monkeypatch) -> None:
     monkeypatch.setenv("UNRELATED_DATABASE_PASSWORD", "must-not-cross-boundary")
     monkeypatch.setenv("OPENAI_API_KEY", "allowed-provider-key")
+    removed_provider_keys = {
+        "GROQ_API_KEY",
+        "CEREBRAS_API_KEY",
+        "TOGETHERAI_API_KEY",
+        "FIREWORKS_API_KEY",
+        "DEEPINFRA_API_KEY",
+    }
+    for key in removed_provider_keys:
+        monkeypatch.setenv(key, "removed-provider-key")
 
     env = _bridge_environment("127.0.0.1", "8788", "bridge-capability")
 
     assert "UNRELATED_DATABASE_PASSWORD" not in env
+    assert removed_provider_keys.isdisjoint(env)
     assert env["OPENAI_API_KEY"] == "allowed-provider-key"
     assert env["APPFORGE_LLM_BRIDGE_TOKEN"] == "bridge-capability"
 

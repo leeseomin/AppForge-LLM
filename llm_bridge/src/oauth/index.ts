@@ -1,6 +1,4 @@
 import { openaiOAuth } from "./openai"
-import { xaiOAuth } from "./xai"
-import { githubCopilotOAuth } from "./github-copilot"
 import type { OAuthCredential, OAuthPollResult, OAuthProviderDescriptor, OAuthStartResult } from "./types"
 
 export * from "./types"
@@ -8,18 +6,13 @@ export * from "./types"
 interface OAuthProviderHandler {
   providerId: string
   methods: Array<{ id: "browser" | "device-code"; label: string }>
-  start: (
-    method: "browser" | "device-code",
-    options?: { enterpriseDomain?: string },
-  ) => Promise<OAuthStartResult>
+  start: (method: "browser" | "device-code") => Promise<OAuthStartResult>
   poll: (pollId: string) => OAuthPollResult
   refresh: (refreshToken: string) => Promise<OAuthCredential>
 }
 
 const REGISTRY: Record<string, OAuthProviderHandler> = {
   openai: openaiOAuth as unknown as OAuthProviderHandler,
-  xai: xaiOAuth as unknown as OAuthProviderHandler,
-  "github-copilot": githubCopilotOAuth as unknown as OAuthProviderHandler,
 }
 
 export function listOAuthProviders(): OAuthProviderDescriptor[] {
@@ -37,11 +30,10 @@ export function isOAuthProvider(id: string): boolean {
 export async function startOAuthFlow(
   providerId: string,
   method: "browser" | "device-code",
-  options?: { enterpriseDomain?: string },
 ): Promise<OAuthStartResult> {
   const handler = REGISTRY[providerId]
   if (!handler) throw new Error(`No OAuth handler for provider '${providerId}'`)
-  return handler.start(method, options)
+  return handler.start(method)
 }
 
 export function pollOAuthFlow(providerId: string, pollId: string): OAuthPollResult {

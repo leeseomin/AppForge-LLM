@@ -491,22 +491,12 @@ def cmd_login_oauth(
         console.print("[yellow]취소되었습니다.[/yellow]")
         return 0
 
-    enterprise_domain: str | None = None
-    if provider_id == "github-copilot":
-        is_enterprise = questionary.confirm("GitHub Enterprise를 사용하시나요?", default=False).ask()
-        if is_enterprise:
-            enterprise_domain = questionary.text("Enterprise 도메인 (예: company.ghe.com)").ask()
-            if not enterprise_domain:
-                console.print("[red]Enterprise 도메인이 필요합니다.[/red]")
-                return 1
-
     console.print(f"[dim]OAuth 플로우 시작 중... ({provider_id} / {method_id})[/dim]")
     try:
         start_result = llm_bridge.oauth_start(
             bridge_url,
             provider=provider_id,
             method=method_id,
-            enterprise_domain=enterprise_domain,
         )
     except llm_bridge.BridgeError as exc:
         console.print(f"[red]OAuth 시작 실패:[/red] {exc}")

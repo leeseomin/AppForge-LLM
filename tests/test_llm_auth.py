@@ -286,9 +286,9 @@ def test_cmd_login_oauth_failed(monkeypatch):
         lambda *a, **k: {
             "providers": [
                 {
-                    "id": "xai",
-                    "name": "xai",
-                    "methods": [{"id": "device-code", "label": "xAI Headless"}],
+                    "id": "openai",
+                    "name": "openai",
+                    "methods": [{"id": "device-code", "label": "ChatGPT Headless"}],
                 }
             ]
         },
@@ -296,11 +296,11 @@ def test_cmd_login_oauth_failed(monkeypatch):
     monkeypatch.setattr(
         llm_auth.llm_bridge,
         "oauth_start",
-        lambda *a, **k: {"pollId": "test-poll-id", "url": "https://auth.x.ai/...", "instructions": "Enter code", "method": "device-code"},
+        lambda *a, **k: {"pollId": "test-poll-id", "url": "https://auth.openai.com/...", "instructions": "Enter code", "method": "device-code"},
     )
     monkeypatch.setattr(
         llm_auth.llm_bridge,
         "oauth_poll",
         lambda *a, **k: {"status": "failed", "error": "authorization denied"},
     )
-    assert llm_auth.cmd_login_oauth("http://127.0.0.1:8788", provider_id="xai") == 1
+    assert llm_auth.cmd_login_oauth("http://127.0.0.1:8788", provider_id="openai") == 1

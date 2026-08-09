@@ -3,6 +3,7 @@ import {
   publicOAuthPollResult,
   publicOAuthRefreshResult,
 } from "../src/oauth/public"
+import { listOAuthProviders } from "../src/oauth"
 
 const credential = {
   type: "oauth" as const,
@@ -11,6 +12,10 @@ const credential = {
   expires: 1_900_000_000_000,
   accountId: "acct-123",
 }
+
+test("OpenAI is the only provider exposed through OAuth", () => {
+  expect(listOAuthProviders().map((provider) => provider.id)).toEqual(["openai"])
+})
 
 test("public OAuth poll result contains metadata but no credential", () => {
   const result = publicOAuthPollResult(

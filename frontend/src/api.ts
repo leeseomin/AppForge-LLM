@@ -228,7 +228,6 @@ export function getOAuthProviders(): Promise<OAuthProvidersPayload> {
 export function startOAuth(body: {
   provider: string;
   method: string;
-  enterpriseDomain?: string;
 }): Promise<OAuthStartResult> {
   return request<OAuthStartResult>('/api/llm/oauth/start', {
     method: 'POST',

@@ -7,6 +7,15 @@ import { _resetForTest as resetCatalog } from "../src/catalog"
 
 let tmp: string
 
+const REMOVED_PROVIDER_IDS = [
+  "groq",
+  "cerebras",
+  "togetherai",
+  "fireworks",
+  "deepinfra",
+  "github-copilot",
+]
+
 beforeAll(async () => {
   tmp = await mkdtemp(join(tmpdir(), "appforge-reg-"))
   process.env.APPFORGE_LLM_CONFIG_DIR = tmp
@@ -22,6 +31,33 @@ test("static fallback lists known providers", async () => {
   expect(ids).toContain("deepseek")
   expect(ids).toContain("openai")
   expect(ids).toContain("anthropic")
+})
+
+test("removed providers are not exposed by the registry", async () => {
+  const ids = (await list()).map((entry) => entry.id)
+
+  for (const providerId of REMOVED_PROVIDER_IDS) {
+    expect(ids).not.toContain(providerId)
+  }
+})
+
+test("stored OAuth credentials are ignored for providers without OAuth support", async () => {
+  const entry = await get("xai")
+  expect(entry).toBeDefined()
+  if (!entry) return
+
+  const status = statusOf(entry, {
+    oauth: {
+      type: "oauth",
+      access: "removed-xai-oauth-token",
+      refresh: "removed-xai-refresh-token",
+      expires: 0,
+    },
+  })
+
+  expect(status.configured).toBe(false)
+  expect(status.key_source).toBe("none")
+  expect(status.oauth).toBe(false)
 })
 
 test("deepseek defaults to v4 pro and keeps it selectable", async () => {
