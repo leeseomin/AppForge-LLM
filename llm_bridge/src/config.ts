@@ -158,6 +158,13 @@ function keychainRef(providerId: string, key: SecretKey): string {
   return `keychain:${KEYCHAIN_SERVICE}/${providerId}/${key}`
 }
 
+function keychainInteractiveToken(value: string): string {
+  if (!/^[A-Za-z0-9._:/-]+$/.test(value)) {
+    throw new KeychainCommandError(null, "Invalid macOS Keychain item identifier")
+  }
+  return value
+}
+
 function isNotFoundError(error: unknown): boolean {
   const candidate = error as { code?: unknown; message?: unknown }
   const code = typeof candidate.code === "number" ? candidate.code : undefined
@@ -232,10 +239,16 @@ class MacOSKeychainSecretStore implements SecretStore {
 
   async set(providerId: string, key: SecretKey, value: string): Promise<void> {
     this.assertSupported()
+    const service = keychainInteractiveToken(KEYCHAIN_SERVICE)
+    const account = keychainInteractiveToken(keychainAccount(providerId, key))
+    const encodedValue = Buffer.from(value, "utf8").toString("hex")
     await securityCommand(
-      ["add-generic-password", "-U", "-s", KEYCHAIN_SERVICE, "-a", keychainAccount(providerId, key), "-w"],
-      `${value}\n`,
+      ["-q", "-i"],
+      `add-generic-password -U -s ${service} -a ${account} -X ${encodedValue}\n`,
     )
+    if (await this.get(providerId, key) !== value) {
+      throw new KeychainCommandError(null, "macOS Keychain write could not be verified")
+    }
   }
 
   async delete(providerId: string, key: SecretKey): Promise<void> {
@@ -356,8 +369,12 @@ export async function setProvider(id: string, input: {
   baseURL?: string | null
   defaultModel?: string | null
 }): Promise<StoredProviderConfig> {
-  const config = await load()
-  const existing = config.providers[id] ?? {}
+  const current = await load()
+  const config: BridgeConfig = {
+    providers: { ...current.providers },
+    active: { ...current.active },
+  }
+  const existing = current.providers[id] ?? {}
   if (input.clearApiKey && input.apiKey) {
     throw new Error("clearApiKey cannot be combined with apiKey")
   }

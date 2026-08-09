@@ -101,7 +101,7 @@ test("keychain backend stores provider secrets as JSON references", async () => 
   expect((await getProvider("openai"))?.apiKey).toBe("sk-test-secret")
 })
 
-test("keychain command receives the secret on stdin instead of argv", async () => {
+test("keychain command writes through interactive stdin without exposing the secret in argv", async () => {
   if (process.platform !== "darwin") return
   const dir = await mkdtemp(join(tmpdir(), "appforge-bridge-keychain-stdin-"))
   process.env.APPFORGE_LLM_CONFIG = join(dir, "providers.json")
@@ -117,11 +117,32 @@ test("keychain command receives the secret on stdin instead of argv", async () =
 
   await setProvider("openai", { apiKey: secret })
 
-  const add = calls.find((call) => call.args[0] === "add-generic-password")
+  const add = calls.find((call) => call.args.includes("-i"))
   expect(add).toBeDefined()
   expect(add?.args).not.toContain(secret)
-  expect(add?.args.at(-1)).toBe("-w")
-  expect(add?.input).toBe(`${secret}\n`)
+  expect(add?.args).toEqual(["-q", "-i"])
+  expect(add?.input).toBe(
+    `add-generic-password -U -s appforge-llm -a openai:apiKey -X ${Buffer.from(secret, "utf8").toString("hex")}\n`,
+  )
+  expect(add?.input).not.toContain(secret)
+})
+
+test("keychain backend rejects a write that cannot be read back", async () => {
+  if (process.platform !== "darwin") return
+  const dir = await mkdtemp(join(tmpdir(), "appforge-bridge-keychain-readback-"))
+  process.env.APPFORGE_LLM_CONFIG = join(dir, "providers.json")
+  process.env.APPFORGE_LLM_SECRET_BACKEND = "keychain"
+  _resetForTest()
+  _setSecurityCommandRunnerForTest(async (args) => {
+    if (args[0] === "find-generic-password") return { stdout: "" }
+    return { stdout: "" }
+  })
+
+  await expect(setProvider("deepseek", { apiKey: "sk-readback-must-match" })).rejects.toThrow(
+    "could not be verified",
+  )
+  expect((await getProvider("deepseek"))?.apiKey).toBeUndefined()
+  await expect(readFile(configPath(), "utf8")).rejects.toThrow()
 })
 
 test("omitted or null keys preserve the credential and explicit clearing removes it", async () => {
