@@ -33,8 +33,6 @@ The launcher prepares the dependencies, starts the web app, and opens your defau
 
 The first launch may download dependencies. When the browser opens, connect an LLM and describe the app you want to build.
 
-For more information, see the [web app guide](docs/WEB_APP.md) or [Korean documentation](README.ko.md).
-
 ## Core pipeline
 
 1. Accept one natural-language app request with its runtime and safety settings.
