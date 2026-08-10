@@ -94,6 +94,37 @@ class WindowsLauncherContractTests(unittest.TestCase):
         )[1].split("function Initialize-Frontend", maxsplit=1)[0]
         self.assertNotIn('$script:Mode -ne "check"', sandbox_check)
 
+    def test_python_environment_creation_recovers_without_hiding_native_errors(self) -> None:
+        launcher = (ROOT / "build.ps1").read_text(encoding="utf-8")
+
+        for contract in (
+            "function Invoke-CapturedNativeCommand",
+            '$ErrorActionPreference = "Continue"',
+            "function Write-NativeCommandFailure",
+            "function Move-InvalidVirtualEnvironment",
+            'Join-Path $script:RootDir ".appforge-web\\venv-backups"',
+            "Move-Item -LiteralPath",
+            "sys.prefix != sys.base_prefix",
+            "Initial virtual environment creation failed",
+            '"--without-pip"',
+            '"--python", $script:PythonBin',
+            "Virtual environment pip bootstrap failed",
+        ):
+            self.assertIn(contract, launcher)
+
+        installer = launcher.split("function Install-PythonWithPip", maxsplit=1)[1].split(
+            "function Initialize-PythonEnvironment", maxsplit=1
+        )[0]
+        self.assertLess(
+            installer.index("Move-InvalidVirtualEnvironment"),
+            installer.index('"--without-pip"'),
+        )
+        self.assertNotIn("Remove-Item", installer)
+
+        windows_guide = (ROOT / "docs" / "WINDOWS_11.md").read_text(encoding="utf-8")
+        self.assertIn(".appforge-web\\venv-backups", windows_guide)
+        self.assertIn("complete Python command output and exit code", windows_guide)
+
     def test_readme_exposes_the_one_click_windows_entrypoint(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
 

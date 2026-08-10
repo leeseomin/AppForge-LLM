@@ -33,6 +33,8 @@ No separate `--check` step is required for normal use. The first launch:
 
 WinGet runs the package installers silently and accepts their package/source agreements. Windows can still display a UAC permission prompt for Node.js; approve it to continue. If installation is interrupted, double-click `build.bat` again and the launcher resumes from the runtime that is still missing.
 
+If Python leaves `.venv` without a working compatible interpreter, the next launch moves it to `.appforge-web\venv-backups` and creates a clean environment. If the interpreter works but the packaging step was interrupted, the launcher repairs `pip`, `setuptools`, and `wheel` in place. Any moved environment is retained for inspection; the launcher does not delete it.
+
 For contributors and CI, the optional full verification gate is:
 
 ```bat
@@ -147,6 +149,10 @@ No unrestricted fallback is provided. Move the project to a local NTFS folder or
 ### Automatic runtime installation fails
 
 Confirm the computer is online and Windows App Installer is present and current. If the error says `winget` is unavailable, update **App Installer** from Microsoft Store. Allow any Windows permission prompt, then double-click `build.bat` again. The launcher verifies every runtime after installation and stops rather than continuing with an unsupported version.
+
+### Python virtual environment creation fails
+
+Double-click `build.bat` again. A valid `.venv` is reused, and a working environment that only lacks `pip` is repaired in place. An environment without a working compatible interpreter is moved to `.appforge-web\venv-backups`, after which the launcher retries without bundled `pip` and installs the packaging tools separately. If recovery still fails, the window prints the complete Python command output and exit code instead of only the first traceback line; use that output to check endpoint-security blocks, disk permissions, or an unsupported filesystem.
 
 ### A build exceeds a resource limit
 

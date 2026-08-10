@@ -105,9 +105,68 @@ function Invoke-CheckedCommand {
         [Parameter(Mandatory = $true)][string[]]$Arguments,
         [Parameter(Mandatory = $true)][string]$FailureMessage
     )
-    & $FilePath @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        Stop-WithError "$FailureMessage (exit code $LASTEXITCODE)."
+    $previousErrorActionPreference = $ErrorActionPreference
+    $exitCode = 1
+    try {
+        # Windows PowerShell can promote native stderr lines to terminating errors.
+        # Let the process finish so its complete diagnostic and real exit code survive.
+        $ErrorActionPreference = "Continue"
+        & $FilePath @Arguments
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($exitCode -ne 0) {
+        Stop-WithError "$FailureMessage (exit code $exitCode)."
+    }
+}
+
+function Invoke-CapturedNativeCommand {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+    $previousErrorActionPreference = $ErrorActionPreference
+    $captured = @()
+    $exitCode = 1
+    try {
+        $ErrorActionPreference = "Continue"
+        $captured = @(& $FilePath @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+    }
+    catch {
+        $captured += $_.Exception.Message
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    $lines = @()
+    foreach ($item in $captured) {
+        $line = ([string]$item).TrimEnd()
+        if (-not [string]::IsNullOrWhiteSpace($line)) {
+            $lines += $line
+        }
+    }
+    return [PSCustomObject]@{
+        ExitCode = $exitCode
+        Lines = $lines
+    }
+}
+
+function Write-NativeCommandFailure {
+    param(
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)]$Result
+    )
+    Write-Log "$Label (exit code $($Result.ExitCode)) output:"
+    if ($Result.Lines.Count -eq 0) {
+        Write-Host "  (the command returned no diagnostic output)"
+        return
+    }
+    foreach ($line in $Result.Lines) {
+        Write-Host "  $line"
     }
 }
 
@@ -374,29 +433,125 @@ function Initialize-WindowsPrerequisites {
     Write-Log "All required Windows runtimes are ready."
 }
 
-function Install-PythonWithPip {
+function Test-VirtualEnvironmentPython {
     if (-not (Test-Path -LiteralPath $script:PythonBin -PathType Leaf)) {
-        $pythonCommand = Get-CompatiblePython
-        if ($null -eq $pythonCommand) {
-            Stop-WithError "Python 3.11 or newer was not found after automatic prerequisite setup."
+        return $false
+    }
+
+    $versionCheck = "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) and sys.prefix != sys.base_prefix else 1)"
+    $result = Invoke-CapturedNativeCommand $script:PythonBin @("-c", $versionCheck)
+    return $result.ExitCode -eq 0
+}
+
+function Move-InvalidVirtualEnvironment {
+    if (-not (Test-Path -LiteralPath $script:VenvDir)) {
+        return
+    }
+
+    $backupRoot = Join-Path $script:RootDir ".appforge-web\venv-backups"
+    New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
+    $timestamp = (Get-Date).ToString("yyyyMMdd-HHmmssfff")
+    $suffix = ([guid]::NewGuid().ToString("N")).Substring(0, 8)
+    $backupPath = Join-Path $backupRoot "venv-$timestamp-$suffix"
+    Move-Item -LiteralPath $script:VenvDir -Destination $backupPath -ErrorAction Stop
+    Write-Log "Moved the incomplete or incompatible .venv to '$backupPath'."
+}
+
+function Install-PipIntoVirtualEnvironment {
+    param([Parameter(Mandatory = $true)]$PythonCommand)
+
+    $systemPipArguments = @($PythonCommand.PrefixArguments) + @("-m", "pip", "--version")
+    $systemPipResult = Invoke-CapturedNativeCommand $PythonCommand.FilePath $systemPipArguments
+    if ($systemPipResult.ExitCode -ne 0) {
+        Write-Log "System pip is unavailable; bootstrapping it with ensurepip."
+        $ensureSystemPipArguments = @($PythonCommand.PrefixArguments) + @("-m", "ensurepip", "--upgrade")
+        $ensureSystemPipResult = Invoke-CapturedNativeCommand $PythonCommand.FilePath $ensureSystemPipArguments
+        if ($ensureSystemPipResult.ExitCode -ne 0) {
+            Write-NativeCommandFailure "System Python ensurepip failed" $ensureSystemPipResult
+            Stop-WithError "Virtual environment pip bootstrap failed because system pip is unavailable."
         }
+    }
+
+    Write-Log "Installing pip, setuptools, and wheel into .venv with system pip."
+    $bootstrapArguments = @($PythonCommand.PrefixArguments) + @(
+        "-m", "pip", "--python", $script:PythonBin,
+        "install", "--upgrade", "pip", "setuptools", "wheel"
+    )
+    $bootstrapResult = Invoke-CapturedNativeCommand $PythonCommand.FilePath $bootstrapArguments
+    if ($bootstrapResult.ExitCode -ne 0) {
+        Write-NativeCommandFailure "Virtual environment pip bootstrap failed" $bootstrapResult
+        Stop-WithError "Virtual environment pip bootstrap failed. Check the complete command output above."
+    }
+
+    $pipResult = Invoke-CapturedNativeCommand $script:PythonBin @("-m", "pip", "--version")
+    if ($pipResult.ExitCode -ne 0) {
+        Write-NativeCommandFailure "Virtual environment pip verification failed" $pipResult
+        Stop-WithError "Virtual environment pip bootstrap failed verification."
+    }
+}
+
+function Install-PythonWithPip {
+    $pythonCommand = Get-CompatiblePython
+    if ($null -eq $pythonCommand) {
+        Stop-WithError "Python 3.11 or newer was not found after automatic prerequisite setup."
+    }
+
+    if (-not (Test-VirtualEnvironmentPython)) {
+        if (Test-Path -LiteralPath $script:VenvDir) {
+            Move-InvalidVirtualEnvironment
+        }
+
         $pythonArguments = @($pythonCommand.PrefixArguments) + @("-m", "venv", $script:VenvDir)
-        $pythonFilePath = $pythonCommand.FilePath
         Write-Log "Creating .venv with $($pythonCommand.Label)."
-        & $pythonFilePath @pythonArguments
-        if ($LASTEXITCODE -ne 0) {
-            Stop-WithError "$($pythonCommand.Label) -m venv .venv failed."
+        $creationResult = Invoke-CapturedNativeCommand $pythonCommand.FilePath $pythonArguments
+        if ($creationResult.ExitCode -ne 0) {
+            Write-NativeCommandFailure "Initial virtual environment creation failed" $creationResult
+            if (Test-VirtualEnvironmentPython) {
+                Write-Log ".venv has a working Python interpreter; its pip installation will be repaired."
+            }
+            else {
+                if (Test-Path -LiteralPath $script:VenvDir) {
+                    Move-InvalidVirtualEnvironment
+                }
+                Write-Log "Retrying .venv creation without bundled pip."
+                $fallbackArguments = @($pythonCommand.PrefixArguments) + @(
+                    "-m", "venv", "--without-pip", $script:VenvDir
+                )
+                $fallbackResult = Invoke-CapturedNativeCommand $pythonCommand.FilePath $fallbackArguments
+                if ($fallbackResult.ExitCode -ne 0) {
+                    Write-NativeCommandFailure "Fallback virtual environment creation failed" $fallbackResult
+                    if (Test-Path -LiteralPath $script:VenvDir) {
+                        Move-InvalidVirtualEnvironment
+                    }
+                    Stop-WithError "Python could not create .venv. Check the complete command output above."
+                }
+            }
         }
     }
 
-    & $script:PythonBin -m pip --version *> $null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Log "Bootstrapping pip in .venv."
-        Invoke-CheckedCommand $script:PythonBin @("-m", "ensurepip", "--upgrade") "python -m ensurepip failed"
+    if (-not (Test-VirtualEnvironmentPython)) {
+        Stop-WithError ".venv was created, but its Python interpreter is missing or incompatible."
     }
 
-    & $script:PythonBin -c "import setuptools, wheel" *> $null
-    if ($LASTEXITCODE -eq 0) {
+    $pipResult = Invoke-CapturedNativeCommand $script:PythonBin @("-m", "pip", "--version")
+    if ($pipResult.ExitCode -ne 0) {
+        Write-Log "Bootstrapping pip in .venv."
+        $ensurePipResult = Invoke-CapturedNativeCommand $script:PythonBin @("-m", "ensurepip", "--upgrade")
+        if ($ensurePipResult.ExitCode -ne 0) {
+            Write-NativeCommandFailure "Virtual environment ensurepip failed" $ensurePipResult
+            Install-PipIntoVirtualEnvironment $pythonCommand
+        }
+        else {
+            $pipResult = Invoke-CapturedNativeCommand $script:PythonBin @("-m", "pip", "--version")
+            if ($pipResult.ExitCode -ne 0) {
+                Write-NativeCommandFailure "Virtual environment pip verification failed" $pipResult
+                Install-PipIntoVirtualEnvironment $pythonCommand
+            }
+        }
+    }
+
+    $buildToolsResult = Invoke-CapturedNativeCommand $script:PythonBin @("-c", "import setuptools, wheel")
+    if ($buildToolsResult.ExitCode -eq 0) {
         Write-Log "Installing Python dependencies without build isolation."
         Invoke-CheckedCommand $script:PythonBin @("-m", "pip", "install", "--no-build-isolation", "-e", ".[dev]") "Python dependency installation failed"
     }
