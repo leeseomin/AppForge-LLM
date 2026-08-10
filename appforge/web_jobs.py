@@ -314,7 +314,10 @@ class JobManager:
                 "selected": None,
                 "label": "LLM 브릿지",
                 "message": str(exc),
-                "action": "llm_bridge 폴더에서 `bun install` 후 `bun run dev` 로 브릿지를 시작하세요.",
+                "action": (
+                    "브릿지는 자동으로 시작됩니다. 잠시 후 페이지를 새로고침하세요. "
+                    "계속 실패하면 .appforge-web/llm-bridge.log를 확인하세요."
+                ),
             }
         selected_provider = provider or active.get("provider") or self.config.llm_provider
         selected_model = (

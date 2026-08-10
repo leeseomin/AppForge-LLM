@@ -973,8 +973,9 @@ function Invoke-Main {
     $script:WebPort = $script:RequestedWebPort
     $script:PortFallbackLimit = Convert-ToNonnegativeInteger "APPFORGE_WEB_PORT_FALLBACK_LIMIT" (Get-EnvironmentValue "APPFORGE_WEB_PORT_FALLBACK_LIMIT" "20")
     $script:BridgePortFallbackLimit = Convert-ToNonnegativeInteger "APPFORGE_LLM_BRIDGE_PORT_FALLBACK_LIMIT" (Get-EnvironmentValue "APPFORGE_LLM_BRIDGE_PORT_FALLBACK_LIMIT" "20")
-    $script:SmokeTimeout = Convert-ToPositiveInteger "APPFORGE_SMOKE_TIMEOUT" (Get-EnvironmentValue "APPFORGE_SMOKE_TIMEOUT" "30")
-    [void](Convert-ToPositiveInteger "APPFORGE_BRIDGE_TIMEOUT" (Get-EnvironmentValue "APPFORGE_BRIDGE_TIMEOUT" "15"))
+    $script:SmokeTimeout = Convert-ToPositiveInteger "APPFORGE_SMOKE_TIMEOUT" (Get-EnvironmentValue "APPFORGE_SMOKE_TIMEOUT" "60")
+    $bridgeTimeout = Convert-ToPositiveInteger "APPFORGE_BRIDGE_TIMEOUT" (Get-EnvironmentValue "APPFORGE_BRIDGE_TIMEOUT" "45")
+    $env:APPFORGE_BRIDGE_TIMEOUT = [string]$bridgeTimeout
     $script:LogLevel = Get-EnvironmentValue "APPFORGE_LOG_LEVEL" "info"
     $bridgeUrlSetting = [Environment]::GetEnvironmentVariable("APPFORGE_LLM_BRIDGE_URL")
     $script:BridgeUrlExplicit = -not [string]::IsNullOrWhiteSpace($bridgeUrlSetting)

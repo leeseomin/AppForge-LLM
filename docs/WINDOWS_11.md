@@ -29,11 +29,14 @@ No separate `--check` step is required for normal use. The first launch:
 2. installs missing or incompatible runtimes from the official WinGet package source and refreshes PATH without requiring a new terminal;
 3. creates `.venv`, synchronizes Python/npm/Bun project dependencies, and builds the frontend;
 4. verifies the AppContainer and Job Object runtime;
-5. starts AppForge and opens the default browser.
+5. starts the bundled LLM bridge and prepares its private provider store and model list;
+6. starts AppForge and opens the default browser.
 
 WinGet runs the package installers silently and accepts their package/source agreements. Windows can still display a UAC permission prompt for Node.js; approve it to continue. If installation is interrupted, double-click `build.bat` again and the launcher resumes from the runtime that is still missing.
 
 If Python leaves `.venv` without a working compatible interpreter, the next launch moves it to `.appforge-web\venv-backups` and creates a clean environment. If the interpreter works but the packaging step was interrupted, the launcher repairs `pip`, `setuptools`, and `wheel` in place. Any moved environment is retained for inspection; the launcher does not delete it.
+
+The first LLM bridge initialization can take several seconds on Windows while private ACLs are verified. The launcher allows up to 45 seconds for this cold path. Provider metadata refresh is bounded and falls back to the built-in provider list when the remote catalog is unavailable. Users do not need to run `bun install` or `bun run dev` manually.
 
 For contributors and CI, the optional full verification gate is:
 
@@ -153,6 +156,10 @@ Confirm the computer is online and Windows App Installer is present and current.
 ### Python virtual environment creation fails
 
 Double-click `build.bat` again. A valid `.venv` is reused, and a working environment that only lacks `pip` is repaired in place. An environment without a working compatible interpreter is moved to `.appforge-web\venv-backups`, after which the launcher retries without bundled `pip` and installs the packaging tools separately. If recovery still fails, the window prints the complete Python command output and exit code instead of only the first traceback line; use that output to check endpoint-security blocks, disk permissions, or an unsupported filesystem.
+
+### LLM bridge initialization times out
+
+The bridge and its locked dependencies are managed automatically by `build.bat`; do not start a second bridge with `bun run dev`. Close the current AppForge window and double-click `build.bat` again. If startup still fails after 45 seconds, inspect `.appforge-web\llm-bridge.log`. The remote model catalog is optional, so an unavailable `models.dev` connection should fall back to the built-in provider list rather than block startup.
 
 ### A build exceeds a resource limit
 

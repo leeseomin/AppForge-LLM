@@ -135,6 +135,16 @@ def test_disabled_autostart_reuses_an_authenticated_existing_bridge(monkeypatch,
     base_url = "http://127.0.0.1:8788"
     manager = LLMBridgeProcessManager(runtime_dir=tmp_path, enabled=False)
     monkeypatch.setattr(manager, "_is_healthy", lambda _base_url: True)
+    monkeypatch.setattr(
+        llm_bridge,
+        "get_active",
+        lambda _base_url, **_kwargs: {"provider": None, "model": None},
+    )
+    monkeypatch.setattr(
+        llm_bridge,
+        "list_providers",
+        lambda _base_url, **_kwargs: {"providers": []},
+    )
 
     manager.ensure_running(base_url)
 

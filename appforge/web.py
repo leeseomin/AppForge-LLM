@@ -38,6 +38,11 @@ SSE_KEEPALIVE_SECONDS = 15.0
 SESSION_COOKIE_NAME = "appforge_session"
 
 
+def _driver_uses_llm_bridge(driver: str) -> bool:
+    normalized = driver.casefold().strip()
+    return normalized == "auto" or normalized in LLM_BRIDGE_DRIVER_ALIASES
+
+
 def _host_without_port(value: str) -> str:
     host = value.split(",", 1)[0].strip()
     if host.startswith("["):
@@ -553,8 +558,7 @@ def create_app(
         return str(request.app.state.web_config.llm_bridge_url)
 
     def _uses_llm_bridge_driver(request: Request) -> bool:
-        driver = str(request.app.state.web_config.driver).casefold().strip()
-        return driver == "auto" or driver in LLM_BRIDGE_DRIVER_ALIASES
+        return _driver_uses_llm_bridge(str(request.app.state.web_config.driver))
 
     async def _bridge_call(
         request: Request,
@@ -740,22 +744,32 @@ def serve(
     if host.casefold() not in LOCAL_HOSTS:
         raise ValueError("AppForge Web UI는 loopback 주소에만 바인딩할 수 있습니다.")
     config = WebConfig.from_env()
+    bridge_manager = LLMBridgeProcessManager(
+        runtime_dir=config.data_dir.expanduser().resolve(),
+    )
     session_token = secrets.token_urlsafe(32)
     bootstrap_token = secrets.token_urlsafe(32)
-    app = create_app(
-        config,
-        session_token=session_token,
-        bootstrap_token=bootstrap_token,
-    )
-    url_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
-    base_url = f"http://{url_host}:{port}/"
-    browser_url = f"{base_url}#bootstrap={bootstrap_token}"
-    logger.info("Open AppForge Web UI: %s", base_url)
-    if open_browser:
-        timer = threading.Timer(0.8, lambda: webbrowser.open(browser_url))
-        timer.daemon = True
-        timer.start()
-    uvicorn.run(app, host=host, port=port, log_level=log_level)
+    try:
+        if _driver_uses_llm_bridge(config.driver) and bridge_manager.enabled:
+            logger.info("Preparing managed LLM bridge: %s", config.llm_bridge_url)
+            bridge_manager.ensure_running(config.llm_bridge_url)
+        app = create_app(
+            config,
+            llm_bridge_manager=bridge_manager,
+            session_token=session_token,
+            bootstrap_token=bootstrap_token,
+        )
+        url_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+        base_url = f"http://{url_host}:{port}/"
+        browser_url = f"{base_url}#bootstrap={bootstrap_token}"
+        logger.info("Open AppForge Web UI: %s", base_url)
+        if open_browser:
+            timer = threading.Timer(0.8, lambda: webbrowser.open(browser_url))
+            timer.daemon = True
+            timer.start()
+        uvicorn.run(app, host=host, port=port, log_level=log_level)
+    finally:
+        bridge_manager.shutdown()
 
 
 def main() -> None:

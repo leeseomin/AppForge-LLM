@@ -135,6 +135,12 @@ request. The bridge binds only to loopback and requires Bun plus the locked
 `llm_bridge` dependencies. An operator-managed remote bridge is allowed only
 over HTTPS and must use a matching token.
 
+Managed readiness includes the authenticated process endpoints, the private
+provider configuration store, and the provider list. Windows profile path
+variables required by Bun and the DPAPI/ACL helpers are explicitly allowlisted;
+unrelated host variables remain excluded. Remote model metadata refresh has a
+bounded timeout and falls back to the local static registry.
+
 Provider metadata and the active model are stored under
 `~/.appforge/llm/providers.json` by default. On macOS, API keys use Keychain
 references by default. The file backend uses a user-owned private directory and

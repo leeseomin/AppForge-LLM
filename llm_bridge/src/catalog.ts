@@ -25,6 +25,7 @@ function sourceUrl(): string {
 }
 const TTL_MS = 5 * 60 * 1000
 const MAX_CATALOG_BYTES = 10 * 1024 * 1024
+const MODELS_DEV_TIMEOUT_MS = 8_000
 const USER_AGENT = `appforge-llm-bridge/${VERSION}`
 
 export interface CatalogModel {
@@ -109,6 +110,7 @@ export async function fetchCatalog(force = false): Promise<Catalog | null> {
   try {
     const res = await fetch(sourceUrl(), {
       headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
+      signal: AbortSignal.timeout(MODELS_DEV_TIMEOUT_MS),
     })
     if (!res.ok) throw new Error(`models.dev returned HTTP ${res.status}`)
     const declaredLength = Number(res.headers.get("content-length") || 0)

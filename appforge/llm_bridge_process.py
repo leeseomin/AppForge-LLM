@@ -22,7 +22,14 @@ BRIDGE_ENV_KEYS = {
     "TEMP",
     "TMP",
     "SYSTEMROOT",
+    "WINDIR",
     "COMSPEC",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "USERNAME",
     "APPFORGE_LLM_CONFIG_DIR",
     "APPFORGE_LLM_CONFIG",
     "APPFORGE_LLM_SECRET_BACKEND",
@@ -71,6 +78,14 @@ def _env_float(name: str, default: float, *, minimum: float = 0.1) -> float:
     except ValueError:
         return default
     return max(parsed, minimum)
+
+
+def _managed_setup_action() -> str:
+    launcher = "build.bat" if os.name == "nt" else "build.sh"
+    return (
+        f"AppForge 창을 닫고 소스 루트의 {launcher}을 다시 실행하세요. "
+        "필수 런타임과 의존성은 빌드 실행 파일이 자동으로 준비합니다."
+    )
 
 
 def _bridge_bind(base_url: str) -> tuple[str, str]:
@@ -130,7 +145,12 @@ class LLMBridgeProcessManager:
             else _env_bool("APPFORGE_LLM_BRIDGE_AUTOSTART", True)
             and not _env_bool("APPFORGE_SKIP_LLM_BRIDGE", False)
         )
-        self.timeout = timeout if timeout is not None else _env_float("APPFORGE_BRIDGE_TIMEOUT", 15.0)
+        default_timeout = 45.0 if os.name == "nt" else 15.0
+        self.timeout = (
+            timeout
+            if timeout is not None
+            else _env_float("APPFORGE_BRIDGE_TIMEOUT", default_timeout)
+        )
         self._lock = threading.RLock()
         self._process: subprocess.Popen[bytes] | None = None
         self.auth_token = os.environ.get("APPFORGE_LLM_BRIDGE_TOKEN") or secrets.token_urlsafe(48)
@@ -149,8 +169,10 @@ class LLMBridgeProcessManager:
         llm_bridge.register_bridge_token(base_url, self.auth_token)
         self._registered_urls.add(base_url)
         with self._lock:
+            deadline = time.monotonic() + self.timeout
             self._forget_exited_process()
             if self._is_healthy(base_url):
+                self._ensure_config_ready(base_url, deadline)
                 return
             if not self.enabled:
                 llm_bridge.unregister_bridge_token(base_url, self.auth_token)
@@ -163,9 +185,7 @@ class LLMBridgeProcessManager:
                         "initial_error": str(initial_error) if initial_error else None,
                     },
                 )
-
             process = self._process or self._start_process(base_url)
-            deadline = time.monotonic() + self.timeout
             last_error: llm_bridge.BridgeError | None = initial_error
             while time.monotonic() < deadline:
                 if process.poll() is not None:
@@ -177,10 +197,12 @@ class LLMBridgeProcessManager:
                 try:
                     llm_bridge.ping(base_url, timeout=1.0)
                     llm_bridge.ready(base_url, timeout=1.0)
-                    return
                 except llm_bridge.BridgeError as exc:
                     last_error = exc
                     time.sleep(0.2)
+                    continue
+                self._ensure_config_ready(base_url, deadline)
+                return
 
             raise self._startup_error(
                 f"LLM 브릿지가 {self.timeout:g}초 안에 준비되지 않았습니다.",
@@ -219,6 +241,44 @@ class LLMBridgeProcessManager:
                 ) from exc
             return False
 
+    def _ensure_config_ready(self, base_url: str, deadline: float) -> None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise self._startup_error(
+                "LLM 브릿지 설정 저장소가 제한 시간 안에 준비되지 않았습니다.",
+                "bridge_config_unavailable",
+                None,
+            )
+        try:
+            # A fresh Windows profile verifies private ACLs through PowerShell
+            # before the first config read. Treat that cold initialization as
+            # part of managed bridge readiness instead of a 5-second API call.
+            llm_bridge.get_active(base_url, timeout=max(remaining, 0.1))
+        except llm_bridge.BridgeError as exc:
+            raise self._startup_error(
+                "LLM 브릿지 설정 저장소를 준비하지 못했습니다.",
+                "bridge_config_unavailable",
+                exc,
+            ) from exc
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise self._startup_error(
+                "LLM 브릿지 프로바이더 목록이 제한 시간 안에 준비되지 않았습니다.",
+                "bridge_config_unavailable",
+                None,
+            )
+        try:
+            # The first provider read may refresh models.dev. Warm it while the
+            # managed-start timeout is in force so later 5-second UI calls are local.
+            llm_bridge.list_providers(base_url, timeout=max(remaining, 0.1))
+        except llm_bridge.BridgeError as exc:
+            raise self._startup_error(
+                "LLM 브릿지 프로바이더 목록을 준비하지 못했습니다.",
+                "bridge_config_unavailable",
+                exc,
+            ) from exc
+
     def _start_process(self, base_url: str) -> subprocess.Popen[bytes]:
         bind_host, bind_port = _bridge_bind(base_url)
         bridge_dir = self.root_dir / "llm_bridge"
@@ -235,7 +295,7 @@ class LLMBridgeProcessManager:
             raise llm_bridge.BridgeError(
                 "Bun을 찾을 수 없어 LLM 브릿지를 자동 시작할 수 없습니다.",
                 payload={
-                    "action": "Bun을 설치하거나 llm_bridge 서비스를 직접 실행한 뒤 다시 시도하세요.",
+                    "action": _managed_setup_action(),
                     "reason": "bun_missing",
                 },
             )
@@ -243,7 +303,7 @@ class LLMBridgeProcessManager:
             raise llm_bridge.BridgeError(
                 "llm_bridge 의존성이 설치되어 있지 않습니다.",
                 payload={
-                    "action": "llm_bridge 폴더에서 bun install을 실행한 뒤 다시 LLM 연결 설정을 여세요.",
+                    "action": _managed_setup_action(),
                     "reason": "node_modules_missing",
                     "bridge_dir": str(bridge_dir),
                 },

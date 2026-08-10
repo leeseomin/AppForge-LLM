@@ -19,7 +19,7 @@ Place the project in a local **NTFS** folder, then double-click `build.bat` or l
 build.bat
 ```
 
-On the first launch, the script uses Windows App Installer (`winget`) to install any missing Python 3.11+, Node.js 22/npm, and the Bun version pinned in `.bun-version`. It refreshes the current process PATH, creates the Python virtual environment, installs the locked project dependencies, builds the frontend, verifies the AppContainer/Job Object runtime, starts the app, and opens the browser. An internet connection is required and Windows may show a permission prompt while installing Node.js.
+On the first launch, the script uses Windows App Installer (`winget`) to install any missing Python 3.11+, Node.js 22/npm, and the Bun version pinned in `.bun-version`. It refreshes the current process PATH, creates the Python virtual environment, installs the locked project dependencies, builds the frontend, verifies the AppContainer/Job Object runtime, automatically starts and warms the bundled LLM bridge, starts the app, and opens the browser. An internet connection is required and Windows may show a permission prompt while installing Node.js.
 
 No separate `--check` step is required for normal use. `build.bat --check` remains available as the full test gate for contributors and CI.
 

@@ -23,6 +23,25 @@ test("fetchCatalog returns null when source is unreachable", async () => {
   expect(result).toBeNull()
 })
 
+test("fetchCatalog bounds the remote request with an abort signal", async () => {
+  const originalFetch = globalThis.fetch
+  let observedSignal: AbortSignal | null | undefined
+  globalThis.fetch = (async (...args: Parameters<typeof fetch>) => {
+    observedSignal = args[1]?.signal
+    throw new Error("simulated offline catalog")
+  }) as typeof fetch
+
+  try {
+    const { fetchCatalog, _resetForTest: reset } = await import("../src/catalog")
+    reset()
+    await fetchCatalog(true)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+
+  expect(observedSignal).toBeInstanceOf(AbortSignal)
+})
+
 test("fetchCatalog reads a stale cache file when network fails", async () => {
   const cached = {
     deepseek: {

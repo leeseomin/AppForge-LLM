@@ -115,6 +115,68 @@ def test_web_config_llm_router_default_matches_env(monkeypatch) -> None:
     assert WebConfig().llm_router is WebConfig.from_env().llm_router
 
 
+def test_serve_warms_managed_bridge_before_scheduling_browser(tmp_path: Path, monkeypatch) -> None:
+    from appforge import web as web_module
+
+    events: list[str] = []
+    config = WebConfig(
+        projects_dir=tmp_path / "projects",
+        data_dir=tmp_path / "web-state",
+        driver="llm-bridge-agent",
+        llm_bridge_url="http://127.0.0.1:8788",
+    )
+
+    class FakeManagedBridge:
+        enabled = True
+
+        def ensure_running(self, base_url: str) -> None:
+            assert base_url == config.llm_bridge_url
+            events.append("bridge-ready")
+
+        def shutdown(self) -> None:
+            events.append("bridge-shutdown")
+
+    class FakeTimer:
+        daemon = False
+
+        def __init__(self, _delay: float, _callback) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def start(self) -> None:
+            events.append("browser-scheduled")
+
+    bridge_manager = FakeManagedBridge()
+    monkeypatch.setattr(WebConfig, "from_env", classmethod(lambda _cls: config))
+    monkeypatch.setattr(
+        web_module,
+        "LLMBridgeProcessManager",
+        lambda **_kwargs: bridge_manager,
+    )
+
+    def fake_create_app(_config, **kwargs):  # type: ignore[no-untyped-def]
+        assert kwargs["llm_bridge_manager"] is bridge_manager
+        events.append("app-created")
+        return object()
+
+    monkeypatch.setattr(web_module, "create_app", fake_create_app)
+    monkeypatch.setattr(web_module.threading, "Timer", FakeTimer)
+    monkeypatch.setattr(
+        web_module.uvicorn,
+        "run",
+        lambda *_args, **_kwargs: events.append("uvicorn"),
+    )
+
+    web_module.serve(open_browser=True)
+
+    assert events == [
+        "bridge-ready",
+        "app-created",
+        "browser-scheduled",
+        "uvicorn",
+        "bridge-shutdown",
+    ]
+
+
 def test_web_app_does_not_register_oauth_routes(tmp_path: Path) -> None:
     app = create_app(
         _fixture_config(tmp_path),
@@ -1278,7 +1340,10 @@ def test_llm_provider_api_reports_bridge_autostart_guidance(tmp_path: Path, monk
         llm_bridge.BridgeError(
             "Bun을 찾을 수 없어 LLM 브릿지를 자동 시작할 수 없습니다.",
             payload={
-                "action": "Bun을 설치하거나 llm_bridge 서비스를 직접 실행한 뒤 다시 시도하세요.",
+                "action": (
+                    "AppForge 창을 닫고 소스 루트의 build.bat을 다시 실행하세요. "
+                    "필수 런타임과 의존성은 빌드 실행 파일이 자동으로 준비합니다."
+                ),
                 "reason": "bun_missing",
             },
         )
@@ -1295,7 +1360,10 @@ def test_llm_provider_api_reports_bridge_autostart_guidance(tmp_path: Path, monk
     assert response.status_code == 502
     error = response.json()["error"]
     assert error["message"] == "Bun을 찾을 수 없어 LLM 브릿지를 자동 시작할 수 없습니다."
-    assert error["action"] == "Bun을 설치하거나 llm_bridge 서비스를 직접 실행한 뒤 다시 시도하세요."
+    assert error["action"] == (
+        "AppForge 창을 닫고 소스 루트의 build.bat을 다시 실행하세요. "
+        "필수 런타임과 의존성은 빌드 실행 파일이 자동으로 준비합니다."
+    )
     assert error["context"]["reason"] == "bun_missing"
     assert len(bridge_manager.ensure_calls) == 1
 

@@ -12,6 +12,12 @@ def authenticated_bridge_readiness(monkeypatch):
     """Keep CLI unit tests on the authenticated readiness contract."""
 
     monkeypatch.setattr(llm_auth.llm_bridge, "ready", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(
+        llm_auth.llm_bridge,
+        "get_active",
+        lambda *a, **k: {"provider": None, "model": None},
+    )
+    monkeypatch.setattr(llm_auth.llm_bridge, "list_providers", lambda *a, **k: {"providers": []})
     yield
     llm_auth.llm_bridge.unregister_bridge_token(BRIDGE_URL)
 
