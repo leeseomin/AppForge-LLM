@@ -8,9 +8,10 @@ Use a current 64-bit Windows 11 installation with:
 
 - an NTFS project drive;
 - Windows PowerShell 5.1 or PowerShell 7;
-- Python 3.11 or newer;
-- Node.js 22 and npm;
-- the Bun version recorded in `.bun-version`.
+- Windows App Installer (`winget`), which is included with normal Windows 11 installations;
+- an internet connection for the first launch.
+
+The launcher installs Python 3.11, Node.js 22/npm, and the Bun version recorded in `.bun-version` when a compatible runtime is not already available. Existing compatible installations are reused.
 
 The AppContainer implementation does **not** require the optional Windows Sandbox feature or Hyper-V. A FAT/exFAT drive or a network share that cannot apply Windows ACLs is rejected rather than falling back to unrestricted execution.
 
@@ -22,7 +23,17 @@ From File Explorer, double-click `build.bat`. From Command Prompt or PowerShell:
 build.bat
 ```
 
-Before a normal launch, run the full Windows verification gate once:
+No separate `--check` step is required for normal use. The first launch:
+
+1. detects Python 3.11+, Node.js 22+/npm, and the pinned Bun version;
+2. installs missing or incompatible runtimes from the official WinGet package source and refreshes PATH without requiring a new terminal;
+3. creates `.venv`, synchronizes Python/npm/Bun project dependencies, and builds the frontend;
+4. verifies the AppContainer and Job Object runtime;
+5. starts AppForge and opens the default browser.
+
+WinGet runs the package installers silently and accepts their package/source agreements. Windows can still display a UAC permission prompt for Node.js; approve it to continue. If installation is interrupted, double-click `build.bat` again and the launcher resumes from the runtime that is still missing.
+
+For contributors and CI, the optional full verification gate is:
 
 ```bat
 build.bat --check
@@ -123,21 +134,19 @@ Hosted Windows CI is not identical to a consumer Windows 11 desktop. `.github/wo
 
 ### `EXECUTION_SANDBOX_UNAVAILABLE`
 
-Run:
-
-```bat
-build.bat --check
-```
-
-Then verify:
+The normal `build.bat` launch already runs the sandbox doctor. Verify:
 
 1. the source and generated-project directories are on NTFS;
 2. `icacls.exe` and Windows PowerShell are available under `%SystemRoot%\System32`;
 3. endpoint policy has not disabled AppContainer profile creation or child-process assignment to Job Objects;
-4. Python, Node.js/npm, Bun, and Git are installed in normal toolchain directories;
+4. the automatically installed Python, Node.js/npm, and Bun runtimes are in normal toolchain directories;
 5. the workspace path is not an ACL-incompatible network mapping.
 
-No unrestricted fallback is provided. Move the project to a local NTFS folder or adjust the enterprise policy, then repeat `--check`.
+No unrestricted fallback is provided. Move the project to a local NTFS folder or adjust the enterprise policy, then double-click `build.bat` again.
+
+### Automatic runtime installation fails
+
+Confirm the computer is online and Windows App Installer is present and current. If the error says `winget` is unavailable, update **App Installer** from Microsoft Store. Allow any Windows permission prompt, then double-click `build.bat` again. The launcher verifies every runtime after installation and stops rather than continuing with an unsupported version.
 
 ### A build exceeds a resource limit
 

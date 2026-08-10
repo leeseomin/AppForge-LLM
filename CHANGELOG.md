@@ -2,6 +2,7 @@
 
 ## Unreleased — Windows 11 support
 
+- Made `build.bat` a complete one-click setup path: it now installs missing Python 3.11, Node.js 22/npm, and the pinned Bun runtime through WinGet, refreshes PATH in-process, prepares project dependencies, and runs the Windows sandbox doctor before launching; normal users no longer need a separate `--check` step.
 - Added a per-workspace Windows AppContainer launcher with explicit `SECURITY_CAPABILITIES`, default-denied networking, approved toolchain ACLs, and a Job Object that limits CPU, memory, and process count while killing descendants on close.
 - Canonicalized `.exe`, `.cmd`, `.bat`, and `.com` launchers before shell, destructive, dependency, and network policy checks; added Windows deletion/disk aliases and case-insensitive protected environment handling.
 - Added a Windows-safe PATH and disposable user-profile environment without copying arbitrary host PATH entries or secret-like variables.

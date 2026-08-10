@@ -23,6 +23,7 @@ function Show-Usage {
 Usage: .\build.ps1 [--smoke] [--check] [--no-open] [--help]
 
 Prepare and launch the local AppForge-LLM v7 AI app builder web UI.
+The normal launch installs missing required runtimes and checks sandbox readiness automatically.
 
 Options:
   --smoke     Start the web app, probe /api/health and /, then stop it.
@@ -110,39 +111,281 @@ function Invoke-CheckedCommand {
     }
 }
 
+function Find-Applications {
+    param([Parameter(Mandatory = $true)][string[]]$Names)
+    $paths = @()
+    foreach ($name in $Names) {
+        $commands = @(Get-Command $name -CommandType Application -All -ErrorAction SilentlyContinue)
+        foreach ($command in $commands) {
+            if (-not [string]::IsNullOrWhiteSpace($command.Source) -and $paths -notcontains $command.Source) {
+                $paths += $command.Source
+            }
+        }
+    }
+    return $paths
+}
+
+function Update-ProcessPath {
+    $pathValues = @(
+        [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::Machine),
+        [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::User),
+        [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::Process)
+    )
+    $knownPaths = @()
+
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        $knownPaths += Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps"
+        $knownPaths += Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Links"
+        $pythonRoot = Join-Path $env:LOCALAPPDATA "Programs\Python"
+        $knownPaths += Join-Path $pythonRoot "Launcher"
+        if (Test-Path -LiteralPath $pythonRoot -PathType Container) {
+            foreach ($directory in @(Get-ChildItem -LiteralPath $pythonRoot -Directory -ErrorAction SilentlyContinue)) {
+                $knownPaths += $directory.FullName
+                $knownPaths += Join-Path $directory.FullName "Scripts"
+            }
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
+        $knownPaths += Join-Path $env:ProgramFiles "nodejs"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
+        $knownPaths += Join-Path $env:USERPROFILE ".bun\bin"
+    }
+
+    $entries = @()
+    foreach ($pathValue in $pathValues) {
+        if ([string]::IsNullOrWhiteSpace($pathValue)) {
+            continue
+        }
+        foreach ($entry in $pathValue.Split([IO.Path]::PathSeparator)) {
+            $candidate = [Environment]::ExpandEnvironmentVariables($entry.Trim().Trim('"'))
+            if (-not [string]::IsNullOrWhiteSpace($candidate) -and $entries -notcontains $candidate) {
+                $entries += $candidate
+            }
+        }
+    }
+    foreach ($candidate in $knownPaths) {
+        if ((Test-Path -LiteralPath $candidate -PathType Container) -and $entries -notcontains $candidate) {
+            $entries += $candidate
+        }
+    }
+    $env:Path = $entries -join [IO.Path]::PathSeparator
+}
+
+function Set-PreferredPathEntries {
+    param([Parameter(Mandatory = $true)][string[]]$Paths)
+    $entries = @()
+    foreach ($path in $Paths) {
+        if ([string]::IsNullOrWhiteSpace($path)) {
+            continue
+        }
+        $candidate = if (Test-Path -LiteralPath $path -PathType Leaf) {
+            Split-Path -Parent $path
+        }
+        else {
+            $path
+        }
+        if ((Test-Path -LiteralPath $candidate -PathType Container) -and $entries -notcontains $candidate) {
+            $entries += $candidate
+        }
+    }
+    foreach ($entry in $env:Path.Split([IO.Path]::PathSeparator)) {
+        if (-not [string]::IsNullOrWhiteSpace($entry) -and $entries -notcontains $entry) {
+            $entries += $entry
+        }
+    }
+    $env:Path = $entries -join [IO.Path]::PathSeparator
+}
+
+function Get-CompatiblePython {
+    $versionCheck = "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"
+    foreach ($launcher in @(Find-Applications @("py.exe", "py"))) {
+        & $launcher -3 -c $versionCheck *> $null
+        if ($LASTEXITCODE -eq 0) {
+            return [PSCustomObject]@{
+                FilePath = $launcher
+                PrefixArguments = @("-3")
+                Label = "Python 3 launcher"
+            }
+        }
+    }
+
+    foreach ($python in @(Find-Applications @("python.exe", "python3.exe", "python"))) {
+        if ($python -match '\\Microsoft\\WindowsApps\\python3?\.exe$') {
+            # Avoid the Windows Store placeholder opening a second installer window.
+            continue
+        }
+        & $python -c $versionCheck *> $null
+        if ($LASTEXITCODE -eq 0) {
+            return [PSCustomObject]@{
+                FilePath = $python
+                PrefixArguments = @()
+                Label = "Python"
+            }
+        }
+    }
+    return $null
+}
+
+function Get-CompatibleNode {
+    $nodeCandidates = @(Find-Applications @("node.exe", "node"))
+    if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
+        $nodeCandidates += Join-Path $env:ProgramFiles "nodejs\node.exe"
+    }
+
+    foreach ($node in $nodeCandidates) {
+        if (-not (Test-Path -LiteralPath $node -PathType Leaf)) {
+            continue
+        }
+        & $node -e "process.exit(Number(process.versions.node.split('.')[0]) >= 22 ? 0 : 1)" *> $null
+        if ($LASTEXITCODE -ne 0) {
+            continue
+        }
+
+        $npmCandidates = @(Join-Path (Split-Path -Parent $node) "npm.cmd")
+        $npmCandidates += @(Find-Applications @("npm.cmd", "npm.exe", "npm"))
+        foreach ($npm in $npmCandidates) {
+            if (-not (Test-Path -LiteralPath $npm -PathType Leaf)) {
+                continue
+            }
+            & $npm --version *> $null
+            if ($LASTEXITCODE -eq 0) {
+                return [PSCustomObject]@{
+                    NodeBin = $node
+                    NpmBin = $npm
+                }
+            }
+        }
+    }
+    return $null
+}
+
+function Get-RequiredBunVersion {
+    $versionPath = Join-Path $script:RootDir ".bun-version"
+    if (-not (Test-Path -LiteralPath $versionPath -PathType Leaf)) {
+        Stop-WithError ".bun-version is missing; the required Bun runtime cannot be selected safely."
+    }
+    $version = (Get-Content -LiteralPath $versionPath -Raw).Trim()
+    if ($version -notmatch '^\d+\.\d+\.\d+$') {
+        Stop-WithError ".bun-version must contain one semantic version; got '$version'."
+    }
+    return $version
+}
+
+function Get-CompatibleBun {
+    param([Parameter(Mandatory = $true)][string]$RequiredVersion)
+    $bunCandidates = @(Find-Applications @("bun.exe", "bun"))
+    if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
+        $bunCandidates += Join-Path $env:USERPROFILE ".bun\bin\bun.exe"
+    }
+
+    foreach ($bun in $bunCandidates) {
+        if (-not (Test-Path -LiteralPath $bun -PathType Leaf)) {
+            continue
+        }
+        $reportedVersions = @(& $bun --version 2> $null)
+        if ($LASTEXITCODE -eq 0 -and $reportedVersions.Count -gt 0) {
+            $reportedVersion = ([string]$reportedVersions[0]).Trim()
+            if ($reportedVersion -eq $RequiredVersion) {
+                return $bun
+            }
+        }
+    }
+    return $null
+}
+
+function Get-WinGet {
+    Update-ProcessPath
+    $winget = Find-Application @("winget.exe", "winget")
+    if ($null -eq $winget) {
+        Stop-WithError "Windows App Installer (winget) was not found. Update App Installer from Microsoft Store, then double-click build.bat again."
+    }
+    return $winget
+}
+
+function Install-WinGetPackage {
+    param(
+        [Parameter(Mandatory = $true)][string]$PackageId,
+        [Parameter(Mandatory = $true)][string]$DisplayName,
+        [string]$Version = "",
+        [switch]$Force
+    )
+    $winget = Get-WinGet
+    $wingetArguments = @(
+        "install",
+        "--id", $PackageId,
+        "--exact",
+        "--source", "winget",
+        "--silent",
+        "--accept-package-agreements",
+        "--accept-source-agreements",
+        "--disable-interactivity"
+    )
+    if (-not [string]::IsNullOrWhiteSpace($Version)) {
+        $wingetArguments += @("--version", $Version)
+    }
+    if ($Force.IsPresent) {
+        $wingetArguments += "--force"
+    }
+
+    Write-Log "Installing $DisplayName with Windows Package Manager. Approve the Windows permission prompt if it appears."
+    & $winget @wingetArguments
+    if ($LASTEXITCODE -ne 0) {
+        Stop-WithError "$DisplayName installation failed (winget exit code $LASTEXITCODE). Check the internet connection, allow any Windows permission prompt, update Windows App Installer, and run build.bat again."
+    }
+    Update-ProcessPath
+}
+
+function Initialize-WindowsPrerequisites {
+    Write-Log "Checking the required Python, Node.js, npm, and Bun runtimes."
+    Update-ProcessPath
+
+    $python = Get-CompatiblePython
+    if ($null -eq $python) {
+        Install-WinGetPackage -PackageId "Python.Python.3.11" -DisplayName "Python 3.11"
+        $python = Get-CompatiblePython
+        if ($null -eq $python) {
+            Stop-WithError "Python 3.11 or newer is unavailable after automatic installation. Restart Windows, then run build.bat again."
+        }
+    }
+
+    $node = Get-CompatibleNode
+    if ($null -eq $node) {
+        Install-WinGetPackage -PackageId "OpenJS.NodeJS.22" -DisplayName "Node.js 22 and npm"
+        $node = Get-CompatibleNode
+        if ($null -eq $node) {
+            Stop-WithError "Node.js 22 or newer and npm are unavailable after automatic installation. Restart Windows, then run build.bat again."
+        }
+    }
+    $script:NpmBin = $node.NpmBin
+
+    $requiredBunVersion = Get-RequiredBunVersion
+    $bun = Get-CompatibleBun $requiredBunVersion
+    if ($null -eq $bun) {
+        Install-WinGetPackage -PackageId "Oven-sh.Bun" -DisplayName "Bun $requiredBunVersion" -Version $requiredBunVersion -Force
+        $bun = Get-CompatibleBun $requiredBunVersion
+        if ($null -eq $bun) {
+            Stop-WithError "Bun $requiredBunVersion is unavailable after automatic installation. Restart Windows, then run build.bat again."
+        }
+    }
+    $script:BunBin = $bun
+    $preferredPaths = @($python.FilePath, $node.NodeBin, $node.NpmBin, $bun)
+    Set-PreferredPathEntries -Paths $preferredPaths
+    Write-Log "All required Windows runtimes are ready."
+}
+
 function Install-PythonWithPip {
     if (-not (Test-Path -LiteralPath $script:PythonBin -PathType Leaf)) {
-        $pyLauncher = Find-Application @("py.exe", "py")
-        $python = Find-Application @("python.exe", "python3.exe", "python")
-        $versionCheck = "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)"
-        $created = $false
-
-        if ($null -ne $pyLauncher) {
-            & $pyLauncher -3.11 -c $versionCheck *> $null
-            if ($LASTEXITCODE -eq 0) {
-                Write-Log "Creating .venv with the Python 3.11 launcher."
-                & $pyLauncher -3.11 -m venv $script:VenvDir
-                if ($LASTEXITCODE -ne 0) {
-                    Stop-WithError "py -3.11 -m venv .venv failed."
-                }
-                $created = $true
-            }
+        $pythonCommand = Get-CompatiblePython
+        if ($null -eq $pythonCommand) {
+            Stop-WithError "Python 3.11 or newer was not found after automatic prerequisite setup."
         }
-
-        if (-not $created -and $null -ne $python) {
-            & $python -c $versionCheck *> $null
-            if ($LASTEXITCODE -eq 0) {
-                Write-Log "Creating .venv with Python."
-                & $python -m venv $script:VenvDir
-                if ($LASTEXITCODE -ne 0) {
-                    Stop-WithError "python -m venv .venv failed."
-                }
-                $created = $true
-            }
-        }
-
-        if (-not $created) {
-            Stop-WithError "Python 3.11 or newer was not found. Install Python and enable 'Add python.exe to PATH'."
+        $pythonArguments = @($pythonCommand.PrefixArguments) + @("-m", "venv", $script:VenvDir)
+        $pythonFilePath = $pythonCommand.FilePath
+        Write-Log "Creating .venv with $($pythonCommand.Label)."
+        & $pythonFilePath @pythonArguments
+        if ($LASTEXITCODE -ne 0) {
+            Stop-WithError "$($pythonCommand.Label) -m venv .venv failed."
         }
     }
 
@@ -198,9 +441,6 @@ function Initialize-PythonEnvironment {
 }
 
 function Test-WindowsSandboxRuntime {
-    if ($script:Mode -ne "check") {
-        return
-    }
     $probeRoot = Join-Path $script:RuntimePath "windows-sandbox-check"
     $probeHome = Join-Path $probeRoot "home"
     New-Item -ItemType Directory -Force -Path $probeRoot, $probeHome | Out-Null
@@ -602,6 +842,7 @@ function Invoke-Main {
 
     Push-Location $script:RootDir
     try {
+        Initialize-WindowsPrerequisites
         Initialize-PythonEnvironment
         Test-WindowsSandboxRuntime
         Initialize-Frontend

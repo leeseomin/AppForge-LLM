@@ -56,11 +56,53 @@ class WindowsLauncherContractTests(unittest.TestCase):
         self.assertLess(main.index("Invoke-CheckSuite"), main.index("Select-ManagedBridgePort"))
         self.assertLess(main.index("Select-ManagedBridgePort"), main.index("Select-WebPort"))
 
+    def test_normal_launch_bootstraps_every_required_windows_runtime(self) -> None:
+        launcher = (ROOT / "build.ps1").read_text(encoding="utf-8")
+
+        for contract in (
+            "function Initialize-WindowsPrerequisites",
+            "function Install-WinGetPackage",
+            "Update-ProcessPath",
+            "Set-PreferredPathEntries",
+            "Python.Python.3.11",
+            "OpenJS.NodeJS.22",
+            "Oven-sh.Bun",
+            'Join-Path $script:RootDir ".bun-version"',
+            "--accept-package-agreements",
+            "--accept-source-agreements",
+            "--disable-interactivity",
+            "Windows App Installer",
+        ):
+            self.assertIn(contract, launcher)
+
+        main = launcher.split("function Invoke-Main", maxsplit=1)[1]
+        self.assertLess(
+            main.index("Initialize-WindowsPrerequisites"),
+            main.index("Initialize-PythonEnvironment"),
+        )
+
+        prerequisites = launcher.split(
+            "function Initialize-WindowsPrerequisites", maxsplit=1
+        )[1].split("function Install-PythonWithPip", maxsplit=1)[0]
+        self.assertLess(
+            prerequisites.index("Set-PreferredPathEntries"),
+            prerequisites.index("All required Windows runtimes are ready."),
+        )
+
+        sandbox_check = launcher.split(
+            "function Test-WindowsSandboxRuntime", maxsplit=1
+        )[1].split("function Initialize-Frontend", maxsplit=1)[0]
+        self.assertNotIn('$script:Mode -ne "check"', sandbox_check)
+
     def test_readme_exposes_the_one_click_windows_entrypoint(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
         self.assertIn("Windows 11", readme)
         self.assertIn("build.bat", readme)
+        self.assertIn("No separate `--check` step is required", readme)
+
+        windows_guide = (ROOT / "docs" / "WINDOWS_11.md").read_text(encoding="utf-8")
+        self.assertIn("No separate `--check` step is required", windows_guide)
 
     @unittest.skipUnless(
         shutil.which("pwsh") or shutil.which("powershell"),
