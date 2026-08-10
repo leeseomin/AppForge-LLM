@@ -13,13 +13,15 @@ A local AI app builder that turns one prompt into a planned, tested, and preview
 
 ## Windows 11
 
-Use a local **NTFS** folder and install Python 3.11+, Node.js/npm, and the Bun version pinned in `.bun-version`.
+Use a local **NTFS** folder and install Python 3.11+, Node.js 22/npm, and the Bun version pinned in `.bun-version`.
 
-Run the security and dependency preflight first:
+Run the complete Windows verification gate first:
 
 ```bat
 build.bat --check
 ```
+
+This synchronizes the Python development environment, refreshes npm and Bun dependencies from the committed lockfiles, performs the AppContainer/Job Object doctor, runs Python compilation and tests, then runs frontend tests/typecheck/build and Bun bridge typecheck/tests. It exits non-zero on any failed gate.
 
 Then double-click `build.bat`, or launch it from Command Prompt:
 
@@ -27,7 +29,7 @@ Then double-click `build.bat`, or launch it from Command Prompt:
 build.bat
 ```
 
-Generated project commands run in a per-workspace **AppContainer** with a kill-on-close **Job Object**. Network access is absent by default and is added only for an explicitly approved invocation. Windows API keys default to **DPAPI CurrentUser** encryption; `providers.json` keeps references rather than plaintext secrets.
+Generated project commands run in a per-workspace **AppContainer** with a kill-on-close **Job Object**. Network access is absent by default and is added only for an explicitly approved invocation. Windows API keys default to **DPAPI CurrentUser** encryption; `providers.json` keeps references rather than plaintext secrets. The configuration directory, `providers.json`, `secrets.dpapi.json`, and atomic temporary files are protected by verified Windows DACLs, and unsafe shared/custom configuration paths fail closed.
 
 See [Windows 11 support and troubleshooting](docs/WINDOWS_11.md) for the isolation model, resource limits, CI gates, and recovery steps.
 

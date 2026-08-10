@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { homedir } from "node:os"
-import { basename, dirname, join, resolve } from "node:path"
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { spawn } from "node:child_process"
 import { chmod, lstat, mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises"
 import type { ActiveSelection, StoredProviderConfig } from "./types"
@@ -11,6 +11,8 @@ const MAX_SECURITY_OUTPUT_BYTES = 1024 * 1024
 const DPAPI_STORE_FILE = "secrets.dpapi.json"
 const DPAPI_POWERSHELL_SCRIPT = `
 $ErrorActionPreference = 'Stop'
+[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 Add-Type -AssemblyName System.Security
 $request = ([Console]::In.ReadToEnd() | ConvertFrom-Json)
 $bytes = [Convert]::FromBase64String([string]$request.value)
@@ -24,8 +26,159 @@ if ([string]$request.operation -eq 'protect') {
 }
 [Console]::Out.Write([Convert]::ToBase64String($result))
 `
+const WINDOWS_ACL_POWERSHELL_SCRIPT = `
+$ErrorActionPreference = 'Stop'
+[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$request = ([Console]::In.ReadToEnd() | ConvertFrom-Json)
+$path = [IO.Path]::GetFullPath([string]$request.path)
+$kind = [string]$request.kind
+$mode = [string]$request.mode
+$repair = [bool]$request.repair
+$item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+$isDirectory = [bool]$item.PSIsContainer
+if (($kind -eq 'directory') -ne $isDirectory) {
+  throw 'Windows config ACL target type mismatch'
+}
+if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+  throw 'Refusing a reparse-point config path'
+}
+$current = [Security.Principal.WindowsIdentity]::GetCurrent().User
+$system = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+$administrators = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+$creatorOwner = [Security.Principal.SecurityIdentifier]::new('S-1-3-0')
+$trustedInstaller = $null
+try {
+  $trustedInstaller = ([Security.Principal.NTAccount]::new('NT SERVICE', 'TrustedInstaller')).Translate([Security.Principal.SecurityIdentifier])
+} catch {
+  $trustedInstaller = $null
+}
+$writeMask = [int64]0
+foreach ($right in @(
+  [Security.AccessControl.FileSystemRights]::Write,
+  [Security.AccessControl.FileSystemRights]::Modify,
+  [Security.AccessControl.FileSystemRights]::FullControl,
+  [Security.AccessControl.FileSystemRights]::Delete,
+  [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles,
+  [Security.AccessControl.FileSystemRights]::ChangePermissions,
+  [Security.AccessControl.FileSystemRights]::TakeOwnership,
+  [Security.AccessControl.FileSystemRights]::CreateDirectories,
+  [Security.AccessControl.FileSystemRights]::CreateFiles,
+  [Security.AccessControl.FileSystemRights]::WriteAttributes,
+  [Security.AccessControl.FileSystemRights]::WriteExtendedAttributes,
+  [Security.AccessControl.FileSystemRights]::AppendData,
+  [Security.AccessControl.FileSystemRights]::WriteData
+)) {
+  $writeMask = $writeMask -bor [int64]$right
+}
+function Test-PrivilegedSid([string]$sid, [bool]$allowCreatorOwner) {
+  if ($sid -eq $current.Value -or $sid -eq $system.Value -or $sid -eq $administrators.Value) {
+    return $true
+  }
+  if ($trustedInstaller -ne $null -and $sid -eq $trustedInstaller.Value) {
+    return $true
+  }
+  return $allowCreatorOwner -and $sid -eq $creatorOwner.Value
+}
+function Get-OwnerSid($acl) {
+  return $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+}
+function Test-NoUnprivilegedWrite($acl, [bool]$allowCreatorOwner, [bool]$ignoreInheritOnly) {
+  foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+    if ($ignoreInheritOnly -and (($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0)) {
+      continue
+    }
+    if ($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) {
+      continue
+    }
+    $sid = $rule.IdentityReference.Value
+    $rights = [int64]$rule.FileSystemRights
+    if (-not (Test-PrivilegedSid $sid $allowCreatorOwner) -and (($rights -band $writeMask) -ne 0)) {
+      return $false
+    }
+  }
+  return $true
+}
+function Test-RepairablePrivateAcl($acl) {
+  return (Get-OwnerSid $acl) -eq $current.Value -and (Test-NoUnprivilegedWrite $acl $false $false)
+}
+function Test-PrivateAcl($acl) {
+  if ((Get-OwnerSid $acl) -ne $current.Value -or -not $acl.AreAccessRulesProtected) {
+    return $false
+  }
+  if (-not (Test-NoUnprivilegedWrite $acl $false $false)) {
+    return $false
+  }
+  $hasCurrentFullControl = $false
+  foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+    if ($rule.IsInherited) {
+      return $false
+    }
+    $sid = $rule.IdentityReference.Value
+    $rights = [int64]$rule.FileSystemRights
+    if ($rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and $sid -eq $current.Value -and (($rights -band [int64][Security.AccessControl.FileSystemRights]::FullControl) -eq [int64][Security.AccessControl.FileSystemRights]::FullControl)) {
+      $hasCurrentFullControl = $true
+    }
+  }
+  return $hasCurrentFullControl
+}
+function Test-ParentAcl($acl) {
+  if (-not (Test-PrivilegedSid (Get-OwnerSid $acl) $false)) {
+    return $false
+  }
+  return (Test-NoUnprivilegedWrite $acl $true $true)
+}
+$acl = Get-Acl -LiteralPath $path
+if ($mode -eq 'private' -and $repair -and -not (Test-PrivateAcl $acl)) {
+  if (-not (Test-RepairablePrivateAcl $acl)) {
+    throw 'Refusing to repair a Windows config ACL that was writable by another identity'
+  }
+  $acl.SetAccessRuleProtection($true, $false)
+  foreach ($rule in @($acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]))) {
+    [void]$acl.RemoveAccessRuleSpecific($rule)
+  }
+  $acl.SetOwner($current)
+  $inheritance = [Security.AccessControl.InheritanceFlags]::None
+  if ($isDirectory) {
+    $inheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
+  }
+  foreach ($sid in @($current, $system, $administrators)) {
+    $rule = [Security.AccessControl.FileSystemAccessRule]::new(
+      $sid,
+      [Security.AccessControl.FileSystemRights]::FullControl,
+      $inheritance,
+      [Security.AccessControl.PropagationFlags]::None,
+      [Security.AccessControl.AccessControlType]::Allow
+    )
+    [void]$acl.AddAccessRule($rule)
+  }
+  Set-Acl -LiteralPath $path -AclObject $acl
+  $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+  if (($kind -eq 'directory') -ne [bool]$item.PSIsContainer) {
+    throw 'Windows config ACL target type changed during repair'
+  }
+  if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw 'Config path became a reparse point during ACL repair'
+  }
+  $acl = Get-Acl -LiteralPath $path
+}
+if ($mode -eq 'private') {
+  if (-not (Test-PrivateAcl $acl)) {
+    throw 'Windows config path is not private to the current user'
+  }
+} elseif ($mode -eq 'parent') {
+  if (-not (Test-ParentAcl $acl)) {
+    throw 'Windows config parent is writable by another identity'
+  }
+} else {
+  throw 'Unsupported Windows ACL verification mode'
+}
+[Console]::Out.Write('ok')
+`
 type SecretKey = "apiKey"
 type SecretBackend = "file" | "keychain" | "dpapi"
+type WindowsAclKind = "directory" | "file"
+type WindowsAclMode = "parent" | "private"
 interface SecurityCommandResult { stdout: string }
 type SecurityCommandRunner = (args: string[], input?: string) => Promise<SecurityCommandResult>
 interface DpapiBlobFile { version: 1; secrets: Record<string, string> }
@@ -70,6 +223,8 @@ let loadedBackend: SecretBackend | null = null
 let secretStoreOverride: SecretStore | null = null
 let securityCommandRunnerOverride: SecurityCommandRunner | null = null
 let dpapiCommandRunnerOverride: SecurityCommandRunner | null = null
+let windowsAclCommandRunnerOverride: SecurityCommandRunner | null = null
+let windowsAclVerifiedDirectory: string | null = null
 
 function defaultConfigDir(): string {
   return resolve(
@@ -105,14 +260,103 @@ function assertOwnedByCurrentUser(path: string, uid: number): void {
   if (uid !== process.getuid()) throw new Error(`Refusing config path not owned by the current user: ${path}`)
 }
 
+function shouldEnforceWindowsAcl(): boolean {
+  return process.platform === "win32" || windowsAclCommandRunnerOverride !== null
+}
+
+function sameResolvedPath(left: string, right: string): boolean {
+  const leftResolved = resolve(left)
+  const rightResolved = resolve(right)
+  return process.platform === "win32"
+    ? leftResolved.toLowerCase() === rightResolved.toLowerCase()
+    : leftResolved === rightResolved
+}
+
+function resolvedPathIsWithin(path: string, parent: string): boolean {
+  const relation = relative(resolve(parent), resolve(path))
+  return relation === "" || (
+    relation !== ".."
+    && !relation.startsWith(`..${sep}`)
+    && !isAbsolute(relation)
+  )
+}
+
+function windowsAclParents(configDir: string): string[] {
+  const immediateParent = dirname(configDir)
+  if (process.platform !== "win32") return [immediateParent]
+
+  const userProfile = resolve(homedir())
+  if (sameResolvedPath(configDir, userProfile) || !resolvedPathIsWithin(configDir, userProfile)) {
+    throw new Error(
+      "APPFORGE_LLM_CONFIG must use a dedicated directory below the Windows user profile",
+    )
+  }
+
+  const parents: string[] = []
+  let candidate = immediateParent
+  while (true) {
+    parents.push(candidate)
+    if (sameResolvedPath(candidate, userProfile)) break
+    const next = dirname(candidate)
+    if (sameResolvedPath(candidate, next)) {
+      throw new Error(`Could not establish a trusted Windows config path below ${userProfile}`)
+    }
+    candidate = next
+  }
+  return parents
+}
+
+async function assertWindowsAcl(
+  path: string,
+  kind: WindowsAclKind,
+  mode: WindowsAclMode,
+  repair: boolean,
+): Promise<void> {
+  if (!shouldEnforceWindowsAcl()) return
+  const args = [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-Command",
+    WINDOWS_ACL_POWERSHELL_SCRIPT,
+  ]
+  try {
+    const { stdout } = await windowsAclCommand(args, JSON.stringify({ path, kind, mode, repair }))
+    if (stdout.trim() !== "ok") throw new WindowsAclCommandError(null)
+  } catch {
+    const label = mode === "parent" ? "config parent directory" : `config ${kind}`
+    throw new WindowsAclCommandError(null, `Windows ACL validation failed for ${label}: ${path}`)
+  }
+}
+
 async function ensureDir(): Promise<void> {
   const path = dirname(currentConfigPath())
+  const parent = dirname(path)
+  if (shouldEnforceWindowsAcl() && sameResolvedPath(path, parent)) {
+    throw new Error(`Refusing to use a filesystem root as the Windows config directory: ${path}`)
+  }
+  const aclParents = shouldEnforceWindowsAcl() ? windowsAclParents(path) : []
   await mkdir(path, { recursive: true, mode: 0o700 })
   const info = await lstat(path)
   if (!info.isDirectory() || info.isSymbolicLink()) {
     throw new Error(`Refusing non-directory or symlinked config directory: ${path}`)
   }
   assertOwnedByCurrentUser(path, info.uid)
+  if (shouldEnforceWindowsAcl()) {
+    // A protected config directory below an audited parent chain cannot be
+    // replaced or made writable by another unprivileged Windows identity.
+    // Reuse that trust only for the same resolved directory; lstat above still
+    // rejects a path that was replaced with a reparse point or non-directory.
+    if (!windowsAclVerifiedDirectory || !sameResolvedPath(windowsAclVerifiedDirectory, path)) {
+      for (const ancestor of aclParents) {
+        await assertWindowsAcl(ancestor, "directory", "parent", false)
+      }
+      await assertWindowsAcl(path, "directory", "private", true)
+      windowsAclVerifiedDirectory = path
+    }
+  }
   if (process.platform !== "win32") {
     await chmod(path, 0o700)
     if ((await stat(path)).mode & 0o077) throw new Error(`Could not secure config directory: ${path}`)
@@ -131,6 +375,9 @@ async function assertSafeConfigFile(path: string, repairPermissions: boolean): P
     throw new Error(`Refusing non-regular or symlinked config file: ${path}`)
   }
   assertOwnedByCurrentUser(path, info.uid)
+  if (shouldEnforceWindowsAcl()) {
+    await assertWindowsAcl(path, "file", "private", repairPermissions)
+  }
   if (process.platform !== "win32" && (info.mode & 0o077) !== 0) {
     if (!repairPermissions) throw new Error(`Config file permissions are too broad: ${path}`)
     await chmod(path, 0o600)
@@ -153,7 +400,11 @@ async function atomicWritePrivate(path: string, payload: string): Promise<void> 
     await handle.sync()
     await handle.close()
     handle = null
-    if (process.platform !== "win32") await chmod(temporary, 0o600)
+    if (shouldEnforceWindowsAcl()) {
+      await assertWindowsAcl(temporary, "file", "private", true)
+    } else if (process.platform !== "win32") {
+      await chmod(temporary, 0o600)
+    }
     await rename(temporary, path)
     await assertSafeConfigFile(path, false)
     if (process.platform !== "win32") {
@@ -215,6 +466,13 @@ class DpapiCommandError extends Error {
   constructor(readonly code: number | null, reason = "Windows DPAPI command failed") {
     super(reason)
     this.name = "DpapiCommandError"
+  }
+}
+
+class WindowsAclCommandError extends Error {
+  constructor(readonly code: number | null, reason = "Windows config ACL command failed") {
+    super(reason)
+    this.name = "WindowsAclCommandError"
   }
 }
 
@@ -298,6 +556,44 @@ function dpapiCommand(args: string[], input?: string): Promise<SecurityCommandRe
   return (dpapiCommandRunnerOverride ?? runDpapiCommand)(args, input)
 }
 
+const runWindowsAclCommand: SecurityCommandRunner = (args, input) => new Promise((resolve, reject) => {
+  const child = spawn(dpapiPowerShellExecutable(), args, {
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
+  })
+  const stdout: Buffer[] = []
+  let outputBytes = 0
+  const timeout = setTimeout(() => {
+    child.kill()
+    reject(new WindowsAclCommandError(null, "Windows config ACL command timed out"))
+  }, 30_000)
+  child.stdout.on("data", (chunk: Buffer) => {
+    outputBytes += chunk.length
+    if (outputBytes <= MAX_SECURITY_OUTPUT_BYTES) stdout.push(chunk)
+    else child.kill()
+  })
+  child.stderr.resume()
+  child.once("error", () => {
+    clearTimeout(timeout)
+    reject(new WindowsAclCommandError(null))
+  })
+  child.once("close", (code) => {
+    clearTimeout(timeout)
+    if (outputBytes > MAX_SECURITY_OUTPUT_BYTES) {
+      reject(new WindowsAclCommandError(code, "Windows config ACL output exceeded its limit"))
+    } else if (code !== 0) {
+      reject(new WindowsAclCommandError(code))
+    } else {
+      resolve({ stdout: Buffer.concat(stdout).toString("utf8") })
+    }
+  })
+  child.stdin.end(input)
+})
+
+function windowsAclCommand(args: string[], input?: string): Promise<SecurityCommandResult> {
+  return (windowsAclCommandRunnerOverride ?? runWindowsAclCommand)(args, input)
+}
+
 class MacOSKeychainSecretStore implements SecretStore {
   private assertSupported(): void {
     if (process.platform !== "darwin") {
@@ -356,6 +652,7 @@ function emptyDpapiBlobs(): DpapiBlobFile {
 async function readDpapiBlobs(): Promise<DpapiBlobFile> {
   const path = currentDpapiStorePath()
   try {
+    await ensureDir()
     await assertSafeConfigFile(path, true)
     const parsed = JSON.parse(await readFile(path, "utf8")) as Partial<DpapiBlobFile>
     if (parsed.version !== 1 || !parsed.secrets || typeof parsed.secrets !== "object" || Array.isArray(parsed.secrets)) {
@@ -493,6 +790,7 @@ export async function load(): Promise<BridgeConfig> {
   const backend = currentSecretBackend()
   if (loaded && cache && loadedPath === path && loadedBackend === backend) return cache
   try {
+    await ensureDir()
     await assertSafeConfigFile(path, true)
     const raw = await readFile(path, "utf8")
     const parsed = JSON.parse(raw) as Partial<BridgeConfig>
@@ -626,6 +924,10 @@ export function _setDpapiCommandRunnerForTest(runner: SecurityCommandRunner | nu
   dpapiCommandRunnerOverride = runner
 }
 
+export function _setWindowsAclCommandRunnerForTest(runner: SecurityCommandRunner | null): void {
+  windowsAclCommandRunnerOverride = runner
+}
+
 export function _resetForTest(): void {
   cache = null
   loaded = false
@@ -634,4 +936,6 @@ export function _resetForTest(): void {
   secretStoreOverride = null
   securityCommandRunnerOverride = null
   dpapiCommandRunnerOverride = null
+  windowsAclCommandRunnerOverride = null
+  windowsAclVerifiedDirectory = null
 }

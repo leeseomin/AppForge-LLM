@@ -1,9 +1,9 @@
-import { mkdtemp, writeFile } from "node:fs/promises"
+import { rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { tmpdir } from "node:os"
-import { expect, test, beforeAll } from "bun:test"
+import { expect, test, beforeAll, afterAll } from "bun:test"
 import { get, statusOf, list, _resetForTest as resetRegistry } from "../src/registry"
 import { _resetForTest as resetCatalog } from "../src/catalog"
+import { makeBridgeTestDirectory } from "./test-paths"
 
 let tmp: string
 
@@ -17,12 +17,16 @@ const REMOVED_PROVIDER_IDS = [
 ]
 
 beforeAll(async () => {
-  tmp = await mkdtemp(join(tmpdir(), "appforge-reg-"))
+  tmp = await makeBridgeTestDirectory("appforge-reg-")
   process.env.APPFORGE_LLM_CONFIG_DIR = tmp
   process.env.APPFORGE_MODELS_DEV_URL = "http://127.0.0.1:1/api.json"
   process.env.APPFORGE_MODELS_DEV_CACHE = join(tmp, "models-dev.json")
   resetCatalog()
   resetRegistry()
+})
+
+afterAll(async () => {
+  await rm(tmp, { recursive: true, force: true })
 })
 
 test("static fallback lists known providers", async () => {

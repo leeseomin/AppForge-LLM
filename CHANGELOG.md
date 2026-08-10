@@ -6,7 +6,9 @@
 - Canonicalized `.exe`, `.cmd`, `.bat`, and `.com` launchers before shell, destructive, dependency, and network policy checks; added Windows deletion/disk aliases and case-insensitive protected environment handling.
 - Added a Windows-safe PATH and disposable user-profile environment without copying arbitrary host PATH entries or secret-like variables.
 - Added Windows DPAPI `CurrentUser` API-key storage, reference-only provider JSON, plaintext migration, read-back verification, and standard-input-only secret transfer.
-- Added native `gradlew.bat` selection, a `build.ps1 --check` sandbox doctor, hosted Windows CI, a real-Windows-11 manual smoke gate, and Windows-specific regression tests and documentation.
+- Added fail-closed Windows configuration integrity checks: protected owner/DACL enforcement for the config directory, provider/DPAPI files, and atomic temporary files; parent-chain and reparse-point validation; rejection of previously shared-writable configuration; and real/mocked ACL regression tests.
+- Upgraded `build.ps1 --check` from a dependency preflight into the authoritative sandbox + Python + frontend + Bun test gate, with skip-resistant dependency/build verification, Python environment sync, and deterministic npm/Bun lockfile installs.
+- Added the missing hosted `windows-2025` CI workflow and real-Windows-11 self-hosted release gate, including explicit AppContainer, Job Object, DPAPI, DACL, batch-wrapper, and web-smoke coverage.
 
 ## 0.7.0 — 2026-07-11
 

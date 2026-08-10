@@ -28,9 +28,19 @@ class WindowsLauncherContractTests(unittest.TestCase):
         for contract in (
             ".venv\\Scripts\\appforge.exe",
             "APPFORGE_SKIP_INSTALL",
+            "Ignoring APPFORGE_SKIP_INSTALL because --check is a full test gate.",
             "APPFORGE_SKIP_FRONTEND_BUILD",
+            "Ignoring APPFORGE_SKIP_FRONTEND_BUILD because --check is a full test gate.",
+            "frontend\\node_modules",
+            '"--prefix", "frontend", "ci"',
             "llm_bridge\\node_modules",
             "--frozen-lockfile",
+            "Invoke-CheckSuite",
+            '"-m", "pytest", "-q"',
+            '"--prefix", "frontend", "run", "test:i18n"',
+            '"--prefix", "frontend", "run", "build"',
+            'Invoke-CheckedCommand $script:BunBin @("run", "typecheck")',
+            'Invoke-CheckedCommand $script:BunBin @("test")',
             "--no-open-browser",
             "/api/health",
             "Invoke-WebRequest",
@@ -43,6 +53,7 @@ class WindowsLauncherContractTests(unittest.TestCase):
             self.assertIn(contract, launcher)
 
         main = launcher.split("function Invoke-Main", maxsplit=1)[1]
+        self.assertLess(main.index("Invoke-CheckSuite"), main.index("Select-ManagedBridgePort"))
         self.assertLess(main.index("Select-ManagedBridgePort"), main.index("Select-WebPort"))
 
     def test_readme_exposes_the_one_click_windows_entrypoint(self) -> None:

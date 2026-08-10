@@ -22,13 +22,20 @@ From File Explorer, double-click `build.bat`. From Command Prompt or PowerShell:
 build.bat
 ```
 
-Before a normal launch, run the full Windows preflight once:
+Before a normal launch, run the full Windows verification gate once:
 
 ```bat
 build.bat --check
 ```
 
-`--check` installs or verifies dependencies, builds the packaged web assets, and launches a harmless Python command through the same AppContainer and Job Object path used for generated projects. A failure is reported as `EXECUTION_SANDBOX_UNAVAILABLE`; AppForge does not silently execute the project on the host.
+`--check` is the authoritative Windows build-and-test gate. It synchronizes the Python development environment (using `uv.lock` when `uv` is available), refreshes npm and Bun dependencies from their committed lockfiles, and then runs, in order:
+
+1. the AppContainer and Job Object doctor through the same path used for generated projects;
+2. Python bytecode compilation and the complete Python test suite;
+3. frontend localization tests, an explicit Vue/TypeScript typecheck, and the production Vite build;
+4. Bun bridge dependency verification, TypeScript typecheck, and the complete bridge test suite, including Windows-only DPAPI and DACL tests when running on Windows.
+
+The gate exits non-zero at the first failure. `APPFORGE_SKIP_INSTALL` and `APPFORGE_SKIP_FRONTEND_BUILD` are intentionally ignored in `--check` mode so that local environment variables cannot turn CI or a release check into a partial preflight. A sandbox failure is reported as `EXECUTION_SANDBOX_UNAVAILABLE`; AppForge does not silently execute the project on the host.
 
 A bounded web smoke check is also available:
 
@@ -80,7 +87,7 @@ Explicit `cmd.exe`, `powershell.exe`, and `pwsh.exe` execution requires destruct
 
 Package-manager batch launchers such as `npm.cmd` and `gradlew.bat` are not exposed as an arbitrary shell. After policy validation, the trusted helper invokes them through a fixed, non-interactive PowerShell argument-forwarding script inside the AppContainer.
 
-## API-key storage
+## API-key storage and configuration integrity
 
 On Windows, `APPFORGE_LLM_SECRET_BACKEND` defaults to `dpapi`.
 
@@ -89,6 +96,14 @@ On Windows, `APPFORGE_LLM_SECRET_BACKEND` defaults to `dpapi`.
 - encrypted blobs are stored separately in `secrets.dpapi.json`.
 - plaintext legacy entries are migrated on the next successful load/save.
 - secret material is sent to the fixed PowerShell DPAPI bridge through standard input, never as a process argument.
+- the configuration directory, both JSON files, and every atomic temporary file receive a protected DACL owned by the signed-in user;
+- write access is limited to the signed-in user plus Windows `SYSTEM` and `Administrators` principals;
+- every parent from the configuration directory up to the user-profile root is checked for another identity's write access and for reparse points before configuration is trusted;
+- an existing file or directory that was writable by another identity is rejected rather than silently repaired and trusted.
+
+This integrity check is necessary because DPAPI encrypts the key but does not authenticate a separate `providers.json` endpoint value. Without a trusted DACL, another account could replace an `openai-compatible` base URL and cause the signed-in process to send a decrypted key to the wrong endpoint.
+
+On Windows, `APPFORGE_LLM_CONFIG` must therefore point to a regular file in a dedicated local directory **below the signed-in user's profile**. Do not place it in a shared directory, a network mapping, the profile root itself, or a path containing a junction/symlink. The default `%USERPROFILE%\.appforge\llm\providers.json` satisfies this layout. An unsafe custom path fails closed with a Windows ACL validation error.
 
 The macOS default remains Keychain, and Linux retains the private-file backend. A backend may be selected explicitly for migration or testing:
 
@@ -100,17 +115,9 @@ DPAPI protects against another Windows account or an offline copy of the file. M
 
 ## Continuous verification
 
-`.github/workflows/windows-ci.yml` runs on GitHub's hosted `windows-2025` image and covers:
+`.github/workflows/windows-ci.yml` runs on GitHub's hosted `windows-2025` image. It installs the pinned Python, Node.js, and Bun toolchains, invokes the same `build.ps1 --check` gate used by developers, re-runs the native AppContainer/Job Object integration test explicitly, validates the batch wrapper, and finishes with the web health/UI smoke path.
 
-- the PowerShell and batch launchers;
-- AppContainer filesystem and loopback denial tests;
-- Job Object descendant cleanup;
-- Python tests;
-- frontend tests and production build;
-- Bun bridge typecheck and tests, including a real DPAPI round trip;
-- the web health/UI smoke path.
-
-Hosted Windows CI is not identical to a consumer Windows 11 desktop. `.github/workflows/windows11-release-smoke.yml` is a manual gate for a self-hosted runner labeled `appforge-win11` on real Windows 11 hardware.
+Hosted Windows CI is not identical to a consumer Windows 11 desktop. `.github/workflows/windows11-release-smoke.yml` is a manual gate for a self-hosted runner labeled `appforge-win11`. It verifies the operating system caption/build, runs the complete gate, explicitly re-runs the real DPAPI/DACL and AppContainer regressions, validates `build.bat`, and runs the bounded web smoke check on real Windows 11 hardware.
 
 ## Troubleshooting
 
@@ -139,6 +146,12 @@ Raise only the needed trusted-host setting shown above, restart AppForge, and re
 ### Dependency installation cannot reach a registry
 
 Confirm the project safety settings permit dependency installation. The default no-network sandbox is intentional; changing firewall rules alone does not add the AppContainer capability.
+
+### Configuration ACL validation fails
+
+Keep the default configuration location, or set `APPFORGE_LLM_CONFIG` to a regular file in a dedicated local NTFS directory below `%USERPROFILE%`. Remove any `Everyone`, `Users`, `Authenticated Users`, or other non-administrative write grant from the directory and its parents. Do not bypass the check by moving the file to a shared folder: endpoint integrity is part of API-key protection.
+
+If an existing `providers.json` or `secrets.dpapi.json` was writable by another identity, AppForge refuses to trust its contents. Back up the file for inspection, create a new private configuration directory, and re-enter the provider key and endpoint settings.
 
 ### API key cannot be decrypted
 

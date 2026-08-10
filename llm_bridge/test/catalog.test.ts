@@ -1,14 +1,18 @@
-import { mkdtemp, writeFile } from "node:fs/promises"
+import { rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { tmpdir } from "node:os"
-import { expect, test, beforeAll } from "bun:test"
+import { expect, test, beforeAll, afterAll } from "bun:test"
+import { makeBridgeTestDirectory } from "./test-paths"
 
 let dir: string
 
 beforeAll(async () => {
-  dir = await mkdtemp(join(tmpdir(), "appforge-cat-"))
+  dir = await makeBridgeTestDirectory("appforge-cat-")
   process.env.APPFORGE_LLM_CONFIG_DIR = dir
   process.env.APPFORGE_MODELS_DEV_CACHE = join(dir, "models-dev.json")
+})
+
+afterAll(async () => {
+  await rm(dir, { recursive: true, force: true })
 })
 
 test("fetchCatalog returns null when source is unreachable", async () => {

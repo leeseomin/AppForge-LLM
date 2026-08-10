@@ -5,6 +5,8 @@ $script:RootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:Mode = "serve"
 $script:NoOpen = $false
 $script:WebProcess = $null
+$script:NpmBin = $null
+$script:BunBin = $null
 
 function Write-Log {
     param([Parameter(Mandatory = $true)][string]$Message)
@@ -24,7 +26,7 @@ Prepare and launch the local AppForge-LLM v7 AI app builder web UI.
 
 Options:
   --smoke     Start the web app, probe /api/health and /, then stop it.
-  --check     Prepare dependencies and verify the Windows execution sandbox.
+  --check     Run the Windows sandbox doctor plus Python, frontend, and Bun test gates.
   --no-open   Launch without opening the default browser.
   -h, --help  Show this help.
 
@@ -162,17 +164,21 @@ function Install-PythonWithPip {
 }
 
 function Initialize-PythonEnvironment {
-    if (Test-Truthy ([Environment]::GetEnvironmentVariable("APPFORGE_SKIP_INSTALL"))) {
+    $skipInstall = Test-Truthy ([Environment]::GetEnvironmentVariable("APPFORGE_SKIP_INSTALL"))
+    if ($skipInstall -and $script:Mode -ne "check") {
         Write-Log "Skipping Python dependency sync because APPFORGE_SKIP_INSTALL is set."
     }
     else {
+        if ($skipInstall -and $script:Mode -eq "check") {
+            Write-Log "Ignoring APPFORGE_SKIP_INSTALL because --check is a full test gate."
+        }
         $synced = $false
         $uv = Find-Application @("uv.exe", "uv")
         if ($null -ne $uv) {
             & $uv sync --help *> $null
             if ($LASTEXITCODE -eq 0) {
-                Write-Log "Syncing Python dependencies with uv."
-                & $uv sync --extra dev
+                Write-Log "Syncing Python dependencies with uv.lock."
+                & $uv sync --extra dev --frozen
                 if ($LASTEXITCODE -eq 0) {
                     $synced = $true
                 }
@@ -211,27 +217,36 @@ function Test-WindowsSandboxRuntime {
 
 function Initialize-Frontend {
     $webIndex = Join-Path $script:RootDir "appforge\resources\web\index.html"
-    if (Test-Truthy ([Environment]::GetEnvironmentVariable("APPFORGE_SKIP_FRONTEND_BUILD"))) {
+    $skipFrontend = Test-Truthy ([Environment]::GetEnvironmentVariable("APPFORGE_SKIP_FRONTEND_BUILD"))
+    if ($skipFrontend -and $script:Mode -ne "check") {
         Write-Log "Skipping frontend build because APPFORGE_SKIP_FRONTEND_BUILD is set."
         if (-not (Test-Path -LiteralPath $webIndex -PathType Leaf)) {
             Stop-WithError "Packaged web assets are missing; run npm --prefix frontend run build."
         }
         return
     }
+    if ($skipFrontend -and $script:Mode -eq "check") {
+        Write-Log "Ignoring APPFORGE_SKIP_FRONTEND_BUILD because --check is a full test gate."
+    }
 
-    $npm = Find-Application @("npm.cmd", "npm.exe", "npm")
-    if ($null -eq $npm) {
+    $script:NpmBin = Find-Application @("npm.cmd", "npm.exe", "npm")
+    if ($null -eq $script:NpmBin) {
         Stop-WithError "Node.js/npm was not found. Install Node.js LTS and try again."
     }
 
     $nodeModules = Join-Path $script:RootDir "frontend\node_modules"
-    if (-not (Test-Path -LiteralPath $nodeModules -PathType Container)) {
-        Write-Log "Installing frontend dependencies."
-        Invoke-CheckedCommand $npm @("--prefix", "frontend", "install") "npm install failed"
+    if ($script:Mode -eq "check" -or -not (Test-Path -LiteralPath $nodeModules -PathType Container)) {
+        Write-Log "Installing frontend dependencies from package-lock.json."
+        Invoke-CheckedCommand $script:NpmBin @("--prefix", "frontend", "ci") "npm ci failed"
+    }
+
+    if ($script:Mode -eq "check") {
+        Write-Log "Frontend dependencies are ready; verification and production build run inside --check."
+        return
     }
 
     Write-Log "Building packaged frontend assets."
-    Invoke-CheckedCommand $npm @("--prefix", "frontend", "run", "build") "Frontend build failed"
+    Invoke-CheckedCommand $script:NpmBin @("--prefix", "frontend", "run", "build") "Frontend build failed"
     if (-not (Test-Path -LiteralPath $webIndex -PathType Leaf)) {
         Stop-WithError "Frontend build did not produce appforge\resources\web\index.html."
     }
@@ -357,26 +372,21 @@ function Select-ManagedBridgePort {
     Stop-WithError "No available managed LLM bridge port found from $requestedPort through $endPort. Set APPFORGE_LLM_BRIDGE_URL to an available loopback URL."
 }
 
-function Initialize-BridgeRuntime {
-    if (-not (Test-BridgeRequested)) {
-        return
+function Initialize-BridgeDependencies {
+    if ($null -eq $script:BunBin) {
+        $script:BunBin = Find-Application @("bun.exe", "bun")
     }
-    if (Test-Truthy ([Environment]::GetEnvironmentVariable("APPFORGE_SKIP_LLM_BRIDGE"))) {
-        Write-Log "Skipping managed llm_bridge startup because APPFORGE_SKIP_LLM_BRIDGE is set."
-        return
-    }
-    $bun = Find-Application @("bun.exe", "bun")
-    if ($null -eq $bun) {
+    if ($null -eq $script:BunBin) {
         Stop-WithError "Bun was not found. Install Bun and ensure bun.exe is available on PATH."
     }
 
     $bridgeDir = Join-Path $script:RootDir "llm_bridge"
     $bridgeModules = Join-Path $bridgeDir "node_modules"
-    if (-not (Test-Path -LiteralPath $bridgeModules -PathType Container)) {
+    if ($script:Mode -eq "check" -or -not (Test-Path -LiteralPath $bridgeModules -PathType Container)) {
         Write-Log "Installing llm_bridge dependencies from bun.lock."
         Push-Location $bridgeDir
         try {
-            Invoke-CheckedCommand $bun @("install", "--frozen-lockfile") "llm_bridge dependency installation failed"
+            Invoke-CheckedCommand $script:BunBin @("install", "--frozen-lockfile") "llm_bridge dependency installation failed"
         }
         finally {
             Pop-Location
@@ -385,7 +395,57 @@ function Initialize-BridgeRuntime {
     if (-not (Test-Path -LiteralPath $bridgeModules -PathType Container)) {
         Stop-WithError "Bun did not produce llm_bridge\node_modules."
     }
+}
+
+function Initialize-BridgeRuntime {
+    if (-not (Test-BridgeRequested)) {
+        return
+    }
+    if (Test-Truthy ([Environment]::GetEnvironmentVariable("APPFORGE_SKIP_LLM_BRIDGE"))) {
+        Write-Log "Skipping managed llm_bridge startup because APPFORGE_SKIP_LLM_BRIDGE is set."
+        return
+    }
+    Initialize-BridgeDependencies
     Write-Log "Secure llm_bridge startup will be handled by the AppForge web process."
+}
+
+function Invoke-CheckSuite {
+    Write-Log "Compiling Python sources."
+    Invoke-CheckedCommand $script:PythonBin @(
+        "-m", "compileall", "-q", "appforge", "tests", "app-code-merge.py"
+    ) "Python source compilation failed"
+
+    Write-Log "Running the complete Python test suite."
+    Invoke-CheckedCommand $script:PythonBin @("-m", "pytest", "-q") "Python tests failed"
+
+    if ($null -eq $script:NpmBin) {
+        $script:NpmBin = Find-Application @("npm.cmd", "npm.exe", "npm")
+    }
+    if ($null -eq $script:NpmBin) {
+        Stop-WithError "Node.js/npm was not found before frontend verification."
+    }
+    Write-Log "Running frontend localization tests, explicit typecheck, and production build."
+    Invoke-CheckedCommand $script:NpmBin @("--prefix", "frontend", "run", "test:i18n") "Frontend tests failed"
+    Invoke-CheckedCommand $script:NpmBin @("--prefix", "frontend", "run", "typecheck") "Frontend typecheck failed"
+    Invoke-CheckedCommand $script:NpmBin @("--prefix", "frontend", "run", "build") "Frontend build failed"
+    $webIndex = Join-Path $script:RootDir "appforge\resources\web\index.html"
+    if (-not (Test-Path -LiteralPath $webIndex -PathType Leaf)) {
+        Stop-WithError "Frontend build did not produce appforge\resources\web\index.html."
+    }
+
+    Initialize-BridgeDependencies
+    $bridgeDir = Join-Path $script:RootDir "llm_bridge"
+    Push-Location $bridgeDir
+    try {
+        Write-Log "Running llm_bridge typecheck and tests."
+        Invoke-CheckedCommand $script:BunBin @("run", "typecheck") "llm_bridge typecheck failed"
+        Invoke-CheckedCommand $script:BunBin @("test") "llm_bridge tests failed"
+    }
+    finally {
+        Pop-Location
+    }
+
+    Write-Log "Full Windows check passed: sandbox, Python, frontend, and llm_bridge gates are green."
 }
 
 function Get-WebArguments {
@@ -545,13 +605,17 @@ function Invoke-Main {
         Initialize-PythonEnvironment
         Test-WindowsSandboxRuntime
         Initialize-Frontend
+        if ($script:Mode -eq "check") {
+            Invoke-CheckSuite
+            return
+        }
+
         Select-ManagedBridgePort
         Select-WebPort
         Initialize-BridgeRuntime
 
         switch ($script:Mode) {
             "smoke" { Invoke-SmokeCheck }
-            "check" { Write-Log "Check passed. AppForge web assets and launcher dependencies are ready." }
             "serve" { Invoke-ForegroundWeb }
             default { Stop-WithError "Unknown launcher mode: $($script:Mode)" }
         }

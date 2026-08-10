@@ -7,7 +7,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "test:i18n": "node --test tests/i18n.test.ts",
+    "test:i18n": "node --experimental-strip-types --test tests/i18n.test.ts",
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {

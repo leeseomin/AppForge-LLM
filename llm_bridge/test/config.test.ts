@@ -1,12 +1,15 @@
-import { lstat, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises"
-import { isAbsolute, join } from "node:path"
+import { lstat, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises"
+import { spawn } from "node:child_process"
+import { dirname, isAbsolute, join } from "node:path"
 import { tmpdir } from "node:os"
 import { afterEach, expect, test } from "bun:test"
+import { makeBridgeTestDirectory } from "./test-paths"
 import {
   _resetForTest,
   _setDpapiCommandRunnerForTest,
   _setSecurityCommandRunnerForTest,
   _setSecretStoreForTest,
+  _setWindowsAclCommandRunnerForTest,
   configPath,
   secretBackend,
   setProvider,
@@ -14,12 +17,129 @@ import {
   type SecretStore,
 } from "../src/config"
 
-afterEach(() => {
+type WindowsAclRequest = {
+  path: string
+  kind: "directory" | "file"
+  mode: "parent" | "private"
+  repair: boolean
+}
+
+const testDirectories = new Set<string>()
+
+async function makeTestDir(prefix: string): Promise<string> {
+  const directory = await makeBridgeTestDirectory(prefix)
+  testDirectories.add(directory)
+  return directory
+}
+
+function windowsPowerShellExecutable(): string {
+  const systemRoot = process.env.SystemRoot || process.env.WINDIR || "C:\\Windows"
+  return join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+}
+
+function runWindowsPowerShell(script: string, input: unknown): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      windowsPowerShellExecutable(),
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        script,
+      ],
+      { stdio: ["pipe", "pipe", "pipe"], windowsHide: true },
+    )
+    const stdout: Buffer[] = []
+    const stderr: Buffer[] = []
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk))
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk))
+    child.once("error", reject)
+    child.once("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(Buffer.concat(stderr).toString("utf8") || `PowerShell exited with ${code}`))
+        return
+      }
+      resolve(Buffer.concat(stdout).toString("utf8"))
+    })
+    child.stdin.end(JSON.stringify(input))
+  })
+}
+
+const WINDOWS_ACL_SUMMARY_SCRIPT = `
+$ErrorActionPreference = 'Stop'
+[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$request = ([Console]::In.ReadToEnd() | ConvertFrom-Json)
+$current = [Security.Principal.WindowsIdentity]::GetCurrent().User
+$allowed = @($current.Value, 'S-1-5-18', 'S-1-5-32-544')
+$entries = @()
+foreach ($path in @($request.paths)) {
+  $acl = Get-Acl -LiteralPath ([IO.Path]::GetFullPath([string]$path))
+  $hasCurrentFullControl = $false
+  $hasInheritedRule = $false
+  $hasUnexpectedRule = $false
+  foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+    if ($rule.IsInherited) {
+      $hasInheritedRule = $true
+    }
+    $sid = $rule.IdentityReference.Value
+    if ($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or $allowed -notcontains $sid) {
+      $hasUnexpectedRule = $true
+    }
+    $rights = [int64]$rule.FileSystemRights
+    if ($sid -eq $current.Value -and (($rights -band [int64][Security.AccessControl.FileSystemRights]::FullControl) -eq [int64][Security.AccessControl.FileSystemRights]::FullControl)) {
+      $hasCurrentFullControl = $true
+    }
+  }
+  $entries += [pscustomobject]@{
+    path = [string]$path
+    ownerIsCurrent = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -eq $current.Value
+    protected = [bool]$acl.AreAccessRulesProtected
+    hasCurrentFullControl = $hasCurrentFullControl
+    hasInheritedRule = $hasInheritedRule
+    hasUnexpectedRule = $hasUnexpectedRule
+  }
+}
+[Console]::Out.Write((@{ entries = @($entries) } | ConvertTo-Json -Compress -Depth 4))
+`
+
+const WINDOWS_GRANT_EVERYONE_MODIFY_SCRIPT = `
+$ErrorActionPreference = 'Stop'
+[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$request = ([Console]::In.ReadToEnd() | ConvertFrom-Json)
+$path = [IO.Path]::GetFullPath([string]$request.path)
+$item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+$acl = Get-Acl -LiteralPath $path
+$everyone = [Security.Principal.SecurityIdentifier]::new('S-1-1-0')
+$inheritance = [Security.AccessControl.InheritanceFlags]::None
+if ([bool]$item.PSIsContainer) {
+  $inheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
+}
+$rule = [Security.AccessControl.FileSystemAccessRule]::new(
+  $everyone,
+  [Security.AccessControl.FileSystemRights]::Modify,
+  $inheritance,
+  [Security.AccessControl.PropagationFlags]::None,
+  [Security.AccessControl.AccessControlType]::Allow
+)
+[void]$acl.AddAccessRule($rule)
+Set-Acl -LiteralPath $path -AclObject $acl
+`
+
+afterEach(async () => {
   delete process.env.APPFORGE_LLM_CONFIG
   delete process.env.APPFORGE_LLM_CONFIG_DIR
   delete process.env.APPFORGE_DATA_DIR
   delete process.env.APPFORGE_LLM_SECRET_BACKEND
   _resetForTest()
+  await Promise.all(
+    Array.from(testDirectories, (directory) => rm(directory, { recursive: true, force: true })),
+  )
+  testDirectories.clear()
 })
 
 test("macOS Keychain and Windows DPAPI are the secure platform defaults", () => {
@@ -39,7 +159,7 @@ test("secret config paths are absolute and independent of web job data", () => {
 })
 
 test("file backend creates a private directory and atomic 0600 config file", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "appforge-bridge-file-perms-"))
+  const dir = await makeTestDir("appforge-bridge-file-perms-")
   const configDir = join(dir, "private")
   process.env.APPFORGE_LLM_CONFIG_DIR = configDir
   process.env.APPFORGE_LLM_CONFIG = join(configDir, "providers.json")
@@ -55,7 +175,7 @@ test("file backend creates a private directory and atomic 0600 config file", asy
 })
 
 test("file backend refuses to follow a symlinked config file", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "appforge-bridge-symlink-"))
+  const dir = await makeTestDir("appforge-bridge-symlink-")
   const target = join(dir, "target.json")
   const link = join(dir, "providers.json")
   await writeFile(target, "do-not-overwrite", "utf8")
@@ -75,8 +195,116 @@ test("file backend refuses to follow a symlinked config file", async () => {
   expect((await lstat(link)).isSymbolicLink()).toBe(true)
 })
 
+test("Windows ACL gate protects the config directory and every atomic file write", async () => {
+  const dir = await makeTestDir("appforge-bridge-acl-contract-")
+  const configDir = join(dir, "private")
+  const providerPath = join(configDir, "providers.json")
+  const secret = "sk-not-part-of-acl-command"
+  const calls: Array<{ args: string[]; input?: string; request: WindowsAclRequest }> = []
+  process.env.APPFORGE_LLM_CONFIG = providerPath
+  process.env.APPFORGE_LLM_SECRET_BACKEND = "file"
+  _resetForTest()
+  _setWindowsAclCommandRunnerForTest(async (args, input) => {
+    const request = JSON.parse(input || "{}") as WindowsAclRequest
+    calls.push({ args: [...args], input, request })
+    return { stdout: "ok" }
+  })
+
+  await setProvider("openai-compatible", {
+    apiKey: secret,
+    baseURL: "https://trusted.example/v1",
+  })
+
+  expect(calls.some(({ request }) =>
+    request.path === dir
+    && request.kind === "directory"
+    && request.mode === "parent"
+    && request.repair === false,
+  )).toBeTrue()
+  expect(calls.some(({ request }) =>
+    request.path === configDir
+    && request.kind === "directory"
+    && request.mode === "private"
+    && request.repair === true,
+  )).toBeTrue()
+  expect(calls.some(({ request }) =>
+    dirname(request.path) === configDir
+    && request.kind === "file"
+    && request.mode === "private"
+    && request.repair === true
+    && request.path.includes(".providers.json.")
+    && request.path.endsWith(".tmp"),
+  )).toBeTrue()
+  expect(calls.some(({ request }) =>
+    request.path === providerPath
+    && request.kind === "file"
+    && request.mode === "private"
+    && request.repair === false,
+  )).toBeTrue()
+  expect(calls.every(({ args, input }) =>
+    !args.join(" ").includes(secret) && !(input || "").includes(secret),
+  )).toBeTrue()
+})
+
+test("Windows ACL gate fails closed before writing into an unsafe parent", async () => {
+  const dir = await makeTestDir("appforge-bridge-acl-parent-")
+  const providerPath = join(dir, "private", "providers.json")
+  process.env.APPFORGE_LLM_CONFIG = providerPath
+  process.env.APPFORGE_LLM_SECRET_BACKEND = "file"
+  _resetForTest()
+  _setWindowsAclCommandRunnerForTest(async (_args, input) => {
+    const request = JSON.parse(input || "{}") as WindowsAclRequest
+    if (request.mode === "parent") throw new Error("unsafe parent")
+    return { stdout: "ok" }
+  })
+
+  await expect(setProvider("openai-compatible", {
+    apiKey: "sk-must-not-be-written",
+    baseURL: "https://trusted.example/v1",
+  })).rejects.toThrow("Windows ACL validation failed for config parent directory")
+  await expect(readFile(providerPath, "utf8")).rejects.toThrow()
+})
+
+test("Windows ACL gate refuses to trust a provider file that may have been tampered with", async () => {
+  const dir = await makeTestDir("appforge-bridge-acl-tampered-")
+  const providerPath = join(dir, "providers.json")
+  process.env.APPFORGE_LLM_CONFIG = providerPath
+  process.env.APPFORGE_LLM_SECRET_BACKEND = "dpapi"
+  await writeFile(providerPath, JSON.stringify({
+    providers: {
+      "openai-compatible": {
+        apiKeyRef: "dpapi:appforge-llm/openai-compatible/apiKey",
+        baseURL: "https://attacker.invalid/v1",
+      },
+    },
+    active: { provider: "openai-compatible", model: null },
+  }), "utf8")
+  _resetForTest()
+  let secretReads = 0
+  _setSecretStoreForTest({
+    async get() {
+      secretReads += 1
+      return "sk-must-never-be-decrypted"
+    },
+    async set() {},
+    async delete() {},
+  })
+  _setWindowsAclCommandRunnerForTest(async (_args, input) => {
+    const request = JSON.parse(input || "{}") as WindowsAclRequest
+    if (request.path === providerPath && request.kind === "file") {
+      throw new Error("writable by another identity")
+    }
+    return { stdout: "ok" }
+  })
+
+  await expect(getProvider("openai-compatible")).rejects.toThrow(
+    "Windows ACL validation failed for config file",
+  )
+  expect(secretReads).toBe(0)
+})
+
 test("keychain backend stores provider secrets as JSON references", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "appforge-bridge-config-"))
+  const dir = await makeTestDir("appforge-bridge-config-")
   process.env.APPFORGE_LLM_CONFIG = join(dir, "providers.json")
   process.env.APPFORGE_LLM_SECRET_BACKEND = "keychain"
   const secrets = new Map<string, string>()
@@ -110,7 +338,7 @@ test("keychain backend stores provider secrets as JSON references", async () => 
 })
 
 test("dpapi backend stores only a reference in provider JSON", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "appforge-bridge-dpapi-config-"))
+  const dir = await makeTestDir("appforge-bridge-dpapi-config-")
   process.env.APPFORGE_LLM_CONFIG = join(dir, "providers.json")
   process.env.APPFORGE_LLM_SECRET_BACKEND = "dpapi"
   const secrets = new Map<string, string>()
@@ -139,7 +367,7 @@ test("dpapi backend stores only a reference in provider JSON", async () => {
 })
 
 test("dpapi command receives secret material only through stdin", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "appforge-bridge-dpapi-stdin-"))
+  const dir = await makeTestDir("appforge-bridge-dpapi-stdin-")
   process.env.APPFORGE_LLM_CONFIG = join(dir, "providers.json")
   process.env.APPFORGE_LLM_SECRET_BACKEND = "dpapi"
   const secret = "sk-never-in-process-arguments"
@@ -164,7 +392,7 @@ test("dpapi command receives secret material only through stdin", async () => {
 })
 
 test("plaintext Windows config is migrated into the secure backend on load", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "appforge-bridge-dpapi-migrate-"))
+  const dir = await makeTestDir("appforge-bridge-dpapi-migrate-")
   process.env.APPFORGE_LLM_CONFIG = join(dir, "providers.json")
   process.env.APPFORGE_LLM_SECRET_BACKEND = "dpapi"
   await writeFile(
@@ -191,7 +419,7 @@ test("plaintext Windows config is migrated into the secure backend on load", asy
 
 test("keychain command writes through interactive stdin without exposing the secret in argv", async () => {
   if (process.platform !== "darwin") return
-  const dir = await mkdtemp(join(tmpdir(), "appforge-bridge-keychain-stdin-"))
+  const dir = await makeTestDir("appforge-bridge-keychain-stdin-")
   process.env.APPFORGE_LLM_CONFIG = join(dir, "providers.json")
   process.env.APPFORGE_LLM_SECRET_BACKEND = "keychain"
   const secret = ["sk", "never", "in", "process", "arguments"].join("-")
@@ -217,7 +445,7 @@ test("keychain command writes through interactive stdin without exposing the sec
 
 test("keychain backend rejects a write that cannot be read back", async () => {
   if (process.platform !== "darwin") return
-  const dir = await mkdtemp(join(tmpdir(), "appforge-bridge-keychain-readback-"))
+  const dir = await makeTestDir("appforge-bridge-keychain-readback-")
   process.env.APPFORGE_LLM_CONFIG = join(dir, "providers.json")
   process.env.APPFORGE_LLM_SECRET_BACKEND = "keychain"
   _resetForTest()
@@ -234,7 +462,7 @@ test("keychain backend rejects a write that cannot be read back", async () => {
 })
 
 test("omitted or null keys preserve the credential and explicit clearing removes it", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "appforge-bridge-key-semantics-"))
+  const dir = await makeTestDir("appforge-bridge-key-semantics-")
   process.env.APPFORGE_LLM_CONFIG = join(dir, "providers.json")
   process.env.APPFORGE_LLM_SECRET_BACKEND = "file"
   _resetForTest()
@@ -249,7 +477,7 @@ test("omitted or null keys preserve the credential and explicit clearing removes
 })
 
 test("legacy OAuth fields are discarded while API-key settings are preserved", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "appforge-bridge-legacy-oauth-"))
+  const dir = await makeTestDir("appforge-bridge-legacy-oauth-")
   process.env.APPFORGE_LLM_CONFIG = join(dir, "providers.json")
   process.env.APPFORGE_LLM_SECRET_BACKEND = "file"
   await writeFile(
@@ -285,18 +513,111 @@ test("legacy OAuth fields are discarded while API-key settings are preserved", a
   expect(JSON.parse(raw).providers.openai.apiKey).toBe("sk-existing")
 })
 
-test("Windows DPAPI backend performs a real CurrentUser round trip", async () => {
+test("Windows DPAPI backend performs a real CurrentUser round trip with private DACLs", async () => {
   if (process.platform !== "win32") return
-  const dir = await mkdtemp(join(tmpdir(), "appforge-bridge-dpapi-real-"))
-  process.env.APPFORGE_LLM_CONFIG = join(dir, "providers.json")
+  const dir = await makeTestDir("appforge-bridge-dpapi-real-")
+  const providerPath = join(dir, "providers.json")
+  const dpapiPath = join(dir, "secrets.dpapi.json")
+  process.env.APPFORGE_LLM_CONFIG = providerPath
   process.env.APPFORGE_LLM_SECRET_BACKEND = "dpapi"
   _resetForTest()
 
   await setProvider("openai", { apiKey: "sk-windows-dpapi-roundtrip" })
 
   expect((await getProvider("openai"))?.apiKey).toBe("sk-windows-dpapi-roundtrip")
-  expect(await readFile(configPath(), "utf8")).not.toContain("sk-windows-dpapi-roundtrip")
-  expect(await readFile(join(dir, "secrets.dpapi.json"), "utf8")).not.toContain(
-    "sk-windows-dpapi-roundtrip",
+  expect(await readFile(providerPath, "utf8")).not.toContain("sk-windows-dpapi-roundtrip")
+  expect(await readFile(dpapiPath, "utf8")).not.toContain("sk-windows-dpapi-roundtrip")
+
+  const summary = JSON.parse(await runWindowsPowerShell(WINDOWS_ACL_SUMMARY_SCRIPT, {
+    paths: [dir, providerPath, dpapiPath],
+  })) as {
+    entries: Array<{
+      ownerIsCurrent: boolean
+      protected: boolean
+      hasCurrentFullControl: boolean
+      hasInheritedRule: boolean
+      hasUnexpectedRule: boolean
+    }>
+  }
+  expect(summary.entries).toHaveLength(3)
+  for (const entry of summary.entries) {
+    expect(entry.ownerIsCurrent).toBeTrue()
+    expect(entry.protected).toBeTrue()
+    expect(entry.hasCurrentFullControl).toBeTrue()
+    expect(entry.hasInheritedRule).toBeFalse()
+    expect(entry.hasUnexpectedRule).toBeFalse()
+  }
+})
+
+test("Windows ACL bridge supports non-ASCII user and config paths", async () => {
+  if (process.platform !== "win32") return
+  const dir = await makeTestDir("appforge-bridge-acl-unicode-")
+  const configDir = join(dir, "한글 설정")
+  const providerPath = join(configDir, "providers.json")
+  process.env.APPFORGE_LLM_CONFIG = providerPath
+  process.env.APPFORGE_LLM_SECRET_BACKEND = "file"
+  _resetForTest()
+
+  await setProvider("openai-compatible", {
+    apiKey: "sk-unicode-path",
+    baseURL: "https://trusted.example/v1",
+  })
+
+  const payload = JSON.parse(await readFile(providerPath, "utf8"))
+  expect(payload.providers["openai-compatible"].baseURL).toBe("https://trusted.example/v1")
+})
+
+test("Windows ACL gate rejects a real parent DACL writable by Everyone", async () => {
+  if (process.platform !== "win32") return
+  const unsafeParent = await makeTestDir("appforge-bridge-acl-real-unsafe-")
+  const providerPath = join(unsafeParent, "private", "providers.json")
+  try {
+    await runWindowsPowerShell(WINDOWS_GRANT_EVERYONE_MODIFY_SCRIPT, { path: unsafeParent })
+    process.env.APPFORGE_LLM_CONFIG = providerPath
+    process.env.APPFORGE_LLM_SECRET_BACKEND = "file"
+    _resetForTest()
+
+    await expect(setProvider("openai-compatible", {
+      apiKey: "sk-must-stay-local",
+      baseURL: "https://trusted.example/v1",
+    })).rejects.toThrow("Windows ACL validation failed for config parent directory")
+    await expect(readFile(providerPath, "utf8")).rejects.toThrow()
+  } finally {
+    await rm(unsafeParent, { recursive: true, force: true })
+  }
+})
+
+test("Windows ACL gate rejects a real provider file writable by Everyone before secret hydration", async () => {
+  if (process.platform !== "win32") return
+  const dir = await makeTestDir("appforge-bridge-acl-real-file-")
+  const configDir = join(dir, "private")
+  const providerPath = join(configDir, "providers.json")
+  await mkdir(configDir, { recursive: true })
+  await writeFile(providerPath, JSON.stringify({
+    providers: {
+      "openai-compatible": {
+        apiKeyRef: "dpapi:appforge-llm/openai-compatible/apiKey",
+        baseURL: "https://attacker.invalid/v1",
+      },
+    },
+    active: { provider: "openai-compatible", model: null },
+  }), "utf8")
+  await runWindowsPowerShell(WINDOWS_GRANT_EVERYONE_MODIFY_SCRIPT, { path: providerPath })
+  process.env.APPFORGE_LLM_CONFIG = providerPath
+  process.env.APPFORGE_LLM_SECRET_BACKEND = "dpapi"
+  _resetForTest()
+  let secretReads = 0
+  _setSecretStoreForTest({
+    async get() {
+      secretReads += 1
+      return "sk-must-never-be-decrypted"
+    },
+    async set() {},
+    async delete() {},
+  })
+
+  await expect(getProvider("openai-compatible")).rejects.toThrow(
+    "Windows ACL validation failed for config file",
   )
+  expect(secretReads).toBe(0)
 })

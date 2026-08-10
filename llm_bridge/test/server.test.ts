@@ -1,12 +1,13 @@
-import { mkdtemp } from "node:fs/promises"
+import { rm } from "node:fs/promises"
 import { join } from "node:path"
-import { tmpdir } from "node:os"
-import { expect, test } from "bun:test"
+import { afterAll, expect, test } from "bun:test"
 import { _resetForTest as resetRegistry } from "../src/registry"
 import { _resetForTest as resetCatalog } from "../src/catalog"
 import * as store from "../src/config"
+import { makeBridgeTestDirectory } from "./test-paths"
 
 const BRIDGE_TOKEN = "test-bridge-capability-0123456789abcdef0123456789"
+const testDirectories = new Set<string>()
 
 function authorizedRequest(url: string, init: RequestInit = {}): Request {
   const headers = new Headers(init.headers)
@@ -15,7 +16,8 @@ function authorizedRequest(url: string, init: RequestInit = {}): Request {
 }
 
 async function createIsolatedApp(prefix: string) {
-  const dir = await mkdtemp(join(tmpdir(), prefix))
+  const dir = await makeBridgeTestDirectory(prefix)
+  testDirectories.add(dir)
   process.env.APPFORGE_LLM_CONFIG = join(dir, "providers.json")
   process.env.APPFORGE_LLM_CONFIG_DIR = dir
   process.env.APPFORGE_LLM_SECRET_BACKEND = "file"
@@ -27,6 +29,13 @@ async function createIsolatedApp(prefix: string) {
   const { createApp } = await import("../src/server")
   return createApp()
 }
+
+afterAll(async () => {
+  await Promise.all(
+    Array.from(testDirectories, (directory) => rm(directory, { recursive: true, force: true })),
+  )
+  testDirectories.clear()
+})
 
 test("provider upsert response does not echo stored api key", async () => {
   const app = await createIsolatedApp("appforge-llm-bridge-")
