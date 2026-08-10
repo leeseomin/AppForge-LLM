@@ -144,6 +144,10 @@ The Windows parent-chain checks and private-directory repair run in one
 PowerShell batch, preserving fail-closed ACL validation without paying a new
 PowerShell startup cost for every directory. Safe configuration diagnostics go
 only to the managed local bridge log; HTTP clients still receive a generic 500.
+The ACL mutation mask is composed only from primitive write, delete, ownership,
+and DACL rights. Read/traverse-only ACEs on a normal Windows profile are allowed,
+while aggregate Write, Modify, and FullControl ACEs still intersect those
+primitive bits and fail validation for an unprivileged identity.
 
 Provider metadata and the active model are stored under
 `~/.appforge/llm/providers.json` by default. On macOS, API keys use Keychain

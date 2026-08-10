@@ -43,9 +43,6 @@ try {
 }
 $writeMask = [int64]0
 foreach ($right in @(
-  [Security.AccessControl.FileSystemRights]::Write,
-  [Security.AccessControl.FileSystemRights]::Modify,
-  [Security.AccessControl.FileSystemRights]::FullControl,
   [Security.AccessControl.FileSystemRights]::Delete,
   [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles,
   [Security.AccessControl.FileSystemRights]::ChangePermissions,

@@ -136,6 +136,26 @@ $rule = [Security.AccessControl.FileSystemAccessRule]::new(
 Set-Acl -LiteralPath $path -AclObject $acl
 `
 
+const WINDOWS_GRANT_EVERYONE_READ_SCRIPT = `
+$ErrorActionPreference = 'Stop'
+[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$request = ([Console]::In.ReadToEnd() | ConvertFrom-Json)
+$path = [IO.Path]::GetFullPath([string]$request.path)
+$acl = Get-Acl -LiteralPath $path
+$everyone = [Security.Principal.SecurityIdentifier]::new('S-1-1-0')
+$inheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
+$rule = [Security.AccessControl.FileSystemAccessRule]::new(
+  $everyone,
+  [Security.AccessControl.FileSystemRights]::ReadAndExecute,
+  $inheritance,
+  [Security.AccessControl.PropagationFlags]::None,
+  [Security.AccessControl.AccessControlType]::Allow
+)
+[void]$acl.AddAccessRule($rule)
+Set-Acl -LiteralPath $path -AclObject $acl
+`
+
 afterEach(async () => {
   delete process.env.APPFORGE_LLM_CONFIG
   delete process.env.APPFORGE_LLM_CONFIG_DIR
@@ -282,6 +302,31 @@ test("Windows ACL gate batches cold directory initialization into one PowerShell
     mode: "private",
     repair: true,
   })
+})
+
+test("Windows ACL write mask does not classify read-only parent ACEs as writable", async () => {
+  const dir = await makeTestDir("appforge-bridge-acl-read-mask-")
+  const configDir = join(dir, "private")
+  let aclScript = ""
+  process.env.APPFORGE_LLM_CONFIG = join(configDir, "providers.json")
+  process.env.APPFORGE_LLM_SECRET_BACKEND = "file"
+  _resetForTest()
+  _setWindowsAclCommandRunnerForTest(async (args) => {
+    aclScript = args.at(-1) || ""
+    return { stdout: "ok" }
+  })
+
+  await getActive()
+
+  const writeMaskBlock = aclScript
+    .split("$writeMask = [int64]0", 2)[1]
+    ?.split("function Test-PrivilegedSid", 1)[0] || ""
+  expect(writeMaskBlock).not.toContain("::FullControl")
+  expect(writeMaskBlock).not.toContain("::Modify")
+  expect(writeMaskBlock).not.toContain("::Write,")
+  expect(writeMaskBlock).toContain("::DeleteSubdirectoriesAndFiles")
+  expect(writeMaskBlock).toContain("::ChangePermissions")
+  expect(writeMaskBlock).toContain("::TakeOwnership")
 })
 
 test("Windows ACL gate fails closed before writing into an unsafe parent", async () => {
@@ -603,6 +648,37 @@ test("Windows ACL bridge supports non-ASCII user and config paths", async () => 
 
   const payload = JSON.parse(await readFile(providerPath, "utf8"))
   expect(payload.providers["openai-compatible"].baseURL).toBe("https://trusted.example/v1")
+})
+
+test("Windows ACL gate accepts a real read-only parent ACE and protects the config child", async () => {
+  if (process.platform !== "win32") return
+  const parent = await makeTestDir("appforge-bridge-acl-real-readonly-")
+  const configDir = join(parent, "private")
+  const providerPath = join(configDir, "providers.json")
+  await runWindowsPowerShell(WINDOWS_GRANT_EVERYONE_READ_SCRIPT, { path: parent })
+  process.env.APPFORGE_LLM_CONFIG = providerPath
+  process.env.APPFORGE_LLM_SECRET_BACKEND = "file"
+  _resetForTest()
+
+  await setProvider("openai-compatible", {
+    apiKey: "sk-readonly-parent",
+    baseURL: "https://trusted.example/v1",
+  })
+
+  const summary = JSON.parse(await runWindowsPowerShell(WINDOWS_ACL_SUMMARY_SCRIPT, {
+    paths: [configDir, providerPath],
+  })) as {
+    entries: Array<{
+      protected: boolean
+      hasInheritedRule: boolean
+      hasUnexpectedRule: boolean
+    }>
+  }
+  for (const entry of summary.entries) {
+    expect(entry.protected).toBeTrue()
+    expect(entry.hasInheritedRule).toBeFalse()
+    expect(entry.hasUnexpectedRule).toBeFalse()
+  }
 })
 
 test("Windows ACL gate rejects a real parent DACL writable by Everyone", async () => {
