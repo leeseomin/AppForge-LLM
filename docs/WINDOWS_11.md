@@ -36,7 +36,7 @@ WinGet runs the package installers silently and accepts their package/source agr
 
 If Python leaves `.venv` without a working compatible interpreter, the next launch moves it to `.appforge-web\venv-backups` and creates a clean environment. If the interpreter works but the packaging step was interrupted, the launcher repairs `pip`, `setuptools`, and `wheel` in place. Any moved environment is retained for inspection; the launcher does not delete it.
 
-The first LLM bridge initialization can take several seconds on Windows while private ACLs are verified. The launcher allows up to 45 seconds for this cold path. Provider metadata refresh is bounded and falls back to the built-in provider list when the remote catalog is unavailable. Users do not need to run `bun install` or `bun run dev` manually.
+The first LLM bridge initialization can take several seconds on Windows while private ACLs are verified. The complete ACL chain is checked in one PowerShell process, and the launcher allows up to 45 seconds for this cold path. Provider metadata refresh is bounded and falls back to the built-in provider list when the remote catalog is unavailable. Users do not need to run `bun install` or `bun run dev` manually.
 
 For contributors and CI, the optional full verification gate is:
 
@@ -159,7 +159,7 @@ Double-click `build.bat` again. A valid `.venv` is reused, and a working environ
 
 ### LLM bridge initialization times out
 
-The bridge and its locked dependencies are managed automatically by `build.bat`; do not start a second bridge with `bun run dev`. Close the current AppForge window and double-click `build.bat` again. If startup still fails after 45 seconds, inspect `.appforge-web\llm-bridge.log`. The remote model catalog is optional, so an unavailable `models.dev` connection should fall back to the built-in provider list rather than block startup.
+The bridge and its locked dependencies are managed automatically by `build.bat`; do not start a second bridge with `bun run dev`. Close the current AppForge window and double-click `build.bat` again. If startup still fails after 45 seconds, the terminal now prints the log path; `.appforge-web\llm-bridge.log` identifies the safe ACL failure category and target without exposing it through the web API. The remote model catalog is optional, so an unavailable `models.dev` connection should fall back to the built-in provider list rather than block startup.
 
 ### A build exceeds a resource limit
 

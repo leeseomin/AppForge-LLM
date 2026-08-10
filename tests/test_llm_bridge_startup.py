@@ -101,6 +101,7 @@ class LLMBridgeStartupTests(unittest.TestCase):
 
                 self.assertEqual("bridge_config_unavailable", caught.exception.payload["reason"])
                 self.assertTrue(str(caught.exception.payload["log_path"]).endswith("llm-bridge.log"))
+                self.assertIn("llm-bridge.log", str(caught.exception))
                 self.assertNotIn("bun install", caught.exception.payload["action"])
             finally:
                 manager.shutdown()

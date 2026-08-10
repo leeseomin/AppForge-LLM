@@ -140,6 +140,10 @@ provider configuration store, and the provider list. Windows profile path
 variables required by Bun and the DPAPI/ACL helpers are explicitly allowlisted;
 unrelated host variables remain excluded. Remote model metadata refresh has a
 bounded timeout and falls back to the local static registry.
+The Windows parent-chain checks and private-directory repair run in one
+PowerShell batch, preserving fail-closed ACL validation without paying a new
+PowerShell startup cost for every directory. Safe configuration diagnostics go
+only to the managed local bridge log; HTTP clients still receive a generic 500.
 
 Provider metadata and the active model are stored under
 `~/.appforge/llm/providers.json` by default. On macOS, API keys use Keychain

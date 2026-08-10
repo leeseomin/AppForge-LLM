@@ -11,6 +11,7 @@ import {
   _setSecretStoreForTest,
   _setWindowsAclCommandRunnerForTest,
   configPath,
+  getActive,
   secretBackend,
   setProvider,
   getProvider,
@@ -22,6 +23,11 @@ type WindowsAclRequest = {
   kind: "directory" | "file"
   mode: "parent" | "private"
   repair: boolean
+}
+type WindowsAclCommandRequest = WindowsAclRequest | { targets: WindowsAclRequest[] }
+
+function windowsAclTargets(request: WindowsAclCommandRequest): WindowsAclRequest[] {
+  return "targets" in request ? request.targets : [request]
 }
 
 const testDirectories = new Set<string>()
@@ -200,12 +206,12 @@ test("Windows ACL gate protects the config directory and every atomic file write
   const configDir = join(dir, "private")
   const providerPath = join(configDir, "providers.json")
   const secret = "sk-not-part-of-acl-command"
-  const calls: Array<{ args: string[]; input?: string; request: WindowsAclRequest }> = []
+  const calls: Array<{ args: string[]; input?: string; request: WindowsAclCommandRequest }> = []
   process.env.APPFORGE_LLM_CONFIG = providerPath
   process.env.APPFORGE_LLM_SECRET_BACKEND = "file"
   _resetForTest()
   _setWindowsAclCommandRunnerForTest(async (args, input) => {
-    const request = JSON.parse(input || "{}") as WindowsAclRequest
+    const request = JSON.parse(input || "{}") as WindowsAclCommandRequest
     calls.push({ args: [...args], input, request })
     return { stdout: "ok" }
   })
@@ -215,19 +221,20 @@ test("Windows ACL gate protects the config directory and every atomic file write
     baseURL: "https://trusted.example/v1",
   })
 
-  expect(calls.some(({ request }) =>
+  const requests = calls.flatMap(({ request }) => windowsAclTargets(request))
+  expect(requests.some((request) =>
     request.path === dir
     && request.kind === "directory"
     && request.mode === "parent"
     && request.repair === false,
   )).toBeTrue()
-  expect(calls.some(({ request }) =>
+  expect(requests.some((request) =>
     request.path === configDir
     && request.kind === "directory"
     && request.mode === "private"
     && request.repair === true,
   )).toBeTrue()
-  expect(calls.some(({ request }) =>
+  expect(requests.some((request) =>
     dirname(request.path) === configDir
     && request.kind === "file"
     && request.mode === "private"
@@ -235,7 +242,7 @@ test("Windows ACL gate protects the config directory and every atomic file write
     && request.path.includes(".providers.json.")
     && request.path.endsWith(".tmp"),
   )).toBeTrue()
-  expect(calls.some(({ request }) =>
+  expect(requests.some((request) =>
     request.path === providerPath
     && request.kind === "file"
     && request.mode === "private"
@@ -246,6 +253,37 @@ test("Windows ACL gate protects the config directory and every atomic file write
   )).toBeTrue()
 })
 
+test("Windows ACL gate batches cold directory initialization into one PowerShell call", async () => {
+  const dir = await makeTestDir("appforge-bridge-acl-cold-start-")
+  const configDir = join(dir, "private")
+  const providerPath = join(configDir, "providers.json")
+  const calls: unknown[] = []
+  process.env.APPFORGE_LLM_CONFIG = providerPath
+  process.env.APPFORGE_LLM_SECRET_BACKEND = "file"
+  _resetForTest()
+  _setWindowsAclCommandRunnerForTest(async (_args, input) => {
+    calls.push(JSON.parse(input || "{}"))
+    return { stdout: "ok" }
+  })
+
+  expect(await getActive()).toEqual({ provider: null, model: null })
+
+  expect(calls).toHaveLength(1)
+  const request = calls[0] as { targets: WindowsAclRequest[] }
+  expect(request.targets).toContainEqual({
+    path: dir,
+    kind: "directory",
+    mode: "parent",
+    repair: false,
+  })
+  expect(request.targets.at(-1)).toEqual({
+    path: configDir,
+    kind: "directory",
+    mode: "private",
+    repair: true,
+  })
+})
+
 test("Windows ACL gate fails closed before writing into an unsafe parent", async () => {
   const dir = await makeTestDir("appforge-bridge-acl-parent-")
   const providerPath = join(dir, "private", "providers.json")
@@ -253,9 +291,9 @@ test("Windows ACL gate fails closed before writing into an unsafe parent", async
   process.env.APPFORGE_LLM_SECRET_BACKEND = "file"
   _resetForTest()
   _setWindowsAclCommandRunnerForTest(async (_args, input) => {
-    const request = JSON.parse(input || "{}") as WindowsAclRequest
-    if (request.mode === "parent") throw new Error("unsafe parent")
-    return { stdout: "ok" }
+    const request = JSON.parse(input || "{}") as WindowsAclCommandRequest
+    const failedIndex = windowsAclTargets(request).findIndex((target) => target.mode === "parent")
+    return { stdout: failedIndex >= 0 ? `error:${failedIndex}` : "ok" }
   })
 
   await expect(setProvider("openai-compatible", {

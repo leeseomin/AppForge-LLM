@@ -87,6 +87,32 @@ test("all-provider model catalog endpoint is not exposed", async () => {
   expect(response.status).toBe(404)
 })
 
+test("config initialization failures stay generic over HTTP and are diagnosed locally", async () => {
+  const app = await createIsolatedApp("appforge-llm-bridge-config-diagnostic-")
+  const diagnostic: string[] = []
+  const originalConsoleError = console.error
+  store._resetForTest()
+  store._setWindowsAclCommandRunnerForTest(async () => {
+    throw new Error("sensitive-runner-detail-must-not-leak")
+  })
+  console.error = (...args: unknown[]) => diagnostic.push(args.map(String).join(" "))
+
+  try {
+    const response = await app.fetch(authorizedRequest("http://127.0.0.1/active"))
+    const body = await response.text()
+
+    expect(response.status).toBe(500)
+    expect(body).toContain("The bridge could not complete the request.")
+    expect(body).not.toContain("sensitive-runner-detail-must-not-leak")
+    expect(diagnostic.join("\n")).toContain("WindowsAclCommandError")
+    expect(diagnostic.join("\n")).toContain("Windows ACL validation failed")
+    expect(diagnostic.join("\n")).not.toContain("sensitive-runner-detail-must-not-leak")
+  } finally {
+    console.error = originalConsoleError
+    store._resetForTest()
+  }
+})
+
 test("OAuth routes are not exposed", async () => {
   const app = await createIsolatedApp("appforge-llm-bridge-api-key-only-")
   const requests = [

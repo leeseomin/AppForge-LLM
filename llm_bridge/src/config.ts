@@ -31,18 +31,6 @@ $ErrorActionPreference = 'Stop'
 [Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $request = ([Console]::In.ReadToEnd() | ConvertFrom-Json)
-$path = [IO.Path]::GetFullPath([string]$request.path)
-$kind = [string]$request.kind
-$mode = [string]$request.mode
-$repair = [bool]$request.repair
-$item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
-$isDirectory = [bool]$item.PSIsContainer
-if (($kind -eq 'directory') -ne $isDirectory) {
-  throw 'Windows config ACL target type mismatch'
-}
-if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-  throw 'Refusing a reparse-point config path'
-}
 $current = [Security.Principal.WindowsIdentity]::GetCurrent().User
 $system = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
 $administrators = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
@@ -128,50 +116,76 @@ function Test-ParentAcl($acl) {
   }
   return (Test-NoUnprivilegedWrite $acl $true $true)
 }
-$acl = Get-Acl -LiteralPath $path
-if ($mode -eq 'private' -and $repair -and -not (Test-PrivateAcl $acl)) {
-  if (-not (Test-RepairablePrivateAcl $acl)) {
-    throw 'Refusing to repair a Windows config ACL that was writable by another identity'
-  }
-  $acl.SetAccessRuleProtection($true, $false)
-  foreach ($rule in @($acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]))) {
-    [void]$acl.RemoveAccessRuleSpecific($rule)
-  }
-  $acl.SetOwner($current)
-  $inheritance = [Security.AccessControl.InheritanceFlags]::None
-  if ($isDirectory) {
-    $inheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
-  }
-  foreach ($sid in @($current, $system, $administrators)) {
-    $rule = [Security.AccessControl.FileSystemAccessRule]::new(
-      $sid,
-      [Security.AccessControl.FileSystemRights]::FullControl,
-      $inheritance,
-      [Security.AccessControl.PropagationFlags]::None,
-      [Security.AccessControl.AccessControlType]::Allow
-    )
-    [void]$acl.AddAccessRule($rule)
-  }
-  Set-Acl -LiteralPath $path -AclObject $acl
+function Invoke-AclTarget($target) {
+  $path = [IO.Path]::GetFullPath([string]$target.path)
+  $kind = [string]$target.kind
+  $mode = [string]$target.mode
+  $repair = [bool]$target.repair
   $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
-  if (($kind -eq 'directory') -ne [bool]$item.PSIsContainer) {
-    throw 'Windows config ACL target type changed during repair'
+  $isDirectory = [bool]$item.PSIsContainer
+  if (($kind -eq 'directory') -ne $isDirectory) {
+    throw 'Windows config ACL target type mismatch'
   }
   if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-    throw 'Config path became a reparse point during ACL repair'
+    throw 'Refusing a reparse-point config path'
   }
   $acl = Get-Acl -LiteralPath $path
+  if ($mode -eq 'private' -and $repair -and -not (Test-PrivateAcl $acl)) {
+    if (-not (Test-RepairablePrivateAcl $acl)) {
+      throw 'Refusing to repair a Windows config ACL that was writable by another identity'
+    }
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($rule in @($acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]))) {
+      [void]$acl.RemoveAccessRuleSpecific($rule)
+    }
+    $acl.SetOwner($current)
+    $inheritance = [Security.AccessControl.InheritanceFlags]::None
+    if ($isDirectory) {
+      $inheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
+    }
+    foreach ($sid in @($current, $system, $administrators)) {
+      $rule = [Security.AccessControl.FileSystemAccessRule]::new(
+        $sid,
+        [Security.AccessControl.FileSystemRights]::FullControl,
+        $inheritance,
+        [Security.AccessControl.PropagationFlags]::None,
+        [Security.AccessControl.AccessControlType]::Allow
+      )
+      [void]$acl.AddAccessRule($rule)
+    }
+    Set-Acl -LiteralPath $path -AclObject $acl
+    $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+    if (($kind -eq 'directory') -ne [bool]$item.PSIsContainer) {
+      throw 'Windows config ACL target type changed during repair'
+    }
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+      throw 'Config path became a reparse point during ACL repair'
+    }
+    $acl = Get-Acl -LiteralPath $path
+  }
+  if ($mode -eq 'private') {
+    if (-not (Test-PrivateAcl $acl)) {
+      throw 'Windows config path is not private to the current user'
+    }
+  } elseif ($mode -eq 'parent') {
+    if (-not (Test-ParentAcl $acl)) {
+      throw 'Windows config parent is writable by another identity'
+    }
+  } else {
+    throw 'Unsupported Windows ACL verification mode'
+  }
 }
-if ($mode -eq 'private') {
-  if (-not (Test-PrivateAcl $acl)) {
-    throw 'Windows config path is not private to the current user'
+$targets = @($request)
+if ($null -ne $request.targets) {
+  $targets = @($request.targets)
+}
+for ($index = 0; $index -lt $targets.Count; $index += 1) {
+  try {
+    Invoke-AclTarget ($targets[$index])
+  } catch {
+    [Console]::Out.Write("error:$index")
+    exit 0
   }
-} elseif ($mode -eq 'parent') {
-  if (-not (Test-ParentAcl $acl)) {
-    throw 'Windows config parent is writable by another identity'
-  }
-} else {
-  throw 'Unsupported Windows ACL verification mode'
 }
 [Console]::Out.Write('ok')
 `
@@ -181,6 +195,12 @@ type WindowsAclKind = "directory" | "file"
 type WindowsAclMode = "parent" | "private"
 interface SecurityCommandResult { stdout: string }
 type SecurityCommandRunner = (args: string[], input?: string) => Promise<SecurityCommandResult>
+interface WindowsAclRequest {
+  path: string
+  kind: WindowsAclKind
+  mode: WindowsAclMode
+  repair: boolean
+}
 interface DpapiBlobFile { version: 1; secrets: Record<string, string> }
 
 export interface SecretStore {
@@ -322,12 +342,56 @@ async function assertWindowsAcl(
     "-Command",
     WINDOWS_ACL_POWERSHELL_SCRIPT,
   ]
+  const request: WindowsAclRequest = { path, kind, mode, repair }
   try {
-    const { stdout } = await windowsAclCommand(args, JSON.stringify({ path, kind, mode, repair }))
-    if (stdout.trim() !== "ok") throw new WindowsAclCommandError(null)
-  } catch {
+    const { stdout } = await windowsAclCommand(args, JSON.stringify(request))
+    if (stdout.trim() === "ok") return
+    throw windowsAclFailure(request)
+  } catch (error) {
+    if (error instanceof WindowsAclCommandError && error.message.startsWith("Windows ACL validation failed")) {
+      throw error
+    }
     const label = mode === "parent" ? "config parent directory" : `config ${kind}`
     throw new WindowsAclCommandError(null, `Windows ACL validation failed for ${label}: ${path}`)
+  }
+}
+
+function windowsAclFailure(request: WindowsAclRequest): WindowsAclCommandError {
+  const label = request.mode === "parent" ? "config parent directory" : `config ${request.kind}`
+  return new WindowsAclCommandError(
+    null,
+    `Windows ACL validation failed for ${label}: ${request.path}`,
+  )
+}
+
+async function assertWindowsAclBatch(requests: WindowsAclRequest[]): Promise<void> {
+  if (requests.length === 0) return
+  const args = [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-Command",
+    WINDOWS_ACL_POWERSHELL_SCRIPT,
+  ]
+  try {
+    const { stdout } = await windowsAclCommand(args, JSON.stringify({ targets: requests }))
+    const result = stdout.trim()
+    if (result === "ok") return
+    const failedIndex = /^error:(\d+)$/.exec(result)?.[1]
+    const failed = failedIndex === undefined ? undefined : requests[Number(failedIndex)]
+    if (failed) throw windowsAclFailure(failed)
+    throw new WindowsAclCommandError(null)
+  } catch (error) {
+    if (error instanceof WindowsAclCommandError && error.message.startsWith("Windows ACL validation failed")) {
+      throw error
+    }
+    const privateDirectory = requests.find((request) => request.mode === "private")
+    throw new WindowsAclCommandError(
+      null,
+      `Windows ACL validation failed for config directory chain: ${privateDirectory?.path ?? requests[0]!.path}`,
+    )
   }
 }
 
@@ -350,10 +414,15 @@ async function ensureDir(): Promise<void> {
     // Reuse that trust only for the same resolved directory; lstat above still
     // rejects a path that was replaced with a reparse point or non-directory.
     if (!windowsAclVerifiedDirectory || !sameResolvedPath(windowsAclVerifiedDirectory, path)) {
-      for (const ancestor of aclParents) {
-        await assertWindowsAcl(ancestor, "directory", "parent", false)
-      }
-      await assertWindowsAcl(path, "directory", "private", true)
+      await assertWindowsAclBatch([
+        ...aclParents.map((ancestor): WindowsAclRequest => ({
+          path: ancestor,
+          kind: "directory",
+          mode: "parent",
+          repair: false,
+        })),
+        { path, kind: "directory", mode: "private", repair: true },
+      ])
       windowsAclVerifiedDirectory = path
     }
   }

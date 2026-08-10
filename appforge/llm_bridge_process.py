@@ -339,13 +339,14 @@ class LLMBridgeProcessManager:
         reason: str,
         error: llm_bridge.BridgeError | None,
     ) -> llm_bridge.BridgeError:
+        log_path = self.runtime_dir / "llm-bridge.log"
         payload: dict[str, Any] = {
             "action": "llm_bridge 로그를 확인한 뒤 LLM 연결 설정을 다시 여세요.",
             "reason": reason,
-            "log_path": str(self.runtime_dir / "llm-bridge.log"),
+            "log_path": str(log_path),
         }
         if error:
             payload["initial_error"] = str(error)
             if error.payload:
                 payload["initial_payload"] = error.payload
-        return llm_bridge.BridgeError(message, payload=payload)
+        return llm_bridge.BridgeError(f"{message} 로그: {log_path}", payload=payload)

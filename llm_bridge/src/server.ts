@@ -853,6 +853,18 @@ function publicInternalError(): Response {
   return cors(errorResponse("The bridge could not complete the request.", 500, "INTERNAL"))
 }
 
+function safeInternalDiagnostic(error: unknown): string {
+  if (!(error instanceof Error)) return "UnknownError"
+  if (
+    error.name === "WindowsAclCommandError"
+    || error.name === "DpapiCommandError"
+    || error.name === "KeychainCommandError"
+  ) {
+    return `${error.name}: ${redactSensitiveError(error.message)}`
+  }
+  return error.name || "Error"
+}
+
 async function dispatch(request: Request, authToken: string): Promise<Response> {
   const url = new URL(request.url)
   const host = request.headers.get("host") || url.host
@@ -880,6 +892,9 @@ async function dispatch(request: Request, authToken: string): Promise<Response> 
       return response
     } catch (error) {
       if (error instanceof BridgeHttpError) return cors(errorResponse(error.message, error.status, error.code))
+      console.error(
+        `[llm-bridge] ${request.method} ${url.pathname} failed: ${safeInternalDiagnostic(error)}`,
+      )
       return publicInternalError()
     }
   }
