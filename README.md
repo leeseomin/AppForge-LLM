@@ -31,7 +31,7 @@ Generated project commands run in a per-workspace **AppContainer** with a kill-o
 
 See [Windows 11 support and troubleshooting](docs/WINDOWS_11.md) for the isolation model, resource limits, CI gates, and recovery steps.
 
-## macOS / Linux
+## macOS 
 
 Run this command from the project directory:
 
