@@ -36,6 +36,9 @@ class WindowsLauncherContractTests(unittest.TestCase):
             "Invoke-WebRequest",
             "Select-ManagedBridgePort",
             "BridgeUrlExplicit",
+            "Test-WindowsSandboxRuntime",
+            "appforge.tooling.windows_sandbox",
+            "--doctor",
         ):
             self.assertIn(contract, launcher)
 

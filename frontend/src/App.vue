@@ -114,6 +114,13 @@ async function refreshHealth(options: { restoreBusyJob?: boolean } = {}) {
   }
 }
 
+function reloadApp() {
+  if ((isActiveJob.value || prompt.value.trim()) && !window.confirm(t('topbar.reloadConfirm'))) {
+    return;
+  }
+  window.location.reload();
+}
+
 async function submitJob() {
   if (submitting.value || isActiveJob.value) return;
   const normalized = prompt.value.trim();
@@ -492,6 +499,7 @@ onBeforeUnmount(() => {
         :cancelling="cancelling"
         :ending-session="endingSession"
         @refresh="refreshHealth"
+        @reload-app="reloadApp"
         @open-history="openHistory"
         @open-settings="openProviderSettings"
         @cancel="cancelActiveJob"

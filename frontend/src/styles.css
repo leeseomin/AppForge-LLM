@@ -162,6 +162,12 @@ pre:focus-visible {
   gap: 10px;
 }
 
+.refresh-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .ghost-button,
 .secondary-button {
   border: 1px solid var(--line);
@@ -1479,6 +1485,10 @@ pre {
   }
 
   .topbar-actions {
+    align-items: stretch;
+  }
+
+  .refresh-actions {
     align-items: stretch;
   }
 

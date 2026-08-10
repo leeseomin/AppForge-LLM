@@ -24,7 +24,7 @@ Prepare and launch the local AppForge-LLM v7 AI app builder web UI.
 
 Options:
   --smoke     Start the web app, probe /api/health and /, then stop it.
-  --check     Prepare Python/frontend dependencies without starting the server.
+  --check     Prepare dependencies and verify the Windows execution sandbox.
   --no-open   Launch without opening the default browser.
   -h, --help  Show this help.
 
@@ -188,6 +188,24 @@ function Initialize-PythonEnvironment {
 
     if (-not (Test-Path -LiteralPath $script:AppForgeBin -PathType Leaf)) {
         Stop-WithError ".venv\Scripts\appforge.exe is missing. Re-run without APPFORGE_SKIP_INSTALL."
+    }
+}
+
+function Test-WindowsSandboxRuntime {
+    if ($script:Mode -ne "check") {
+        return
+    }
+    $probeRoot = Join-Path $script:RuntimePath "windows-sandbox-check"
+    $probeHome = Join-Path $probeRoot "home"
+    New-Item -ItemType Directory -Force -Path $probeRoot, $probeHome | Out-Null
+    Write-Log "Verifying the Windows AppContainer and Job Object execution layer."
+    & $script:PythonBin -m appforge.tooling.windows_sandbox `
+        --doctor `
+        --workspace $probeRoot `
+        --sandbox-home $probeHome `
+        --network=none
+    if ($LASTEXITCODE -ne 0) {
+        Stop-WithError "Windows sandbox verification failed. See docs\\WINDOWS_11.md for troubleshooting."
     }
 }
 
@@ -525,6 +543,7 @@ function Invoke-Main {
     Push-Location $script:RootDir
     try {
         Initialize-PythonEnvironment
+        Test-WindowsSandboxRuntime
         Initialize-Frontend
         Select-ManagedBridgePort
         Select-WebPort

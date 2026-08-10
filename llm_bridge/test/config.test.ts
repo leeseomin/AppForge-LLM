@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { afterEach, expect, test } from "bun:test"
 import {
   _resetForTest,
+  _setDpapiCommandRunnerForTest,
   _setSecurityCommandRunnerForTest,
   _setSecretStoreForTest,
   configPath,
@@ -21,10 +22,11 @@ afterEach(() => {
   _resetForTest()
 })
 
-test("macOS Keychain is the secure default and other platforms retain the file backend", () => {
+test("macOS Keychain and Windows DPAPI are the secure platform defaults", () => {
   delete process.env.APPFORGE_LLM_SECRET_BACKEND
 
-  expect(secretBackend()).toBe(process.platform === "darwin" ? "keychain" : "file")
+  const expected = process.platform === "darwin" ? "keychain" : process.platform === "win32" ? "dpapi" : "file"
+  expect(secretBackend()).toBe(expected)
 })
 
 test("secret config paths are absolute and independent of web job data", () => {
@@ -57,7 +59,13 @@ test("file backend refuses to follow a symlinked config file", async () => {
   const target = join(dir, "target.json")
   const link = join(dir, "providers.json")
   await writeFile(target, "do-not-overwrite", "utf8")
-  await symlink(target, link)
+  try {
+    await symlink(target, link, "file")
+  } catch (error) {
+    const code = (error as { code?: unknown }).code
+    if (process.platform === "win32" && (code === "EPERM" || code === "EACCES")) return
+    throw error
+  }
   process.env.APPFORGE_LLM_CONFIG = link
   process.env.APPFORGE_LLM_SECRET_BACKEND = "file"
   _resetForTest()
@@ -99,6 +107,86 @@ test("keychain backend stores provider secrets as JSON references", async () => 
   expect(payload.providers.openai.apiKeyRef).toBe("keychain:appforge-llm/openai/apiKey")
   expect(secrets.get("openai:apiKey")).toBe("sk-test-secret")
   expect((await getProvider("openai"))?.apiKey).toBe("sk-test-secret")
+})
+
+test("dpapi backend stores only a reference in provider JSON", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "appforge-bridge-dpapi-config-"))
+  process.env.APPFORGE_LLM_CONFIG = join(dir, "providers.json")
+  process.env.APPFORGE_LLM_SECRET_BACKEND = "dpapi"
+  const secrets = new Map<string, string>()
+  const store: SecretStore = {
+    async get(providerId, key) {
+      return secrets.get(`${providerId}:${key}`)
+    },
+    async set(providerId, key, value) {
+      secrets.set(`${providerId}:${key}`, value)
+    },
+    async delete(providerId, key) {
+      secrets.delete(`${providerId}:${key}`)
+    },
+  }
+  _resetForTest()
+  _setSecretStoreForTest(store)
+
+  await setProvider("deepseek", { apiKey: "sk-dpapi-secret", defaultModel: "deepseek-chat" })
+
+  const raw = await readFile(configPath(), "utf8")
+  const payload = JSON.parse(raw)
+  expect(raw).not.toContain("sk-dpapi-secret")
+  expect(payload.providers.deepseek.apiKey).toBeUndefined()
+  expect(payload.providers.deepseek.apiKeyRef).toBe("dpapi:appforge-llm/deepseek/apiKey")
+  expect((await getProvider("deepseek"))?.apiKey).toBe("sk-dpapi-secret")
+})
+
+test("dpapi command receives secret material only through stdin", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "appforge-bridge-dpapi-stdin-"))
+  process.env.APPFORGE_LLM_CONFIG = join(dir, "providers.json")
+  process.env.APPFORGE_LLM_SECRET_BACKEND = "dpapi"
+  const secret = "sk-never-in-process-arguments"
+  const secretBase64 = Buffer.from(secret, "utf8").toString("base64")
+  const encrypted = Buffer.from("opaque-ciphertext", "utf8").toString("base64")
+  const calls: Array<{ args: string[]; input?: string }> = []
+  _resetForTest()
+  _setDpapiCommandRunnerForTest(async (args, input) => {
+    calls.push({ args: [...args], input })
+    const request = JSON.parse(input || "{}")
+    return { stdout: request.operation === "protect" ? encrypted : secretBase64 }
+  })
+
+  await setProvider("openrouter", { apiKey: secret })
+
+  expect(calls.length).toBeGreaterThanOrEqual(2)
+  for (const call of calls) {
+    expect(call.args.join(" ")).not.toContain(secret)
+    expect(call.args.join(" ")).not.toContain(secretBase64)
+  }
+  expect(calls.some((call) => call.input?.includes(secretBase64))).toBe(true)
+})
+
+test("plaintext Windows config is migrated into the secure backend on load", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "appforge-bridge-dpapi-migrate-"))
+  process.env.APPFORGE_LLM_CONFIG = join(dir, "providers.json")
+  process.env.APPFORGE_LLM_SECRET_BACKEND = "dpapi"
+  await writeFile(
+    configPath(),
+    JSON.stringify({
+      providers: { openai: { apiKey: "legacy-plaintext", defaultModel: "gpt-4.1-mini" } },
+      active: { provider: "openai", model: "gpt-4.1-mini" },
+    }),
+    "utf8",
+  )
+  const secrets = new Map<string, string>()
+  _resetForTest()
+  _setSecretStoreForTest({
+    async get(providerId, key) { return secrets.get(`${providerId}:${key}`) },
+    async set(providerId, key, value) { secrets.set(`${providerId}:${key}`, value) },
+    async delete(providerId, key) { secrets.delete(`${providerId}:${key}`) },
+  })
+
+  expect((await getProvider("openai"))?.apiKey).toBe("legacy-plaintext")
+  const raw = await readFile(configPath(), "utf8")
+  expect(raw).not.toContain("legacy-plaintext")
+  expect(JSON.parse(raw).providers.openai.apiKeyRef).toBe("dpapi:appforge-llm/openai/apiKey")
 })
 
 test("keychain command writes through interactive stdin without exposing the secret in argv", async () => {
@@ -195,4 +283,20 @@ test("legacy OAuth fields are discarded while API-key settings are preserved", a
   const raw = await readFile(configPath(), "utf8")
   expect(raw.toLowerCase()).not.toContain("oauth")
   expect(JSON.parse(raw).providers.openai.apiKey).toBe("sk-existing")
+})
+
+test("Windows DPAPI backend performs a real CurrentUser round trip", async () => {
+  if (process.platform !== "win32") return
+  const dir = await mkdtemp(join(tmpdir(), "appforge-bridge-dpapi-real-"))
+  process.env.APPFORGE_LLM_CONFIG = join(dir, "providers.json")
+  process.env.APPFORGE_LLM_SECRET_BACKEND = "dpapi"
+  _resetForTest()
+
+  await setProvider("openai", { apiKey: "sk-windows-dpapi-roundtrip" })
+
+  expect((await getProvider("openai"))?.apiKey).toBe("sk-windows-dpapi-roundtrip")
+  expect(await readFile(configPath(), "utf8")).not.toContain("sk-windows-dpapi-roundtrip")
+  expect(await readFile(join(dir, "secrets.dpapi.json"), "utf8")).not.toContain(
+    "sk-windows-dpapi-roundtrip",
+  )
 })

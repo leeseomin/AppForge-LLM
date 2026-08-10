@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -359,24 +360,46 @@ def test_run_command_blocks_host_loopback_even_when_remote_network_is_allowed(tm
 
 
 def test_run_command_cannot_inspect_another_process_environment(tmp_path) -> None:
+    child_environment = os.environ.copy()
+    child_environment["APPFORGE_PROCESS_BOUNDARY_SECRET"] = "hidden-value"
     child = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(10)"],
-        env={"PATH": "/usr/bin:/bin", "APPFORGE_PROCESS_BOUNDARY_SECRET": "hidden-value"},
+        env=child_environment,
     )
     script = tmp_path / "probe_process.py"
-    script.write_text(
-        (
-            "import subprocess\n"
-            "try:\n"
-            f"    result = subprocess.run(['/bin/ps', 'eww', '{child.pid}'], capture_output=True, text=True)\n"
-            "    output = result.stdout + result.stderr\n"
-            "except OSError:\n"
-            "    output = ''\n"
-            "print('process-secret-visible' if 'APPFORGE_PROCESS_BOUNDARY_SECRET=' in output "
-            "else 'process-secret-denied')\n"
-        ),
-        encoding="utf-8",
-    )
+    if os.name == "nt":
+        script.write_text(
+            (
+                "import ctypes\n"
+                "kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)\n"
+                "kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]\n"
+                "kernel32.OpenProcess.restype = ctypes.c_void_p\n"
+                "kernel32.CloseHandle.argtypes = [ctypes.c_void_p]\n"
+                f"handle = kernel32.OpenProcess(0x0400 | 0x0010, 0, {child.pid})\n"
+                "if handle:\n"
+                "    kernel32.CloseHandle(handle)\n"
+                "    print('process-accessible')\n"
+                "else:\n"
+                "    print('process-access-denied')\n"
+            ),
+            encoding="utf-8",
+        )
+        expected = "process-access-denied"
+    else:
+        script.write_text(
+            (
+                "import subprocess\n"
+                "try:\n"
+                f"    result = subprocess.run(['/bin/ps', 'eww', '{child.pid}'], capture_output=True, text=True)\n"
+                "    output = result.stdout + result.stderr\n"
+                "except OSError:\n"
+                "    output = ''\n"
+                "print('process-secret-visible' if 'APPFORGE_PROCESS_BOUNDARY_SECRET=' in output "
+                "else 'process-secret-denied')\n"
+            ),
+            encoding="utf-8",
+        )
+        expected = "process-secret-denied"
     try:
         result = run_command(tmp_path, [sys.executable, "probe_process.py"], policy=CommandPolicy())
     finally:
@@ -384,7 +407,7 @@ def test_run_command_cannot_inspect_another_process_environment(tmp_path) -> Non
         child.wait(timeout=5)
 
     assert result.success, result.error
-    assert result.data["stdout"].strip() == "process-secret-denied"
+    assert result.data["stdout"].strip() == expected
 
 
 def test_explicit_env_overrides_non_interactive_defaults(tmp_path) -> None:

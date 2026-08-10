@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Windows 11 support
+
+- Added a per-workspace Windows AppContainer launcher with explicit `SECURITY_CAPABILITIES`, default-denied networking, approved toolchain ACLs, and a Job Object that limits CPU, memory, and process count while killing descendants on close.
+- Canonicalized `.exe`, `.cmd`, `.bat`, and `.com` launchers before shell, destructive, dependency, and network policy checks; added Windows deletion/disk aliases and case-insensitive protected environment handling.
+- Added a Windows-safe PATH and disposable user-profile environment without copying arbitrary host PATH entries or secret-like variables.
+- Added Windows DPAPI `CurrentUser` API-key storage, reference-only provider JSON, plaintext migration, read-back verification, and standard-input-only secret transfer.
+- Added native `gradlew.bat` selection, a `build.ps1 --check` sandbox doctor, hosted Windows CI, a real-Windows-11 manual smoke gate, and Windows-specific regression tests and documentation.
+
 ## 0.7.0 — 2026-07-11
 
 - Disabled Bun's per-request idle timeout for generation, provider-test, streaming, and agent-event routes; added configurable SSE heartbeats and disconnect-driven provider cancellation.

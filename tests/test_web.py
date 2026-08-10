@@ -332,14 +332,18 @@ def test_minimal_web_ui_and_health(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_web_ui_run_mode_picker_is_collapsed_by_default() -> None:
-    source = (Path(__file__).resolve().parents[1] / "frontend" / "src" / "components" / "ComposerCard.vue").read_text(
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "frontend" / "src" / "components" / "ComposerCard.vue").read_text(
         encoding="utf-8"
     )
+    catalog = (root / "frontend" / "src" / "i18n.ts").read_text(encoding="utf-8")
 
     assert '<details class="mode-switch">' in source
     summary = source.split("<summary>", 1)[1].split("</summary>", 1)[0]
-    assert "실행 모드" in summary
-    assert "완전 자율 실행" in summary
+    assert "t('composer.mode')" in summary
+    assert "t('composer.autonomous')" in summary
+    assert "'composer.mode': '실행 모드'" in catalog
+    assert "'composer.autonomous': '완전 자율 실행'" in catalog
 
 
 def test_job_creation_snapshots_model_and_generation_settings(tmp_path: Path, monkeypatch) -> None:
@@ -543,19 +547,18 @@ def test_job_history_api_supports_pagination_star_archive_and_rerun(
 
 
 def test_web_ui_error_panel_hides_internal_error_identifiers() -> None:
-    source = (
-        Path(__file__).resolve().parents[1]
-        / "frontend"
-        / "src"
-        / "components"
-        / "ErrorPanel.vue"
-    ).read_text(encoding="utf-8")
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "frontend" / "src" / "components" / "ErrorPanel.vue").read_text(
+        encoding="utf-8"
+    )
+    catalog = (root / "frontend" / "src" / "i18n.ts").read_text(encoding="utf-8")
     template = source.split("<template>", 1)[1]
 
     assert "props.error.stage_label" in template
     assert "{{ props.error.code" not in template
     assert "{{ props.error.stage }}" not in template
-    assert "이 단계부터 재시도" in template
+    assert "t('error.retryStage')" in template
+    assert "'error.retryStage': '이 단계부터 재시도'" in catalog
     assert "이 스테이지부터 재시도" not in template
 
 

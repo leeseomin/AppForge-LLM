@@ -9,7 +9,7 @@ from appforge.models import ToolResult
 
 from ..base import Tool
 from ..command import CommandPolicy, run_command
-from ..detection import detect_stack, quality_commands
+from ..detection import detect_stack, gradle_wrapper, quality_commands
 
 
 class RunCommandTool(Tool):
@@ -112,7 +112,7 @@ class InstallDependenciesTool(Tool):
         elif "maven" in managers:
             commands = [["mvn", "dependency:go-offline"]]
         elif "gradle" in managers:
-            commands = [["./gradlew", "dependencies"] if (workspace / "gradlew").exists() else ["gradle", "dependencies"]]
+            commands = [[gradle_wrapper(workspace), "dependencies"]]
         elif "flutter" in managers:
             commands = [["flutter", "pub", "get"]]
         elif "python" in detected.get("languages", []):

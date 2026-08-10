@@ -14,6 +14,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   refresh: [];
+  reloadApp: [];
   openHistory: [];
   openSettings: [];
   cancel: [];
@@ -48,9 +49,14 @@ const emit = defineEmits<{
       >
         <span>{{ props.cancelling ? t('topbar.cancelling') : t('topbar.cancelJob') }}</span><span aria-hidden="true">×</span>
       </button>
-      <button class="ghost-button" type="button" @click="emit('refresh')">
-        <span>{{ t('topbar.refresh') }}</span><span aria-hidden="true">↻</span>
-      </button>
+      <div class="refresh-actions">
+        <button class="ghost-button" type="button" @click="emit('refresh')">
+          <span>{{ t('topbar.refresh') }}</span><span aria-hidden="true">↻</span>
+        </button>
+        <button class="ghost-button" type="button" @click="emit('reloadApp')">
+          <span>{{ t('topbar.reloadApp') }}</span><span aria-hidden="true">↻</span>
+        </button>
+      </div>
       <button
         class="ghost-button danger"
         type="button"

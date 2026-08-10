@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import ntpath
 import platform
 import shutil
 import sys
@@ -10,6 +11,9 @@ from pathlib import Path
 
 class ExecutionSandboxUnavailable(RuntimeError):
     """Raised when untrusted project code cannot be confined safely."""
+
+
+WINDOWS_SANDBOX_ERROR_PREFIX = "APPFORGE_WINDOWS_SANDBOX_UNAVAILABLE:"
 
 
 @dataclass(frozen=True)
@@ -201,6 +205,52 @@ def _linux_invocation(
     return SandboxInvocation(argv=command, backend="linux-bubblewrap")
 
 
+def _windows_invocation(
+    workspace: Path,
+    sandbox_home: Path,
+    argv: list[str],
+    *,
+    allow_network: bool,
+) -> SandboxInvocation:
+    """Route untrusted code through the trusted Windows AppContainer helper."""
+
+    network_mode = "internet-client" if allow_network else "none"
+    memory_mb = _bounded_windows_setting("APPFORGE_WINDOWS_SANDBOX_MEMORY_MB", 4096, 256, 32768)
+    max_processes = _bounded_windows_setting("APPFORGE_WINDOWS_SANDBOX_MAX_PROCESSES", 64, 1, 512)
+    cpu_rate = _bounded_windows_setting("APPFORGE_WINDOWS_SANDBOX_CPU_RATE", 8000, 100, 10000)
+    return SandboxInvocation(
+        argv=[
+            sys.executable,
+            "-m",
+            "appforge.tooling.windows_sandbox",
+            "--workspace",
+            str(workspace.resolve()),
+            "--sandbox-home",
+            str(sandbox_home.resolve()),
+            f"--network={network_mode}",
+            f"--memory-mb={memory_mb}",
+            f"--max-processes={max_processes}",
+            f"--cpu-rate={cpu_rate}",
+            "--",
+            *argv,
+        ],
+        backend="windows-appcontainer-job",
+    )
+
+
+def _bounded_windows_setting(name: str, default: int, minimum: int, maximum: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ExecutionSandboxUnavailable(f"{name} must be an integer") from exc
+    if not minimum <= value <= maximum:
+        raise ExecutionSandboxUnavailable(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
 def sandbox_invocation(
     workspace: Path,
     sandbox_home: Path,
@@ -223,11 +273,89 @@ def sandbox_invocation(
             argv,
             allow_network=allow_network,
         )
+    if system == "Windows":
+        return _windows_invocation(
+            workspace,
+            sandbox_home,
+            argv,
+            allow_network=allow_network,
+        )
     raise ExecutionSandboxUnavailable(f"no secure project execution sandbox for {system}")
+
+
+_WINDOWS_TOOLCHAIN_EXECUTABLES = (
+    "python.exe",
+    "python3.exe",
+    "py.exe",
+    "node.exe",
+    "npm.cmd",
+    "npx.cmd",
+    "bun.exe",
+    "git.exe",
+    "pnpm.cmd",
+    "yarn.cmd",
+    "cargo.exe",
+    "go.exe",
+    "gradle.bat",
+    "mvn.cmd",
+    "flutter.bat",
+    "dart.exe",
+    "dotnet.exe",
+    "java.exe",
+    "javac.exe",
+)
+
+
+def approved_windows_path_entries(
+    workspace: Path,
+    *,
+    environ: dict[str, str] | None = None,
+    finder=None,
+) -> list[str]:
+    """Build a minimal Windows PATH from explicit project and toolchain roots.
+
+    The host PATH is used only as input to ``shutil.which`` for a fixed executable
+    allow-list.  Arbitrary user PATH entries are never copied into the sandbox.
+    """
+
+    environment = os.environ if environ is None else environ
+    find_executable = shutil.which if finder is None else finder
+    host_path = environment.get("PATH", "")
+    system_root = environment.get("SystemRoot") or environment.get("WINDIR") or r"C:\Windows"
+    candidates = [
+        str(workspace),
+        str(workspace / ".venv" / "Scripts"),
+        str(workspace / "node_modules" / ".bin"),
+        ntpath.join(system_root, "System32"),
+        system_root,
+        ntpath.join(system_root, "System32", "WindowsPowerShell", "v1.0"),
+    ]
+    if os.name == "nt":
+        candidates.extend([str(Path(sys.executable).parent), str(Path(sys.prefix) / "Scripts")])
+    for executable in _WINDOWS_TOOLCHAIN_EXECUTABLES:
+        resolved = find_executable(executable, path=host_path)
+        if resolved:
+            candidates.append(ntpath.dirname(resolved))
+
+    entries: list[str] = []
+    seen: set[str] = set()
+    for raw in candidates:
+        if not raw:
+            continue
+        value = ntpath.normpath(str(raw))
+        key = ntpath.normcase(value)
+        if key in seen:
+            continue
+        seen.add(key)
+        entries.append(value)
+    return entries
 
 
 def sanitized_path(workspace: Path) -> str:
     """Drop user-home tool directories from PATH before running project code."""
+
+    if platform.system() == "Windows":
+        return ";".join(approved_windows_path_entries(workspace))
 
     allowed_roots = [
         workspace.resolve(),

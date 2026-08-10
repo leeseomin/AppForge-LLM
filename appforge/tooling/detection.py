@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -112,7 +113,11 @@ def quality_commands(workspace: Path) -> dict[str, list[str] | None]:
                 commands[name] = prefix + [key]
         if commands["typecheck"] is None and "typescript" in {**(package_data.get("dependencies") or {}), **(package_data.get("devDependencies") or {})}:
             executable = "npx" if manager == "npm" else manager
-            commands["typecheck"] = [executable, "tsc", "--noEmit"] if executable == "npx" else [executable, "exec", "tsc", "--noEmit"]
+            commands["typecheck"] = (
+                [executable, "--no-install", "tsc", "--noEmit"]
+                if executable == "npx"
+                else [executable, "exec", "tsc", "--noEmit"]
+            )
 
     languages = set(detected["languages"])
     if "python" in languages:
@@ -143,7 +148,7 @@ def quality_commands(workspace: Path) -> dict[str, list[str] | None]:
         if "maven" in managers:
             commands.update({"tests": ["mvn", "test"], "build": ["mvn", "package", "-DskipTests"]})
         elif "gradle" in managers:
-            wrapper = "./gradlew" if (workspace / "gradlew").exists() else "gradle"
+            wrapper = gradle_wrapper(workspace)
             commands.update({"tests": [wrapper, "test"], "build": [wrapper, "build", "-x", "test"]})
     if "csharp" in languages:
         commands.update({"tests": ["dotnet", "test"], "build": ["dotnet", "build", "--configuration", "Release"]})
@@ -152,6 +157,20 @@ def quality_commands(workspace: Path) -> dict[str, list[str] | None]:
 
     # Drop commands whose executable is not installed. Relative wrappers remain valid.
     for key, command in list(commands.items()):
-        if command and not command[0].startswith("./") and not command_exists(command[0]):
+        relative_executable = bool(command and (workspace / command[0]).is_file())
+        if command and not command[0].startswith("./") and not relative_executable and not command_exists(command[0]):
             commands[key] = None
     return commands
+
+
+def gradle_wrapper(workspace: Path, *, system_name: str | None = None) -> str:
+    """Select the platform-native Gradle wrapper without POSIX assumptions."""
+
+    platform_name = os.name if system_name is None else system_name
+    if platform_name == "nt" and (workspace / "gradlew.bat").is_file():
+        return "gradlew.bat"
+    if (workspace / "gradlew").is_file():
+        return "./gradlew"
+    if (workspace / "gradlew.bat").is_file():
+        return "gradlew.bat"
+    return "gradle"

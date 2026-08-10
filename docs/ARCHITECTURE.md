@@ -260,3 +260,11 @@ archive.
 
 These boundaries keep model reasoning replaceable while the local control plane,
 evidence model, and safety rules remain deterministic and reviewable.
+
+## Windows generated-code boundary
+
+On Windows, `appforge.tooling.sandbox` routes project commands through a trusted Python helper rather than invoking the target directly. The helper creates or derives a per-workspace AppContainer SID, grants that SID only the workspace, disposable home, and approved toolchain access, and supplies `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES` to `CreateProcessW`. The capability list is empty unless the governing command policy explicitly allows remote networking.
+
+The target starts suspended and is assigned to a Job Object before execution. The job owns kill-on-close cleanup, process-count, job-memory, CPU-rate, and UI restrictions. Standard handles are the only inherited handles. Windows batch launchers are argument-forwarded through a fixed PowerShell script inside the same AppContainer; explicit shell requests remain subject to destructive-command approval.
+
+The LLM bridge selects Windows DPAPI as its default secret backend. Provider configuration and encrypted secret blobs have separate files, and the provider document contains only a backend reference. macOS Keychain and the existing Linux private-file behavior are unchanged.

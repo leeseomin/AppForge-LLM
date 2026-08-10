@@ -8,10 +8,27 @@ import type { ActiveSelection, StoredProviderConfig } from "./types"
 const KEYCHAIN_SERVICE = "appforge-llm"
 const SECURITY_EXECUTABLE = "/usr/bin/security"
 const MAX_SECURITY_OUTPUT_BYTES = 1024 * 1024
+const DPAPI_STORE_FILE = "secrets.dpapi.json"
+const DPAPI_POWERSHELL_SCRIPT = `
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Security
+$request = ([Console]::In.ReadToEnd() | ConvertFrom-Json)
+$bytes = [Convert]::FromBase64String([string]$request.value)
+$scope = [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+if ([string]$request.operation -eq 'protect') {
+  $result = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, $scope)
+} elseif ([string]$request.operation -eq 'unprotect') {
+  $result = [System.Security.Cryptography.ProtectedData]::Unprotect($bytes, $null, $scope)
+} else {
+  throw 'Unsupported DPAPI operation'
+}
+[Console]::Out.Write([Convert]::ToBase64String($result))
+`
 type SecretKey = "apiKey"
-type SecretBackend = "file" | "keychain"
+type SecretBackend = "file" | "keychain" | "dpapi"
 interface SecurityCommandResult { stdout: string }
 type SecurityCommandRunner = (args: string[], input?: string) => Promise<SecurityCommandResult>
+interface DpapiBlobFile { version: 1; secrets: Record<string, string> }
 
 export interface SecretStore {
   get(providerId: string, key: SecretKey): Promise<string | undefined>
@@ -52,6 +69,7 @@ let loadedPath: string | null = null
 let loadedBackend: SecretBackend | null = null
 let secretStoreOverride: SecretStore | null = null
 let securityCommandRunnerOverride: SecurityCommandRunner | null = null
+let dpapiCommandRunnerOverride: SecurityCommandRunner | null = null
 
 function defaultConfigDir(): string {
   return resolve(
@@ -63,11 +81,15 @@ function currentConfigPath(): string {
   return resolve(process.env.APPFORGE_LLM_CONFIG || join(defaultConfigDir(), "providers.json"))
 }
 
+function currentDpapiStorePath(): string {
+  return join(dirname(currentConfigPath()), DPAPI_STORE_FILE)
+}
+
 function currentSecretBackend(): SecretBackend {
-  const platformDefault = process.platform === "darwin" ? "keychain" : "file"
+  const platformDefault = process.platform === "darwin" ? "keychain" : process.platform === "win32" ? "dpapi" : "file"
   const raw = (process.env.APPFORGE_LLM_SECRET_BACKEND || platformDefault).trim().toLowerCase()
-  if (raw === "file" || raw === "keychain") return raw
-  throw new Error("APPFORGE_LLM_SECRET_BACKEND must be either 'file' or 'keychain'")
+  if (raw === "file" || raw === "keychain" || raw === "dpapi") return raw
+  throw new Error("APPFORGE_LLM_SECRET_BACKEND must be 'file', 'keychain', or 'dpapi'")
 }
 
 export function configPath(): string {
@@ -158,6 +180,16 @@ function keychainRef(providerId: string, key: SecretKey): string {
   return `keychain:${KEYCHAIN_SERVICE}/${providerId}/${key}`
 }
 
+function dpapiRef(providerId: string, key: SecretKey): string {
+  return `dpapi:${KEYCHAIN_SERVICE}/${providerId}/${key}`
+}
+
+function secretRef(backend: SecretBackend, providerId: string, key: SecretKey): string {
+  if (backend === "keychain") return keychainRef(providerId, key)
+  if (backend === "dpapi") return dpapiRef(providerId, key)
+  throw new Error("The file backend does not use secret references")
+}
+
 function keychainInteractiveToken(value: string): string {
   if (!/^[A-Za-z0-9._:/-]+$/.test(value)) {
     throw new KeychainCommandError(null, "Invalid macOS Keychain item identifier")
@@ -176,6 +208,13 @@ class KeychainCommandError extends Error {
   constructor(readonly code: number | null, reason = "macOS Keychain command failed") {
     super(reason)
     this.name = "KeychainCommandError"
+  }
+}
+
+class DpapiCommandError extends Error {
+  constructor(readonly code: number | null, reason = "Windows DPAPI command failed") {
+    super(reason)
+    this.name = "DpapiCommandError"
   }
 }
 
@@ -214,6 +253,49 @@ const runSecurityCommand: SecurityCommandRunner = (args, input) => new Promise((
 
 function securityCommand(args: string[], input?: string): Promise<SecurityCommandResult> {
   return (securityCommandRunnerOverride ?? runSecurityCommand)(args, input)
+}
+
+function dpapiPowerShellExecutable(): string {
+  const systemRoot = process.env.SystemRoot || process.env.WINDIR || "C:\\Windows"
+  return join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+}
+
+const runDpapiCommand: SecurityCommandRunner = (args, input) => new Promise((resolve, reject) => {
+  const child = spawn(dpapiPowerShellExecutable(), args, {
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
+  })
+  const stdout: Buffer[] = []
+  let outputBytes = 0
+  const timeout = setTimeout(() => {
+    child.kill()
+    reject(new DpapiCommandError(null, "Windows DPAPI command timed out"))
+  }, 30_000)
+  child.stdout.on("data", (chunk: Buffer) => {
+    outputBytes += chunk.length
+    if (outputBytes <= MAX_SECURITY_OUTPUT_BYTES) stdout.push(chunk)
+    else child.kill()
+  })
+  child.stderr.resume()
+  child.once("error", () => {
+    clearTimeout(timeout)
+    reject(new DpapiCommandError(null))
+  })
+  child.once("close", (code) => {
+    clearTimeout(timeout)
+    if (outputBytes > MAX_SECURITY_OUTPUT_BYTES) {
+      reject(new DpapiCommandError(code, "Windows DPAPI output exceeded its limit"))
+    } else if (code !== 0) {
+      reject(new DpapiCommandError(code))
+    } else {
+      resolve({ stdout: Buffer.concat(stdout).toString("utf8") })
+    }
+  })
+  child.stdin.end(input)
+})
+
+function dpapiCommand(args: string[], input?: string): Promise<SecurityCommandResult> {
+  return (dpapiCommandRunnerOverride ?? runDpapiCommand)(args, input)
 }
 
 class MacOSKeychainSecretStore implements SecretStore {
@@ -263,9 +345,107 @@ class MacOSKeychainSecretStore implements SecretStore {
   }
 }
 
+function dpapiEntry(providerId: string, key: SecretKey): string {
+  return `${providerId}:${key}`
+}
+
+function emptyDpapiBlobs(): DpapiBlobFile {
+  return { version: 1, secrets: {} }
+}
+
+async function readDpapiBlobs(): Promise<DpapiBlobFile> {
+  const path = currentDpapiStorePath()
+  try {
+    await assertSafeConfigFile(path, true)
+    const parsed = JSON.parse(await readFile(path, "utf8")) as Partial<DpapiBlobFile>
+    if (parsed.version !== 1 || !parsed.secrets || typeof parsed.secrets !== "object" || Array.isArray(parsed.secrets)) {
+      throw new DpapiCommandError(null, "Windows DPAPI store has an invalid format")
+    }
+    const secrets: Record<string, string> = {}
+    for (const [id, value] of Object.entries(parsed.secrets)) {
+      if (typeof value !== "string" || value.length === 0) {
+        throw new DpapiCommandError(null, "Windows DPAPI store contains an invalid ciphertext")
+      }
+      secrets[id] = value
+    }
+    return { version: 1, secrets }
+  } catch (error) {
+    if ((error as { code?: unknown }).code === "ENOENT") return emptyDpapiBlobs()
+    if (error instanceof SyntaxError) {
+      throw new DpapiCommandError(null, "Windows DPAPI store contains invalid JSON")
+    }
+    throw error
+  }
+}
+
+async function writeDpapiBlobs(blobs: DpapiBlobFile): Promise<void> {
+  await atomicWritePrivate(currentDpapiStorePath(), JSON.stringify(blobs, null, 2))
+}
+
+function normalizedBase64(value: string, label: string): string {
+  const normalized = value.trim()
+  if (!normalized || !/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)) {
+    throw new DpapiCommandError(null, `Windows DPAPI returned invalid ${label}`)
+  }
+  return normalized
+}
+
+class WindowsDpapiSecretStore implements SecretStore {
+  private assertSupported(): void {
+    if (process.platform !== "win32" && !dpapiCommandRunnerOverride) {
+      throw new Error("APPFORGE_LLM_SECRET_BACKEND=dpapi is currently supported only on Windows")
+    }
+  }
+
+  private async transform(operation: "protect" | "unprotect", value: string): Promise<string> {
+    this.assertSupported()
+    const args = [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      DPAPI_POWERSHELL_SCRIPT,
+    ]
+    const { stdout } = await dpapiCommand(args, JSON.stringify({ operation, value }))
+    return normalizedBase64(stdout, `${operation} output`)
+  }
+
+  async get(providerId: string, key: SecretKey): Promise<string | undefined> {
+    const blobs = await readDpapiBlobs()
+    const encrypted = blobs.secrets[dpapiEntry(providerId, key)]
+    if (!encrypted) return undefined
+    const plaintext = await this.transform("unprotect", encrypted)
+    return Buffer.from(plaintext, "base64").toString("utf8")
+  }
+
+  async set(providerId: string, key: SecretKey, value: string): Promise<void> {
+    const plaintext = Buffer.from(value, "utf8").toString("base64")
+    const encrypted = await this.transform("protect", plaintext)
+    const blobs = await readDpapiBlobs()
+    blobs.secrets[dpapiEntry(providerId, key)] = encrypted
+    await writeDpapiBlobs(blobs)
+    if (await this.get(providerId, key) !== value) {
+      throw new DpapiCommandError(null, "Windows DPAPI write could not be verified")
+    }
+  }
+
+  async delete(providerId: string, key: SecretKey): Promise<void> {
+    const blobs = await readDpapiBlobs()
+    const id = dpapiEntry(providerId, key)
+    if (!(id in blobs.secrets)) return
+    delete blobs.secrets[id]
+    await writeDpapiBlobs(blobs)
+  }
+}
+
 function selectedSecretStore(): SecretStore {
   if (secretStoreOverride) return secretStoreOverride
-  return new MacOSKeychainSecretStore()
+  const backend = currentSecretBackend()
+  if (backend === "keychain") return new MacOSKeychainSecretStore()
+  if (backend === "dpapi") return new WindowsDpapiSecretStore()
+  throw new Error("The file secret backend does not provide a SecretStore")
 }
 
 async function hydrateSecrets(config: BridgeConfig): Promise<BridgeConfig> {
@@ -283,7 +463,8 @@ async function hydrateSecrets(config: BridgeConfig): Promise<BridgeConfig> {
 }
 
 async function serializeForStorage(config: BridgeConfig): Promise<BridgeConfig> {
-  if (currentSecretBackend() === "file") {
+  const backend = currentSecretBackend()
+  if (backend === "file") {
     const providers: Record<string, StoredProviderConfig> = {}
     for (const [id, provider] of Object.entries(config.providers)) {
       const next = normalizedProvider(provider)
@@ -299,7 +480,7 @@ async function serializeForStorage(config: BridgeConfig): Promise<BridgeConfig> 
     const next = normalizedProvider(provider)
     if (next.apiKey && next.apiKey.length > 0) {
       await store.set(id, "apiKey", next.apiKey)
-      next.apiKeyRef = keychainRef(id, "apiKey")
+      next.apiKeyRef = secretRef(backend, id, "apiKey")
     }
     delete next.apiKey
     providers[id] = next
@@ -338,7 +519,7 @@ export async function load(): Promise<BridgeConfig> {
   loadedPath = path
   loadedBackend = backend
   if (
-    backend === "keychain"
+    backend !== "file"
     && Object.values(cache.providers).some((provider) =>
       Boolean(provider.apiKey && !provider.apiKeyRef),
     )
@@ -385,7 +566,7 @@ export async function setProvider(id: string, input: {
       input.defaultModel === undefined ? existing.defaultModel : input.defaultModel ? input.defaultModel : undefined,
   }
   if (input.clearApiKey) {
-    if (currentSecretBackend() === "keychain") {
+    if (currentSecretBackend() !== "file") {
       await selectedSecretStore().delete(id, "apiKey")
     }
     next.apiKey = undefined
@@ -402,7 +583,7 @@ export async function setProvider(id: string, input: {
 
 export async function deleteProvider(id: string): Promise<void> {
   const config = await load()
-  if (currentSecretBackend() === "keychain") {
+  if (currentSecretBackend() !== "file") {
     await selectedSecretStore().delete(id, "apiKey")
   }
   delete config.providers[id]
@@ -441,6 +622,10 @@ export function _setSecurityCommandRunnerForTest(runner: SecurityCommandRunner |
   securityCommandRunnerOverride = runner
 }
 
+export function _setDpapiCommandRunnerForTest(runner: SecurityCommandRunner | null): void {
+  dpapiCommandRunnerOverride = runner
+}
+
 export function _resetForTest(): void {
   cache = null
   loaded = false
@@ -448,4 +633,5 @@ export function _resetForTest(): void {
   loadedBackend = null
   secretStoreOverride = null
   securityCommandRunnerOverride = null
+  dpapiCommandRunnerOverride = null
 }
