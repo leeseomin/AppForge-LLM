@@ -5,6 +5,7 @@ import platform
 import re
 import shlex
 import subprocess
+import signal
 import tempfile
 import time
 from dataclasses import dataclass
@@ -196,6 +197,8 @@ class CommandPolicy:
     # workspace (node_modules, a workspace .venv, cargo/go module caches).
     allow_dependency_install: bool = False
     timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT
+    # Host-only validation policy; never accepted from model tool arguments.
+    read_only: bool = False
 
 
 def normalize_command(command: str | Sequence[str]) -> list[str]:
@@ -660,6 +663,8 @@ def run_command(
         sandbox_home = Path(temporary).resolve()
         (sandbox_home / "tmp").mkdir(mode=0o700)
         merged_env = _sandbox_environment(workspace, sandbox_home)
+        if policy.read_only:
+            merged_env["PYTHONPYCACHEPREFIX"] = str(workspace / ".appforge-validation" / "pycache")
         if env:
             for raw_key, raw_value in env.items():
                 key = str(raw_key)
@@ -682,6 +687,7 @@ def run_command(
                         and _is_workspace_dependency_install(argv, workspace)
                     )
                 ),
+                read_only=policy.read_only,
             )
         except ExecutionSandboxUnavailable as exc:
             return ToolResult(
@@ -698,16 +704,16 @@ def run_command(
                 command=argv,
             )
         try:
-            completed = subprocess.run(
-                invocation.argv,
-                cwd=workspace,
-                env=merged_env,
-                text=True,
-                capture_output=True,
-                timeout=max(1, int(policy.timeout_seconds)),
-                shell=False,
-                check=False,
-            )
+            from appforge.evidence import context_value
+            timeout = min(max(1, policy.timeout_seconds), max(0.01, context_value("deadline", float("inf")) - time.monotonic()))
+            cancellation = context_value("cancel_event")
+            if policy.read_only or cancellation is not None:
+                completed = _run_cancellable(invocation.argv, workspace, merged_env, timeout, cancellation)
+            else:
+                completed = subprocess.run(
+                    invocation.argv, cwd=workspace, env=merged_env, text=True,
+                    capture_output=True, timeout=timeout, shell=False, check=False,
+                )
         except subprocess.TimeoutExpired as exc:
             stdout = redact(truncate(exc.stdout or "", MAX_CAPTURE_CHARS))
             stderr = redact(truncate(exc.stderr or "", MAX_CAPTURE_CHARS))
@@ -728,6 +734,7 @@ def run_command(
                 success=False,
                 error="Command runner is unavailable",
                 data={
+                    "code": "COMMAND_RUNNER_UNAVAILABLE",
                     "returncode": 127,
                     "stdout": "",
                     "stderr": "command not found",
@@ -737,10 +744,13 @@ def run_command(
                 duration_seconds=round(time.monotonic() - started, 4),
                 command=argv,
             )
+        except InterruptedError:
+            return ToolResult(False, error="Command cancelled", data={"code": "VALIDATION_CANCELLED", "status": "blocked"}, command=argv)
     if (
-        invocation.backend == "windows-appcontainer-job"
-        and completed.returncode == 126
-        and completed.stderr.startswith(WINDOWS_SANDBOX_ERROR_PREFIX)
+        (invocation.backend == "windows-appcontainer-job" and completed.returncode == 126
+         and completed.stderr.startswith(WINDOWS_SANDBOX_ERROR_PREFIX))
+        or (invocation.backend == "macos-sandbox-exec" and completed.returncode == 71
+            and completed.stderr.startswith("sandbox-exec: sandbox_apply:"))
     ):
         reason = completed.stderr.removeprefix(WINDOWS_SANDBOX_ERROR_PREFIX).strip()
         return ToolResult(
@@ -773,3 +783,35 @@ def run_command(
         duration_seconds=round(time.monotonic() - started, 4),
         command=argv,
     )
+
+
+def _run_cancellable(argv, workspace, environment, timeout, cancellation):
+    """Reap the sandbox process and its POSIX children on deadline or cancellation."""
+    if cancellation is not None and cancellation.is_set():
+        raise InterruptedError("Command cancelled")
+    deadline = time.monotonic() + timeout
+    with subprocess.Popen(argv, cwd=workspace, env=environment, text=True,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          start_new_session=os.name != "nt") as process:
+        try:
+            while True:
+                if cancellation is not None and cancellation.is_set():
+                    raise InterruptedError("Command cancelled")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(argv, timeout)
+                try:
+                    stdout, stderr = process.communicate(timeout=min(0.2, remaining))
+                    return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+                except subprocess.TimeoutExpired:
+                    continue
+        except BaseException:
+            if os.name == "nt":
+                process.kill()  # AppContainer helper's Job Object kills its children.
+            else:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            process.communicate()
+            raise

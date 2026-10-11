@@ -33,6 +33,20 @@ project workspace.
 
 ## Component responsibilities
 
+### Verification ownership and source identity
+
+`validation_service.validate_candidate` is shared by the agent's `validate_candidate` tool, implementation/verification gates, and final archive creation. Web profiles are `static-web`, `javascript-web`, and `typescript-web`. Static pages require the accepted browser checks and secret scan; bundles additionally require nonempty structured project tests and a fresh build entry point; TypeScript also requires typecheck. Browser cases are fixed by the accepted spec before implementation and map every criterion to an action/assertion. They load snapshot assets through a host-controlled virtual origin, with external requests, sockets, service workers and downloads blocked. This is evidence for the selected local browser criteria, not proof of API/SSR, external services, security, or every possible user behavior.
+
+The workspace `.appforge/` files remain reviewable mirrors. Authoritative project policy, checkpoint mirrors, execution records and receipt manifests live outside generated-code write access at `<project-parent>/.appforge-control/<workspace-hash>/`. This directory must accompany the workspace when preserving trusted history; moving a workspace without it requires revalidation. Existing workspaces adopt their configuration once, but old completion checkpoints and ZIP sidecars do not become trusted evidence.
+
+Each candidate copies exportable source into that host store, copies installed dependencies, and runs project commands with source read-only and fixed build/cache directories writable. Symlink sources and escaping Node dependency links are rejected. Execution IDs bind source content/executable bits, accepted requirements, pipeline policy, runtime/dependency identity, result counts, and evidence origin. Project JUnit/JSON results are labelled project-owned; browser observations and the secret scan are host-owned. Test deletion or changing previously executed tests to skipped cannot turn the same accepted requirements into a passing repair. The supported report adapters are Node JUnit, pytest JUnit, Vitest JSON, and Jest JSON; other runners require adapters before they can provide completion evidence.
+
+Only an identical candidate in the same stage session may reuse a successful receipt. Source/lockfile/dependency/profile/harness changes invalidate reuse. Snapshots can be expensive for large dependency trees; the service retains the latest two completed candidate copies, while execution receipts and archives remain for audit. Failed snapshot creation may leave an incomplete copy, pruned by a later completed validation. No external retention job is scheduled.
+
+Web `verification_report` v2 references real execution IDs and criterion IDs. Saving a failed report is allowed; completing the stage requires boolean passing results linked to current source, requirements, policy and browser observations. A fresh final run can coexist with an earlier report for exactly the same inputs. Checkpoint resume validates the host mirror, policy version, artifact digests, source identity and web archive integrity. Edits after verification rewind verification and invalidate later completions, with a bounded rewind count.
+
+Archives read the checked snapshot, verify every member, and record the ZIP SHA-256 outside the workspace. Downloads recheck source/receipt/ZIP identity and stream a private copy of the verified bytes, so replacing the workspace ZIP after validation cannot replace the response. Web execution `status` stays separate from `verification.status`; old or stale completions disable download and offer revalidation.
+
 ### Vue web application
 
 `frontend/` is a Vite and Vue single-page application served from packaged

@@ -1095,5 +1095,6 @@ def test_repeated_failure_signature_stops_retrying(tmp_path) -> None:
         failure=second_failure,
     ) is True
     assert second_failure["code"] == "REPEATED_FAILURE_LOOP"
-    assert second_failure["next_retry_mode"] == "regenerate"
+    assert second_failure["next_retry_mode"] == "stop"
+    assert second_failure["retry_decision"] == "stop"
     assert any(event["event"] == "loop_guard_triggered" for event in events)

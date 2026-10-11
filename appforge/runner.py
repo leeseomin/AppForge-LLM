@@ -4,10 +4,11 @@ import json
 import os
 import threading
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from .checkpoints import next_stage, read_checkpoint, write_checkpoint
+from .checkpoints import checkpoint_is_current, completed_stages, next_stage, read_checkpoint, write_checkpoint
 from .constants import DEFAULT_SAFETY, STAGE_RESULT_FILE_NAME
 from .drivers import AgentDriver, DriverError
 from .gates import (
@@ -23,6 +24,8 @@ from .pipelines import load_pipeline
 from .projects import load_project, resolve_safety, update_project
 from .prompting import build_stage_prompt
 from .util import atomic_write_json, atomic_write_text, utc_now
+from .snapshots import changed_paths, digest, source_manifest
+from .evidence import begin_attempt, context_value, execution_context, policy_digest
 
 RunEventHandler = Callable[[dict[str, Any]], None]
 
@@ -42,6 +45,8 @@ _ENVIRONMENT_BLOCK_CODES = {
     "TOOLCHAIN_UNAVAILABLE",
     "DEPENDENCY_INSTALL_DISABLED",
     "EXECUTION_SANDBOX_UNAVAILABLE",
+    "BROWSER_UNAVAILABLE",
+    "VALIDATION_BUDGET_EXHAUSTED",
 }
 
 
@@ -91,6 +96,7 @@ class PipelineRunner:
         self.stage_timeout = stage_timeout
         self.event_handler = event_handler
         self.cancel_event = cancel_event
+        self._verification_rewinds = 0
         if hasattr(self.driver, "set_event_handler"):
             try:
                 self.driver.set_event_handler(lambda payload: self._emit(str(payload.get("type") or "driver_event"), **{k: v for k, v in payload.items() if k != "type"}))
@@ -144,11 +150,11 @@ class PipelineRunner:
             )
         if only_stage:
             prior = []
+            trusted_completed = completed_stages(self.layout, self.pipeline)
             for candidate in self.pipeline.stages:
                 if candidate.name == requested_stage.name:
                     break
-                checkpoint = read_checkpoint(self.layout, candidate.name)
-                if not checkpoint or checkpoint.get("status") != "completed":
+                if candidate.name not in trusted_completed:
                     prior.append(candidate.name)
             if prior:
                 message = (
@@ -172,7 +178,8 @@ class PipelineRunner:
                 )
 
         existing = read_checkpoint(self.layout, stage_name)
-        if existing and existing.get("status") == "awaiting_human":
+        if (existing and existing.get("status") == "awaiting_human"
+                and checkpoint_is_current(self.layout, self.pipeline, stage_name, check_source=True)):
             approved_by_user = self.approved_stage == stage_name
             if not self.auto_approve and not approved_by_user:
                 failure = {
@@ -239,6 +246,10 @@ class PipelineRunner:
                 )
             stage = self.pipeline.stage(stage_name)
             result = self._run_stage(stage)
+            if result.get("status") == "reverify":
+                stage_name = result["stage"]
+                only_stage = None
+                continue
             if not result["passed"]:
                 summary = RunSummary(
                     False,
@@ -295,6 +306,17 @@ class PipelineRunner:
         )
 
     def _run_stage(self, stage: StageSpec) -> dict[str, Any]:
+        from .validation_service import WEB_PIPELINES, validate_candidate
+        if hasattr(self.driver, "candidate_validator"):
+            self.driver.candidate_validator = (
+                lambda: validate_candidate(self.layout, timeout=min(180, self.stage_timeout))
+            ) if self.pipeline.name in WEB_PIPELINES and stage.name in {"implementation", "verification"} else None
+        with execution_context(owner=str(self.layout.root), stage=stage.name,
+                               policy_digest=policy_digest(self.pipeline),
+                               deadline=time.monotonic() + self.stage_timeout, cancel_event=self.cancel_event):
+            return self._run_stage_attempts(stage)
+
+    def _run_stage_attempts(self, stage: StageSpec) -> dict[str, Any]:
         previous_failure: dict[str, Any] | None = None
         last_failure: dict[str, Any] | None = None
         seen_failure_signatures: set[str] = set()
@@ -305,6 +327,12 @@ class PipelineRunner:
             max_attempts=self.max_stage_attempts,
         )
         for attempt in range(1, self.max_stage_attempts + 1):
+            begin_attempt(attempt)
+            remaining = context_value("deadline", float("inf")) - time.monotonic()
+            if remaining <= 0:
+                failure = {"code": "STAGE_BUDGET_EXHAUSTED", "stage": stage.name,
+                           "message": "Stage time budget exhausted across repair attempts"}
+                return {"passed": False, "status": "blocked", "message": failure["message"], "failure": failure}
             if self._cancelled():
                 failure = self._cancel_failure(stage.name, attempt=attempt)
                 self._emit("stage_cancelled", stage=stage.name, attempt=attempt, failure=failure)
@@ -348,12 +376,13 @@ class PipelineRunner:
                 driver=self.driver.name,
             )
             try:
+                before_source = source_manifest(self.layout.root)
                 driver_result = self.driver.run(
                     prompt,
                     layout=self.layout,
                     stage=stage.name,
                     attempt=attempt,
-                    timeout=self.stage_timeout,
+                    timeout=max(1, int(min(self.stage_timeout, remaining))),
                     cancel_event=self.cancel_event,
                 )
             except DriverError as exc:
@@ -458,15 +487,28 @@ class PipelineRunner:
             stage_record_ok, stage_result, stage_record_error = validate_stage_result(
                 self.layout, stage
             )
-            artifacts_ok, artifact_records, artifact_paths = validate_stage_artifacts(
-                self.layout, stage
-            )
+            stage_result["files_changed"] = sorted(changed_paths(before_source, source_manifest(self.layout.root)))
+            stage_names = [item.name for item in self.pipeline.stages]
+            verification_stage = next((name for name in ("verification", "regression") if name in stage_names), None)
+            if verification_stage and stage_names.index(stage.name) > stage_names.index(verification_stage):
+                checkpoint = read_checkpoint(self.layout, verification_stage) or {}
+                if checkpoint.get("source_snapshot") != digest(source_manifest(self.layout.root)):
+                    self._verification_rewinds += 1
+                    if self._verification_rewinds > 2:
+                        return {"passed": False, "status": "failed", "message": "Post-verification source keeps changing; make final-stage edits idempotent"}
+                    write_checkpoint(self.layout, pipeline=self.pipeline, stage=verification_stage,
+                                     status="in_progress", attempt=0, metadata={"invalidated_by": stage.name})
+                    self._emit("verification_invalidated", stage=verification_stage, changed_by=stage.name)
+                    return {"passed": True, "status": "reverify", "stage": verification_stage}
             gates_ok, gate_records = run_declared_gates(
                 self.layout,
                 stage=stage,
                 allow_network=self.allow_network,
                 allow_destructive=self.allow_destructive,
                 allow_dependency_install=self.allow_dependency_install,
+            )
+            artifacts_ok, artifact_records, artifact_paths = validate_stage_artifacts(
+                self.layout, stage
             )
             records = artifact_records + gate_records
             if not stage_record_ok:
@@ -494,17 +536,13 @@ class PipelineRunner:
                     stage_result=stage_result,
                     records=records,
                     driver=self.driver,
-                    timeout=min(float(self.stage_timeout), 180.0),
+                    timeout=min(float(self.stage_timeout), 180.0, max(0.1, context_value("deadline", float("inf")) - time.monotonic())),
                 )
                 review["independent_llm_review"] = independent_review
-                if independent_review.get("verdict") == "block":
-                    review["passed"] = False
-                    review.setdefault("findings", []).extend(independent_review.get("findings") or [])
-                    review["critical_count"] = int(review.get("critical_count") or 0) + 1
-                    review["finding_count"] = int(review.get("finding_count") or 0) + len(independent_review.get("findings") or [])
-                elif independent_review.get("verdict") == "concerns":
-                    review.setdefault("findings", []).extend(independent_review.get("findings") or [])
-                    review["finding_count"] = int(review.get("finding_count") or 0) + len(independent_review.get("findings") or [])
+                review.setdefault("findings", []).extend(independent_review.get("findings") or [])
+                review["critical_count"] = sum(item.get("severity") == "critical" for item in review["findings"])
+                review["finding_count"] = len(review["findings"])
+                review["passed"] = not review["critical_count"] and independent_review.get("verdict") != "block"
             passed = (
                 driver_result.success
                 and stage_record_ok
@@ -670,7 +708,15 @@ class PipelineRunner:
         failure: dict[str, Any],
     ) -> bool:
         signature = failure_signature(failure)
+        if failure.get("retryable") is False:
+            failure["retry_decision"] = "blocked"
+            return True
+        exhausted = attempt >= self.max_stage_attempts
+        failure["retry_decision"] = "stop" if exhausted else "repair"
         if signature in seen:
+            strategy_key = f"strategy-change:{stage.name}"
+            stop = exhausted or strategy_key in seen
+            seen.add(strategy_key)
             previous_code = str(failure.get("code") or "STAGE_FAILED")
             failure.update(
                 {
@@ -686,8 +732,9 @@ class PipelineRunner:
                     ),
                     "previous_code": previous_code,
                     "loop_signature": signature,
-                    "next_retry_mode": "regenerate",
-                    "repair_mode": "regenerate",
+                    "next_retry_mode": "stop" if stop else "regenerate",
+                    "repair_mode": "stop" if stop else "regenerate",
+                    "retry_decision": "stop" if stop else "regenerate",
                 }
             )
             self._emit(
@@ -696,10 +743,10 @@ class PipelineRunner:
                 attempt=attempt,
                 failure=failure,
             )
-            return True
+            return stop
         seen.add(signature)
         failure["loop_signature"] = signature
-        return False
+        return exhausted
 
     def _remember_attempt(
         self,
@@ -742,6 +789,7 @@ class PipelineRunner:
                 "passed": review.get("passed"),
                 "critical_count": review.get("critical_count"),
                 "finding_count": review.get("finding_count"),
+                "findings": review.get("findings", [])[:20],
             },
             "unresolved": stage_result.get("unresolved") or [],
             "decisions": stage_result.get("decisions") or [],
@@ -783,6 +831,9 @@ class PipelineRunner:
             }
             if data.get("checks"):
                 item["checks"] = data["checks"]
+            if data.get("tests"):
+                item["checks"] = data["tests"]
+                item["failed_test_ids"] = data["tests"].get("failed_test_ids", [])
             if result.get("command"):
                 item["command"] = result["command"]
             evidence = _failure_evidence_tail(result, data)

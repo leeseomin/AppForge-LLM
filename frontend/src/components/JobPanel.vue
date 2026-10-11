@@ -43,7 +43,7 @@ const isAwaitingApproval = computed(() => props.job?.status === 'awaiting_approv
 const statusTitle = computed(() => {
   const job = props.job;
   if (!job) return t('job.preparing');
-  if (job.status === 'completed') return t('job.completed');
+  if (job.status === 'completed') return t(job.verification?.status === 'verified' ? 'job.completed' : 'job.needsVerification');
   if (job.status === 'failed') return t('job.failed');
   if (job.status === 'awaiting_approval') return t('job.awaitingApproval');
   if (job.status === 'packaging') return t('job.packaging');
@@ -68,6 +68,7 @@ const downloadLabel = computed(() => {
   const job = props.job;
   if (!job) return t('job.downloadPending');
   if (job.status === 'failed') return t('job.downloadAfterFix');
+  if (job.status === 'completed' && job.verification?.status !== 'verified') return t('job.downloadNeedsVerification');
   if (job.status !== 'completed' || !job.download.available) return t('job.downloadPending');
   const size = job.download.size_bytes ? ` · ${formatBytes(job.download.size_bytes)}` : '';
   return t('job.downloadReady', { size });
@@ -178,7 +179,7 @@ async function onRetry(stage: string | null = null) {
   if (!props.job || retrying.value) return;
   retrying.value = true;
   try {
-    const updated = await retryJob(props.job.id, stage || props.job.active_stage || undefined);
+    const updated = await retryJob(props.job.id, props.job.status === 'completed' ? undefined : stage || props.job.active_stage || undefined);
     emit('jobUpdated', updated);
     emit('toast', t('job.retryQueued'));
   } catch (error) {
@@ -223,11 +224,11 @@ function onDownloadClick(event: MouseEvent) {
           <span
             class="status-pill"
             :class="{
-              'is-completed': props.job.status === 'completed',
+              'is-completed': props.job.status === 'completed' && props.job.verification?.status === 'verified',
               'is-failed': props.job.status === 'failed',
             }"
           >
-            {{ statusLabel(props.job.status, props.job.status_label) }}
+            {{ props.job.status === 'completed' ? t('job.runCompleted') : statusLabel(props.job.status, props.job.status_label) }}
           </span>
           <span v-if="props.job.pipeline" class="pipeline-label">{{ t('job.pipeline', { name: props.job.pipeline }) }}</span>
           <span v-if="props.job.mode" class="pipeline-label">{{ props.job.mode === 'checkpoint' ? t('job.modeCheckpoint') : t('job.modeAutonomous') }}</span>
@@ -238,7 +239,14 @@ function onDownloadClick(event: MouseEvent) {
           </span>
         </div>
         <h2 id="jobStatusTitle">{{ statusTitle }}</h2>
-        <p>{{ props.job.message || t('job.statusFallback') }}</p>
+        <p v-if="props.job.status === 'completed'">
+          {{ props.job.verification?.status === 'verified' ? t('job.verificationPassed') : t('job.verificationMissing') }}
+        </p>
+        <p v-else>{{ props.job.message || t('job.statusFallback') }}</p>
+        <button v-if="props.job.status === 'completed' && props.job.verification?.status !== 'verified'"
+          type="button" class="secondary-button" :disabled="retrying" @click="onRetry()">
+          {{ t('job.revalidate') }}
+        </button>
         <p v-if="props.job.routing?.rationale" class="routing-rationale">
           {{ t('job.routing', { rationale: props.job.routing.rationale }) }}
         </p>
@@ -413,3 +421,7 @@ function onDownloadClick(event: MouseEvent) {
     </div>
   </section>
 </template>
+
+<style scoped>
+.status-copy h2 { word-break: keep-all; }
+</style>

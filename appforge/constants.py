@@ -31,6 +31,8 @@ DEFAULT_SAFETY = {
 }
 
 IGNORED_DIRS = {
+    ".appforge-control",
+    ".appforge-validation",
     ".git",
     ".hg",
     ".svn",
@@ -55,6 +57,7 @@ IGNORED_DIRS = {
     ".nuxt",
     "dist",
     "build",
+    "out",
     "target",
     "coverage",
 }

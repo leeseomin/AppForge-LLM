@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import math
 import os
@@ -8,6 +9,7 @@ import queue
 import re
 import shutil
 import threading
+import tempfile
 import traceback
 import uuid
 import zipfile
@@ -741,6 +743,11 @@ class JobManager:
             if not project_path:
                 raise WebJobError("PROJECT_NOT_READY", "재시도할 작업공간이 없습니다.", status_code=409)
             stage_id = stage or (job.get("error") or {}).get("stage") or job.get("active_stage")
+            if job.get("status") == "completed" and stage is None:
+                layout = ProjectLayout.from_root(Path(project_path))
+                pipeline = load_pipeline(str(job["pipeline"]))
+                stage_id = next_stage(layout, pipeline) or next(
+                    (item.name for item in pipeline.stages if item.name in {"verification", "regression"}), pipeline.stages[0].name)
             if not stage_id:
                 raise WebJobError(
                     "STAGE_NOT_FOUND",
@@ -756,6 +763,7 @@ class JobManager:
             job["updated_at"] = utc_now()
             job["completed_at"] = None
             job["error"] = None
+            job["download"]["available"] = False
             job["resume_existing"] = True
             job["auto_approve"] = str(job.get("mode") or "autonomous") == "autonomous"
             job["approved_stage"] = None
@@ -909,13 +917,14 @@ class JobManager:
                     action="현재 단계가 완료될 때까지 상태 화면을 확인하세요.",
                     status_code=409,
                 )
-            path = Path(str(job["archive_path"])).expanduser().resolve()
+            path = Path(str(job["archive_path"])).expanduser()
             project_path = Path(str(job.get("project_path") or "")).expanduser().resolve()
             reports_dir = (project_path / ".appforge" / "reports").resolve()
             if (
                 not path.is_file()
+                or path.is_symlink()
                 or path.suffix.casefold() != ".zip"
-                or reports_dir not in path.parents
+                or reports_dir not in path.resolve().parents
             ):
                 raise WebJobError(
                     "ARCHIVE_MISSING",
@@ -923,7 +932,43 @@ class JobManager:
                     action="같은 요청으로 다시 실행하고, 반복되면 서버 로그를 확인하세요.",
                     status_code=410,
                 )
+            verification = self._archive_verification(job)
+            if verification["status"] != "verified":
+                raise WebJobError("DOWNLOAD_UNVERIFIED", "현재 소스와 ZIP의 검증 증거가 일치하지 않습니다.",
+                                  action="결과를 다시 검증한 뒤 다운로드하세요.", status_code=409,
+                                  context={"verification": verification})
             return path, str(job["download"]["filename"] or path.name)
+
+    def download_stream(self, job_id: str):
+        """Serve the exact bytes hashed here, even if the workspace ZIP is replaced."""
+        with self._lock:
+            path, filename = self.download_path(job_id)
+            stream = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)
+            try:
+                hasher = hashlib.sha256()
+                with path.open("rb") as source:
+                    for block in iter(lambda: source.read(1024 * 1024), b""):
+                        stream.write(block)
+                        hasher.update(block)
+                verification = self._archive_verification(self._require_job_locked(job_id), archive_sha256=hasher.hexdigest())
+                if verification["status"] != "verified":
+                    raise WebJobError("DOWNLOAD_UNVERIFIED", "다운로드 준비 중 ZIP이 변경되었습니다.", status_code=409)
+                stream.seek(0)
+                return stream, filename
+            except BaseException:
+                stream.close()
+                raise
+
+    @staticmethod
+    def _archive_verification(job: dict[str, Any], *, archive_sha256: str | None = None) -> dict[str, Any]:
+        from .validation_service import archive_verification
+        if not job.get("archive_path") or not job.get("project_path"):
+            return {"status": "unverified"}
+        try:
+            return archive_verification(ProjectLayout.from_root(Path(job["project_path"])),
+                                        Path(job["archive_path"]), archive_sha256=archive_sha256)
+        except (OSError, ValueError, KeyError, TypeError):
+            return {"status": "stale", "reason": "Verification records or source cannot be read"}
 
     def shutdown(self) -> None:
         with self._lock:
@@ -2005,6 +2050,9 @@ class JobManager:
 
     def _public_job_locked(self, job: dict[str, Any]) -> dict[str, Any]:
         public = copy.deepcopy(job)
+        public["verification"] = self._archive_verification(job) if job.get("status") == "completed" else {"status": "unverified"}
+        if public["verification"]["status"] != "verified":
+            public.setdefault("download", {})["available"] = False
         public.setdefault("starred", False)
         public.setdefault("archived", False)
         public.setdefault("llm", {})

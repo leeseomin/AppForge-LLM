@@ -593,6 +593,10 @@ function Initialize-PythonEnvironment {
     if (-not (Test-Path -LiteralPath $script:AppForgeBin -PathType Leaf)) {
         Stop-WithError ".venv\Scripts\appforge.exe is missing. Re-run without APPFORGE_SKIP_INSTALL."
     }
+    if (-not $skipInstall -or $script:Mode -eq "check") {
+        Write-Log "Preparing Chromium for AppForge browser verification."
+        Invoke-CheckedCommand $script:PythonBin @("-m", "playwright", "install", "chromium", "--only-shell") "Chromium installation failed"
+    }
 }
 
 function Test-WindowsSandboxRuntime {

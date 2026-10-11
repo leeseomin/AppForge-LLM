@@ -427,17 +427,17 @@ def test_explicit_env_overrides_non_interactive_defaults(tmp_path) -> None:
     assert result.data["stdout"].strip() == "false"
 
 
-def test_quality_tool_reports_missing_toolchain_as_skipped(tmp_path) -> None:
-    """Exit 127 means the check never ran; reporting it as a failure loops the agent."""
+def test_missing_project_test_runner_is_repairable(tmp_path) -> None:
+    """npm executed; an undeclared/missing Vitest script runner is a project defect."""
     (tmp_path / "package.json").write_text(
         '{"name": "app", "scripts": {"test": "vitest run"}}', encoding="utf-8"
     )
 
     result = ToolRegistry().get("run_tests").run(tmp_path, {})
 
-    assert result.success
-    assert result.data["skipped"] is True
-    assert result.data["code"] == "TOOLCHAIN_UNAVAILABLE"
+    assert not result.success
+    assert result.data["skipped"] is False
+    assert result.data["code"] == "PROJECT_COMMAND_UNAVAILABLE"
     assert "install_dependencies" in result.data["reason"]
 
 

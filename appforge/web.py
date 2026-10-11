@@ -20,6 +20,8 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from starlette.background import BackgroundTask
+from urllib.parse import quote
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
@@ -473,13 +475,13 @@ def create_app(
         return response
 
     @app.get("/api/jobs/{job_id}/download")
-    async def download(job_id: str) -> FileResponse:
-        path, filename = resolved_manager.download_path(job_id)
-        return FileResponse(
-            path,
-            filename=filename,
+    def download(job_id: str) -> StreamingResponse:
+        stream, filename = resolved_manager.download_stream(job_id)
+        return StreamingResponse(
+            iter(lambda: stream.read(64 * 1024), b""),
             media_type="application/zip",
-            headers={"Cache-Control": "no-store"},
+            headers={"Cache-Control": "no-store", "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+            background=BackgroundTask(stream.close),
         )
 
     @app.get("/api/jobs/{job_id}/events")

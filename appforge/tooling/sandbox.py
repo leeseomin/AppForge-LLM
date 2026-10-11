@@ -4,6 +4,7 @@ import os
 import ntpath
 import platform
 import shutil
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,20 @@ class ExecutionSandboxUnavailable(RuntimeError):
 
 
 WINDOWS_SANDBOX_ERROR_PREFIX = "APPFORGE_WINDOWS_SANDBOX_UNAVAILABLE:"
+VALIDATION_OUTPUT_DIRS = ("dist", "build", "out", ".next", ".nuxt", ".cache", ".pytest_cache",
+                          ".appforge-validation", "node_modules/.vite", "node_modules/.vite-temp",
+                          "node_modules/.cache")
+
+
+def validation_output_paths(workspace: Path) -> list[Path]:
+    paths = []
+    for name in VALIDATION_OUTPUT_DIRS:
+        path = workspace / name
+        if path.is_symlink() or not _inside(path, workspace):
+            raise ExecutionSandboxUnavailable("Validation output path escapes the snapshot")
+        path.mkdir(parents=True, exist_ok=True)
+        paths.append(path)
+    return paths
 
 
 @dataclass(frozen=True)
@@ -79,12 +94,21 @@ def _macos_invocation(
     argv: list[str],
     *,
     allow_network: bool,
+    read_only: bool = False,
 ) -> SandboxInvocation:
     executable = Path("/usr/bin/sandbox-exec")
     if not executable.is_file():
         raise ExecutionSandboxUnavailable("macOS sandbox-exec is unavailable")
     profile = _MACOS_PROFILE_BASE + (_MACOS_REMOTE_NETWORK if allow_network else "")
+    if read_only:
+        profile += '\n(deny file-write* (subpath (param "WORKSPACE")))\n'
+        for path in validation_output_paths(workspace):
+            profile += f"(allow file-write* (subpath {json.dumps(str(path))}))\n"
     toolchain = _trusted_toolchain_root(workspace, argv[0])
+    if toolchain.resolve() == Path(sys.prefix).resolve() and sys.prefix != sys.base_prefix:
+        # A venv owns site-packages, but its standard library is in the base
+        # interpreter. Grant that runtime read access without broadening writes.
+        profile += f"(allow file-read* (subpath {json.dumps(str(Path(sys.base_prefix).resolve()))}))\n"
     return SandboxInvocation(
         argv=[
             str(executable),
@@ -157,6 +181,7 @@ def _linux_invocation(
     argv: list[str],
     *,
     allow_network: bool,
+    read_only: bool = False,
 ) -> SandboxInvocation:
     executable = shutil.which("bwrap")
     if not executable:
@@ -181,6 +206,10 @@ def _linux_invocation(
     ]
     for path in _existing(["/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt"]):
         command.extend(["--ro-bind", str(path), str(path)])
+    if _trusted_toolchain_root(workspace, argv[0]).resolve() == Path(sys.prefix).resolve():
+        for path in {Path(sys.prefix).resolve(), Path(sys.base_prefix).resolve()}:
+            if not any(_inside(path, Path(root)) for root in ("/usr", "/bin", "/lib", "/lib64", "/opt")):
+                command.extend(["--ro-bind", str(path), str(path)])
     for path in _existing([
         "/etc/ssl",
         "/etc/hosts",
@@ -191,12 +220,17 @@ def _linux_invocation(
     ]):
         command.extend(["--ro-bind", str(path), str(path)])
     command.extend([
-        "--bind",
+        "--ro-bind" if read_only else "--bind",
         str(workspace),
         str(workspace),
         "--bind",
         str(sandbox_home),
         str(sandbox_home),
+    ])
+    if read_only:
+        for path in validation_output_paths(workspace):
+            command.extend(["--bind", str(path), str(path)])
+    command.extend([
         "--chdir",
         str(workspace),
         "--",
@@ -211,6 +245,7 @@ def _windows_invocation(
     argv: list[str],
     *,
     allow_network: bool,
+    read_only: bool = False,
 ) -> SandboxInvocation:
     """Route untrusted code through the trusted Windows AppContainer helper."""
 
@@ -231,6 +266,7 @@ def _windows_invocation(
             f"--memory-mb={memory_mb}",
             f"--max-processes={max_processes}",
             f"--cpu-rate={cpu_rate}",
+            *(["--read-only"] if read_only else []),
             "--",
             *argv,
         ],
@@ -257,6 +293,7 @@ def sandbox_invocation(
     argv: list[str],
     *,
     allow_network: bool,
+    read_only: bool = False,
 ) -> SandboxInvocation:
     system = platform.system()
     if system == "Darwin":
@@ -265,6 +302,7 @@ def sandbox_invocation(
             sandbox_home,
             argv,
             allow_network=allow_network,
+            read_only=read_only,
         )
     if system == "Linux":
         return _linux_invocation(
@@ -272,6 +310,7 @@ def sandbox_invocation(
             sandbox_home,
             argv,
             allow_network=allow_network,
+            read_only=read_only,
         )
     if system == "Windows":
         return _windows_invocation(
@@ -279,6 +318,7 @@ def sandbox_invocation(
             sandbox_home,
             argv,
             allow_network=allow_network,
+            read_only=read_only,
         )
     raise ExecutionSandboxUnavailable(f"no secure project execution sandbox for {system}")
 

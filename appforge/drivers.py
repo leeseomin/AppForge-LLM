@@ -706,6 +706,11 @@ def _read_json_object_arg(value: Any, *, field: str = "payload") -> dict[str, An
 
 _INTERNAL_AGENT_TOOLS: list[dict[str, Any]] = [
     {
+        "name": "validate_candidate",
+        "description": "Run host-owned checks on the current source snapshot. Returns failed checks for repair in this session or a host receipt. Call before submitting implementation or verification.",
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
         "name": "submit_artifact",
         "description": "Submit one AppForge artifact JSON object. The runner validates it immediately and writes it to .appforge/artifacts/<name>.json.",
         "parameters": {
@@ -775,6 +780,7 @@ class LLMBridgeAgentDriver(AgentDriver):
         self.max_turns = int(max_turns or 60)
         self.max_usage_tokens = int(max_usage_tokens or 400_000)
         self.max_tool_seconds = 600
+        self.candidate_validator: Callable[[], dict[str, Any]] | None = None
         self._single_shot = LLMBridgeDriver(
             bridge_url=bridge_url,
             provider=provider,
@@ -850,7 +856,10 @@ class LLMBridgeAgentDriver(AgentDriver):
                 args = json.dumps(arguments, ensure_ascii=False, sort_keys=True, default=str)
             except TypeError:
                 args = str(arguments)
-            return f"{name}:{args}"
+            from .snapshots import digest, mutation_manifest
+            from .evidence import environment_digest
+            environment = environment_digest(layout.root) if name in {"run_tests", "run_build", "run_typecheck", "validate_candidate"} else ""
+            return f"{name}:{args}:{digest(mutation_manifest(layout.root))}:{environment}"
 
         def usage_total(usage: dict[str, Any]) -> int:
             for key in ("total_tokens", "totalTokens"):
@@ -1352,12 +1361,21 @@ class LLMBridgeAgentDriver(AgentDriver):
         tool_log_path: Path,
         observed_changes: set[str] | None = None,
     ) -> tuple[str, set[str], set[str], bool]:
+        from .snapshots import changed_paths, mutation_manifest
+
         started = time.monotonic()
+        before = mutation_manifest(layout.root)
         changed: set[str] = set()
         artifacts: set[str] = set()
         is_error = False
         try:
-            if name == "submit_artifact":
+            if name == "validate_candidate":
+                from .validation_service import validate_candidate
+                candidate = self.candidate_validator() if self.candidate_validator else validate_candidate(layout, timeout=self.max_tool_seconds)
+                result = ToolResult(bool(candidate["passed"]), data={
+                    key: value for key, value in candidate.items() if key not in {"snapshot_path", "manifest"}},
+                    error=None if candidate["passed"] else "Candidate validation failed; repair the reported checks")
+            elif name == "submit_artifact":
                 pipeline = load_pipeline(str(project["pipeline"]))
                 allowed_artifacts = set(pipeline.stage(stage).produces)
                 result = self._submit_artifact(
@@ -1392,6 +1410,7 @@ class LLMBridgeAgentDriver(AgentDriver):
         except Exception as exc:
             result = ToolResult(success=False, error=f"{type(exc).__name__}: {exc}")
             is_error = True
+        changed.update(changed_paths(before, mutation_manifest(layout.root)))
         result.duration_seconds = round(time.monotonic() - started, 4)
         self._append_tool_log(
             tool_log_path,
@@ -1505,6 +1524,8 @@ class LLMBridgeAgentDriver(AgentDriver):
         *,
         observed_changes: set[str],
     ) -> ToolResult:
+        from .gates import validate_stage_artifacts
+
         try:
             payload = _read_json_object_arg(arguments.get("payload"), field="payload")
             reviewable_changes = sorted(
@@ -1512,6 +1533,18 @@ class LLMBridgeAgentDriver(AgentDriver):
             )
             payload = _normalize_stage_result(stage, payload, reviewable_changes)
             jsonschema.validate(payload, _stage_result_schema())
+            project = load_project(layout)
+            stage_spec = load_pipeline(str(project["pipeline"])).stage(stage)
+            artifacts_ok, records, _ = validate_stage_artifacts(layout, stage_spec)
+            if not artifacts_ok:
+                return ToolResult(False, error="Required stage artifacts have not passed validation",
+                                  data={"code": "CANDIDATE_INVALID", "checks": records})
+            if self.candidate_validator is not None:
+                candidate = self.candidate_validator()
+                if not candidate["passed"]:
+                    return ToolResult(False, error="Candidate checks failed; repair in this session before submitting",
+                                      data={"code": "CANDIDATE_INVALID", "checks": candidate["records"]})
+                payload["verification_receipt_id"] = candidate["receipt_id"]
         except (DriverError, jsonschema.ValidationError) as exc:
             return ToolResult(success=False, error=f"stage_result schema validation failed: {getattr(exc, 'message', str(exc))}")
         path = layout.control / STAGE_RESULT_FILE_NAME

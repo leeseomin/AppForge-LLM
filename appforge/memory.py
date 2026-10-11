@@ -79,6 +79,9 @@ def render_memory_context(layout: ProjectLayout, *, current_stage: str) -> str:
                 name = check.get("name") if isinstance(check, dict) else None
                 reason = check.get("reason") if isinstance(check, dict) else None
                 lines.append(f"  - failed {name or 'check'}: {truncate(str(reason or ''), 240)}")
+            for finding in (item.get("review") or {}).get("findings", [])[:8]:
+                if finding.get("status", "open") == "open":
+                    lines.append(f"  - review {finding.get('severity')}: {truncate(str(finding.get('finding') or ''), 600)}")
         sections.append("## Stage memory ledger\n" + "\n".join(lines))
 
     for artifact, title in (
@@ -120,6 +123,9 @@ def failure_signature(failure: dict[str, Any]) -> str:
                 "name": item.get("name"),
                 "required": item.get("required"),
                 "reason": item.get("reason"),
+                "evidence": _normalize_failure_evidence(item.get("evidence") or item.get("log_tail")),
+                "failed_test_ids": item.get("failed_test_ids"),
+                "checks": item.get("checks"),
             }
             for item in failure.get("failed_checks", [])
             if isinstance(item, dict)
@@ -142,3 +148,14 @@ def failure_signature(failure: dict[str, Any]) -> str:
         "submitted_artifacts": sorted(failure.get("submitted_artifacts") or []),
     }
     return json.dumps(compact, ensure_ascii=False, sort_keys=True)
+
+
+def _normalize_failure_evidence(value: Any) -> str:
+    text = json.dumps(value, sort_keys=True, ensure_ascii=False)
+    text = re.sub(r"(?:\x1b|\\u001b)\[[0-?]*[ -/]*[@-~]", "", text)
+    text = re.sub(r"\.appforge-control[/\\]+[^/\\]+[/\\]+snapshots[/\\]+[a-f0-9]{32}", "<snapshot>", text)
+    text = re.sub(r"\.appforge-validation[/\\]+[a-f0-9]{32}\.(?:json|xml)", "<test-report>", text)
+    text = re.sub(r"\b\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:\.\d+)?Z?", "<time>", text)
+    text = re.sub(r"(?:/private)?/tmp/[^/\s\"']+", "<tmp>", text)
+    text = re.sub(r"\b\d+(?:\.\d+)?(?:ms| seconds|s)\b", "<duration>", text)
+    return text

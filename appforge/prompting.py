@@ -59,7 +59,7 @@ def _artifact_contracts(stage: StageSpec) -> str:
     for artifact in stage.produces:
         schema = load_artifact_schema(artifact)
         chunks.append(
-            f"### `{artifact}`\nWrite: `.appforge/artifacts/{artifact}.json`\n"
+            f"### `{artifact}`\nLogical output: `.appforge/artifacts/{artifact}.json` (use the driver submission contract below)\n"
             f"Schema:\n```json\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n```"
         )
     return "\n\n".join(chunks)
@@ -188,15 +188,13 @@ def _environment_section(layout: ProjectLayout, project: dict[str, Any]) -> str:
         lines.append(
             "- Dependency installation is off. Do NOT attempt `npm install`, `pip install`, or a "
             "workaround for it. Report affected test/build checks as unverified with "
-            "`\"passed\": null` and state the reason once; a blocked capability is not a defect "
+            "`\"passed\": false` and state the unavailable capability once; a blocked capability is not a defect "
             "to repair and retrying it will not change the result."
         )
-    if not allow_destructive:
-        lines.append(
-            "- `run_command` works for non-destructive commands. It executes argv directly, so "
-            "shell syntax (pipes, `&&`, globs, redirection) is unavailable — pass a single program "
-            "and its arguments."
-        )
+    lines.append(
+        "- `run_command` executes argv directly. Shell syntax (pipes, `&&`, globs, redirection) "
+        "requires an explicit shell invocation allowed by policy; pass a single program and its arguments."
+    )
     return "\n".join(lines)
 
 
@@ -281,6 +279,42 @@ def _relevant_file_contents(
     return "\n\n".join(chunks) or "<no directly relevant readable files found within budget>"
 
 
+def _submission_instruction(project: dict[str, Any], stage: StageSpec) -> str:
+    if project.get("driver", "llm-bridge-agent") == "llm-bridge-agent" and stage.name in {"implementation", "verification", "fix", "regression"}:
+        return ("Use the exposed tools directly. Submit artifacts with submit_artifact, run validate_candidate "
+                "for web implementation/verification, repair failed checks, then call submit_stage_result. "
+                "Python writes managed files, including .appforge/stage-result.json. Do not write those paths yourself.")
+    return ("Return the requested JSON envelope with files, artifacts, and stage_result. "
+            "Python applies the files and records; do not invoke a CLI or claim commands ran without tool evidence.")
+
+
+def _shared_stage_context(layout: ProjectLayout, project: dict[str, Any], stage: StageSpec) -> str:
+    from .evidence import read_host
+    candidate = read_host(layout.root, "candidate.json") or {}
+    measured = {key: candidate[key] for key in ("passed", "status", "execution_ids", "acceptance_results", "records") if key in candidate}
+    return f"""## Execution environment
+{_environment_section(layout, project)}
+
+## Stage review focus
+{chr(10).join(f'- {item}' for item in stage.review_focus)}
+
+## Stage success criteria
+{chr(10).join(f'- {item}' for item in stage.success_criteria)}
+
+## Relevant stack and domain knowledge
+{_relevant_knowledge(layout, str(project['prompt']))}
+
+## Persistent engineering memory
+{render_memory_context(layout, current_stage=stage.name)}
+
+## Driver submission contract
+{_submission_instruction(project, stage)}
+
+## Last host candidate evidence (rerun validate_candidate after source changes)
+{json.dumps(measured, ensure_ascii=False)}
+"""
+
+
 def build_repair_stage_prompt(
     layout: ProjectLayout,
     *,
@@ -301,7 +335,7 @@ def build_repair_stage_prompt(
         if repair_kind != "regenerate"
         else "The previous repair path repeated the same failure. Regenerate the affected implementation strategy, not merely the same patch."
     )
-    return f"""# OpenAppForge v6 targeted repair packet
+    return f"""# OpenAppForge targeted repair packet
 
 You are repairing one failed stage of a governed software-production pipeline.
 {strategy_instruction}
@@ -313,6 +347,8 @@ You are repairing one failed stage of a governed software-production pipeline.
 - Mode: `{project['mode']}`
 - Stage: `{stage.name}` (attempt {attempt})
 - Stage purpose: {stage.description}
+
+{_shared_stage_context(layout, project, stage)}
 
 ## Non-negotiable operating contract
 {autonomy}
@@ -347,7 +383,7 @@ Use this as evidence, not as prose to ignore. Do not report completion until it 
 {_artifact_contracts(stage)}
 
 ## Required completion record
-Before finishing, write `.appforge/{STAGE_RESULT_FILE_NAME}` matching this schema:
+Submit the completion record through the driver contract above, matching this schema:
 ```json
 {json.dumps(stage_result_schema, ensure_ascii=False, indent=2)}
 ```
@@ -356,7 +392,7 @@ Before finishing, write `.appforge/{STAGE_RESULT_FILE_NAME}` matching this schem
 - Prefer the smallest targeted edit that resolves the actual failure.
 - If a check failed, run or explain the exact check before claiming it passed.
 - If you cannot execute a check, mark it as unverified rather than successful.
-- Preserve unrelated user work and avoid rewriting the entire project unless `next_retry_mode` is `regenerate`.
+- Preserve unrelated user work. Regenerate only the failing implementation strategy, never the entire project.
 """
 
 def build_stage_prompt(
@@ -385,7 +421,6 @@ def build_stage_prompt(
     engineering_spine = load_skill("meta/engineering-spine.md")
     stage_result_schema = read_json(Path(__file__).resolve().parent / "resources" / "schemas" / "stage-result.schema.json", {})
     tool_info = {name: ToolRegistry().get(name).info() for name in stage.tools if name in ToolRegistry().names()}
-    environment_section = _environment_section(layout, project)
     failure_section = ""
     if previous_failure:
         failure_section = (
@@ -407,8 +442,7 @@ Work directly in the current workspace. Do not merely describe the work: create 
 - Stage: `{stage.name}` (attempt {attempt})
 - Stage purpose: {stage.description}
 
-## Execution environment
-{environment_section}
+{_shared_stage_context(layout, project, stage)}
 
 ## Non-negotiable operating contract
 {autonomy}
@@ -425,20 +459,11 @@ Work directly in the current workspace. Do not merely describe the work: create 
 ## Checkpoint protocol
 {checkpoint}
 
-## Stage review focus
-{chr(10).join(f'- {item}' for item in stage.review_focus) or '- Use the stage skill.'}
-
-## Stage success criteria
-{chr(10).join(f'- {item}' for item in stage.success_criteria) or '- Meet the artifact contract and leave no known blocker.'}
-
 ## Available AppForge tools
-You may call these through `appforge tool run <name> --project . --input '<json>'` when useful.
+Use these according to the driver submission contract above.
 ```json
 {json.dumps(tool_info, ensure_ascii=False, indent=2)}
 ```
-
-## Relevant stack and domain knowledge
-{_relevant_knowledge(layout, str(project['prompt']))}
 
 ## Existing workspace tree
 {_workspace_tree(layout)}
@@ -449,14 +474,11 @@ You may call these through `appforge tool run <name> --project . --input '<json>
 ## Prior accepted artifacts
 {_prior_artifacts(layout, pipeline, stage.name)}
 
-## Persistent engineering memory
-{render_memory_context(layout, current_stage=stage.name)}
-
 ## Required stage artifacts
 {_artifact_contracts(stage)}
 
 ## Required completion record
-Before finishing, write `.appforge/{STAGE_RESULT_FILE_NAME}` matching this schema:
+Submit the completion record through the driver contract above, matching this schema:
 ```json
 {json.dumps(stage_result_schema, ensure_ascii=False, indent=2)}
 ```

@@ -8,6 +8,8 @@ from typing import Any
 
 from .models import ProjectLayout, StageSpec
 from .util import redact, truncate
+from .projects import load_project
+from .snapshots import source_manifest
 
 REVIEW_STAGES = {"implementation", "verification", "fix", "regression"}
 
@@ -37,15 +39,27 @@ def independent_llm_review(
     from . import llm_bridge
 
     files_changed = [str(item) for item in stage_result.get("files_changed") or []]
-    evidence = _collect_review_evidence(layout, files_changed)
+    review_paths = files_changed or list(source_manifest(layout.root))
+    evidence = _collect_review_evidence(layout, review_paths)
+    project = load_project(layout)
+    specifications = {}
+    for name in ("requirements_spec", "engineering_spec", "change_plan", "workflow_spec"):
+        path = layout.artifacts / f"{name}.json"
+        if path.is_file():
+            specifications[name] = redact(truncate(path.read_text(encoding="utf-8"), 20_000))
     prompt = {
         "task": "Review the stage result independently. Focus on correctness, missing requirements, unsafe behavior, and false success claims.",
         "stage": stage.name,
+        "original_request": project.get("prompt"),
+        "accepted_specifications": specifications,
+        "review_focus": list(stage.review_focus),
         "success_criteria": list(stage.success_criteria),
         "stage_result": stage_result,
         "gate_records": records,
         "files_changed": files_changed[:80],
         "file_evidence": evidence,
+        "coverage": {"requested_files": len(review_paths), "included_files": len(evidence),
+                     "note": "File contents and specifications may be truncated; do not claim complete coverage."},
         "verdict_contract": {
             "verdict": "pass | concerns | block",
             "findings": [
@@ -76,6 +90,8 @@ def independent_llm_review(
             verdict = "concerns"
         findings = payload.get("findings") if isinstance(payload.get("findings"), list) else []
         normalized_findings = [_normalize_finding(item) for item in findings[:20] if isinstance(item, dict)]
+        if any(item["severity"] == "critical" for item in normalized_findings):
+            verdict = "block"
         return {
             "enabled": True,
             "skipped": False,

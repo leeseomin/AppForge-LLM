@@ -310,6 +310,10 @@ ensure_python_env() {
   if [[ ! -x "$APPFORGE_BIN" ]]; then
     die ".venv/bin/appforge is missing or not executable. Re-run without APPFORGE_SKIP_INSTALL or install the project with .venv/bin/python -m pip install -e '.[dev]'."
   fi
+  if ! is_true "${APPFORGE_SKIP_INSTALL:-}"; then
+    log "Preparing Chromium for AppForge browser verification."
+    "$ROOT_DIR/.venv/bin/python" -m playwright install chromium --only-shell || die "Chromium installation failed; browser verification cannot run."
+  fi
 }
 
 ensure_frontend() {

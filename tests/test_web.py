@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import json
 import queue
 import re
@@ -711,6 +712,7 @@ def test_retry_failed_stage_completes_remaining_pipeline_before_packaging(
     assert "handoff" in driver.calls
 
 
+@pytest.mark.skipif(not os.environ.get("APPFORGE_RUN_BROWSER_TESTS"), reason="Requires installed Chromium; set APPFORGE_RUN_BROWSER_TESTS=1")
 def test_guided_approval_is_consumed_by_only_the_current_stage(
     tmp_path: Path,
     monkeypatch,
@@ -766,6 +768,10 @@ def test_archive_is_regenerated_from_current_workspace(
     )
     source = layout.root / "app.txt"
     source.write_text("old\n", encoding="utf-8")
+    # A managed archive now requires actual tests/build, even for a prototype.
+    (layout.root / "package.json").write_text(json.dumps({"scripts": {"test": "node --test", "build": "node build.cjs"}}))
+    (layout.root / "build.cjs").write_text("require('fs').mkdirSync('dist',{recursive:true});")
+    (layout.root / "content.test.cjs").write_text("require('node:test').test('source is present',()=>require('node:assert').ok(require('fs').readFileSync('app.txt','utf8').trim()));")
 
     first = manager._ensure_archive(layout)
     source.write_text("new\n", encoding="utf-8")

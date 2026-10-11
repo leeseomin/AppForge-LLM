@@ -192,6 +192,7 @@ export interface JobPayload {
   events: JobEvent[];
   error: ApiErrorPayload | null;
   download: DownloadState;
+  verification?: { status: 'verified' | 'unverified' | 'legacy_unverified' | 'stale'; profile?: string; verified_at?: string; criteria_verified?: number };
   preview?: PreviewState | null;
   progress: number;
   terminal: boolean;

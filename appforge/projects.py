@@ -7,6 +7,7 @@ from .constants import DEFAULT_SAFETY, PROJECT_FILE_NAME, SAFETY_KEYS, STATE_FIL
 from .models import ProjectLayout
 from .pipelines import auto_select_pipeline, load_pipeline
 from .util import atomic_write_json, atomic_write_text, read_json, slugify, utc_now
+from .evidence import read_host, write_host
 
 
 def resolve_safety(overrides: dict[str, Any] | None = None) -> dict[str, bool]:
@@ -81,6 +82,7 @@ def initialize_project(
         "safety": resolve_safety(safety),
     }
     atomic_write_json(layout.control / PROJECT_FILE_NAME, project)
+    write_host(layout.root, PROJECT_FILE_NAME, project)
     atomic_write_json(
         layout.control / STATE_FILE_NAME,
         {
@@ -137,7 +139,12 @@ def find_project(start: Path) -> ProjectLayout:
 
 
 def load_project(layout: ProjectLayout) -> dict[str, Any]:
-    data = read_json(layout.control / PROJECT_FILE_NAME)
+    data = read_host(layout.root, PROJECT_FILE_NAME)
+    if data is None:
+        data = read_json(layout.control / PROJECT_FILE_NAME)
+        if isinstance(data, dict):
+            # Adopt legacy configuration once; old completion records stay untrusted.
+            write_host(layout.root, PROJECT_FILE_NAME, data)
     if not isinstance(data, dict):
         raise ProjectError(f"Invalid project metadata at {layout.control / PROJECT_FILE_NAME}")
     # Projects created before a safety key existed must still get a defined posture
@@ -151,4 +158,5 @@ def update_project(layout: ProjectLayout, updates: dict[str, Any]) -> dict[str, 
     data = load_project(layout)
     data.update(updates)
     atomic_write_json(layout.control / PROJECT_FILE_NAME, data)
+    write_host(layout.root, PROJECT_FILE_NAME, data)
     return data

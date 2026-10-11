@@ -82,6 +82,7 @@ if os.name != "nt":
         memory_mb: int = 4096,
         max_processes: int = 64,
         cpu_rate: int = 8000,
+        read_only: bool = False,
     ) -> int:
         del workspace, sandbox_home, command, allow_network, memory_mb, max_processes, cpu_rate
         raise ExecutionSandboxUnavailable("the native AppContainer launcher requires Windows")
@@ -460,8 +461,12 @@ else:
                 f"could not grant AppContainer {permission} access to {resolved}"
             )
 
-    def _prepare_acl(workspace: Path, sandbox_home: Path, sid: str) -> None:
-        _grant_acl(workspace, sid, "M")
+    def _prepare_acl(workspace: Path, sandbox_home: Path, sid: str, *, read_only: bool = False) -> None:
+        from .sandbox import validation_output_paths
+        outputs = validation_output_paths(workspace) if read_only else []
+        _grant_acl(workspace, sid, "RX" if read_only else "M")
+        for output in outputs:
+            _grant_acl(output, sid, "M")
         _grant_acl(sandbox_home, sid, "M")
         for root in _approved_toolchain_roots(workspace):
             _grant_acl(root, sid, "RX")
@@ -779,6 +784,7 @@ else:
         memory_mb: int = 4096,
         max_processes: int = 64,
         cpu_rate: int = 8000,
+        read_only: bool = False,
     ) -> int:
         workspace = workspace.resolve()
         sandbox_home = sandbox_home.resolve()
@@ -797,7 +803,7 @@ else:
         sid = _create_or_derive_appcontainer_sid(workspace)
         try:
             sid_string = _sid_to_string(sid)
-            _prepare_acl(workspace, sandbox_home, sid_string)
+            _prepare_acl(workspace, sandbox_home, sid_string, read_only=read_only)
             try:
                 application, command_line = _application_and_command_line(
                     workspace,

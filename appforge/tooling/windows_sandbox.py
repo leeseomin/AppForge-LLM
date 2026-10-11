@@ -23,6 +23,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--memory-mb", type=int, default=4096)
     parser.add_argument("--max-processes", type=int, default=64)
     parser.add_argument("--cpu-rate", type=int, default=8000)
+    parser.add_argument("--read-only", action="store_true")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     parsed = parser.parse_args(argv)
     if parsed.command[:1] == ["--"]:
@@ -49,6 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         memory_mb=parsed.memory_mb,
         max_processes=parsed.max_processes,
         cpu_rate=parsed.cpu_rate,
+        read_only=parsed.read_only,
     )
 
 

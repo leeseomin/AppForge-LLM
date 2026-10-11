@@ -61,6 +61,18 @@ def cohere_planning_artifact(
             }
             for requirement_id in requirement_ids
         ]
+        project = json.loads((workspace / ".appforge" / "project.json").read_text())
+        if project["pipeline"] == "web-app":
+            payload["verification_profile"] = "javascript-web"
+            payload["browser_checks"] = []
+            for item in payload["functional_requirements"]:
+                item["acceptance_criteria"] = ["Click Add increments the counter"]
+                payload["browser_checks"].append({"criterion_id": item["id"] + "/AC-01", "actions": [{"kind": "click", "selector": "#add"}],
+                                                  "assertions": [{"kind": "text", "selector": "#count", "expected": "1"}]})
+            for item in payload["non_functional_requirements"]:
+                item["measure"] = "Counter output is visible"
+                payload["browser_checks"].append({"criterion_id": item["id"] + "/AC-01", "actions": [],
+                                                  "assertions": [{"kind": "visible", "selector": "#count"}]})
     elif artifact == "workflow_spec":
         for index, item in enumerate(payload["steps"], start=1):
             item["id"] = f"STEP-{index:03d}"
@@ -112,10 +124,16 @@ def cohere_planning_artifact(
             }
             for item in payload["loops"]
         ]
+    elif artifact == "verification_report":
+        spec = json.loads((workspace / ".appforge" / "artifacts" / "requirements_spec.json").read_text())
+        payload["results"] = [{"check": "Fixture tests and build", "passed": True, "evidence": "Runner executes the fixture checks"}]
+        payload["acceptance_results"] = [{"requirement": item["id"], "passed": True, "evidence": "Fixture acceptance"}
+                                         for key in ("functional_requirements", "non_functional_requirements") for item in spec[key]]
     return payload
 
 
 def write_fixture_app(workspace: Path) -> None:
+    (workspace / "index.html").write_text('<button id="add" onclick="count.textContent=Number(count.textContent)+1">Add</button><output id="count">0</output>')
     (workspace / "src").mkdir(exist_ok=True)
     (workspace / "test").mkdir(exist_ok=True)
     (workspace / "src" / "index.js").write_text(
@@ -138,7 +156,7 @@ def write_fixture_app(workspace: Path) -> None:
             "build": (
                 "node -e \"const fs=require('fs');"
                 "fs.mkdirSync('dist',{recursive:true});"
-                "fs.copyFileSync('src/index.js','dist/index.js')\""
+                "fs.copyFileSync('src/index.js','dist/index.js');fs.copyFileSync('index.html','dist/index.html')\""
             ),
         },
     }
@@ -153,7 +171,7 @@ def write_fixture_app(workspace: Path) -> None:
 
 def main() -> int:
     # Consume the packet so the parent never encounters a closed stdin pipe.
-    sys.stdin.read()
+    prompt = sys.stdin.read()
     workspace = Path(sys.argv[1]).resolve()
     stage = sys.argv[2]
     framework_root = Path(sys.argv[3]).resolve()
@@ -181,6 +199,19 @@ def main() -> int:
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     payload = sample(schema, artifact)
     payload = cohere_planning_artifact(workspace, artifact, payload)
+    if artifact == "verification_report" and json.loads((workspace / ".appforge" / "project.json").read_text())["pipeline"] == "web-app":
+        marker = "## Last host candidate evidence (rerun validate_candidate after source changes)"
+        measured, _ = json.JSONDecoder().raw_decode(prompt.split(marker, 1)[1].lstrip())
+        payload["schema_version"] = "2.0"
+        payload["execution_ids"] = measured["execution_ids"]
+        payload["test_commands"] = [record["name"] for record in measured["records"]]
+        payload["results"] = [{"check": record["name"], "passed": True, "evidence": "Host execution",
+                               "evidence_ids": [record.get("execution_id") or record["result"]["data"]["execution_id"]]}
+                              for record in measured["records"]]
+        browser_id = next(record["execution_id"] for record in measured["records"] if record["name"] == "browser_acceptance")
+        payload["acceptance_results"] = [{"requirement": case["criterion_id"].split("/")[0], "criterion_id": case["criterion_id"],
+                                          "passed": True, "evidence": "Observed browser criterion", "evidence_ids": [browser_id]}
+                                         for case in measured["acceptance_results"]]
     artifact_dir = workspace / ".appforge" / "artifacts"
     artifact_dir.mkdir(parents=True, exist_ok=True)
     (artifact_dir / f"{artifact}.json").write_text(

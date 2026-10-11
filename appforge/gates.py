@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from typing import Any
 
 import jsonschema
@@ -196,14 +197,122 @@ def validate_artifact_semantics(
     payload: dict[str, Any],
 ) -> list[str]:
     if name == "requirements_spec":
-        return _requirements_semantics(payload)
+        return _requirements_semantics(payload) + _browser_contract_errors(layout, payload)
     if name == "workflow_spec":
         return _workflow_semantics(layout, payload)
     if name == "memory_spec":
         return _memory_semantics(layout, payload)
     if name == "loop_spec":
         return _loop_semantics(layout, payload)
+    if name == "engineering_spec":
+        errors: list[str] = []
+        requirements = _object_items(payload, "requirements")
+        _unique_ids(requirements, field="id", label="requirement", errors=errors)
+        for item in requirements:
+            if not item.get("acceptance") or any(not str(value).strip() for value in item["acceptance"]):
+                errors.append(f"requirement {item.get('id')} has empty acceptance criteria")
+        return errors + _browser_contract_errors(layout, payload)
+    if name in {"verification_report", "regression_report"}:
+        return verification_report_errors(layout, payload)
     return []
+
+
+def _browser_contract_errors(layout: ProjectLayout, payload: dict[str, Any]) -> list[str]:
+    from .browser_checks import contract_errors
+    from .projects import load_project
+    project = load_project(layout)
+    if project.get("pipeline") not in {"web-app", "web-app-lite"}:
+        return []
+    errors = contract_errors(payload)
+    if payload.get("verification_profile") not in {"static-web", "javascript-web", "typescript-web"}:
+        errors.append("Accepted web spec must declare verification_profile")
+    return errors
+
+
+def verification_report_errors(layout: ProjectLayout, payload: dict[str, Any]) -> list[str]:
+    """Completion semantics; failed reports remain valid, writable artifacts."""
+    errors: list[str] = []
+    if payload.get("passed") is not True:
+        errors.append("Verification did not pass")
+    if payload.get("failures"):
+        errors.append("Verification contains unresolved failures")
+    from .projects import load_project
+    if load_project(layout).get("pipeline") in {"web-app", "web-app-lite"}:
+        return errors + _verified_web_report_errors(layout, payload)
+    for key in ("results", "acceptance_results"):
+        for index, item in enumerate(_object_items(payload, key)):
+            value = item.get("passed")
+            if value is not True and value not in ("true", "passed"):
+                errors.append(f"{key}[{index}] is failed or unverified")
+    if "acceptance_results" in payload:
+        spec = read_json(layout.artifacts / "engineering_spec.json")
+        if isinstance(spec, dict):
+            required = _unique_ids(_object_items(spec, "requirements"), field="id", label="requirement", errors=errors)
+        else:
+            spec = _read_artifact_object(layout, "requirements_spec", errors)
+            required = _requirement_ids(spec, errors)
+        reported = _unique_ids(_object_items(payload, "acceptance_results"), field="requirement",
+                               label="acceptance result", errors=errors)
+        for identifier in sorted(reported - required):
+            errors.append(f"unknown requirement {identifier!r}")
+        for identifier in sorted(required - reported):
+            errors.append(f"missing requirement result {identifier!r}")
+    return errors
+
+
+def _verified_web_report_errors(layout: ProjectLayout, payload: dict[str, Any]) -> list[str]:
+    from .evidence import read_host
+    from .validation_service import current_receipt
+
+    if payload.get("schema_version") != "2.0":
+        return ["New web verification requires report schema_version 2.0 and current host execution IDs"]
+    receipt = current_receipt(layout)
+    if not receipt:
+        return ["Run validate_candidate successfully on the current source before submitting verification"]
+    errors: list[str] = []
+    supplied = payload.get("execution_ids", [])
+    required_ids = set(supplied)
+    if not required_ids or len(supplied) != len(required_ids):
+        return ["Report requires unique host execution IDs"]
+    executions = {identifier: read_host(layout.root, identifier + ".json") for identifier in required_ids}
+    for record in executions.values():
+        if (not record or record.get("status") != "passed"
+                or any(record.get(key) != receipt.get(key) for key in ("input_snapshot_id", "requirements_digest", "policy_digest"))):
+            return ["Report execution IDs do not match the current source, requirements and policy"]
+    required_gates = {record["name"] for record in receipt["records"]}
+    if {record["gate_id"] for record in executions.values()} != required_gates:
+        errors.append("Report execution IDs must cover every required candidate gate")
+    commands = {record["gate_id"] for record in executions.values() if record}
+    commands.update(shlex.join(record["result"]["command"]) for record in executions.values()
+                    if record and record["result"].get("command"))
+    for command in payload.get("test_commands", []):
+        try:
+            canonical = shlex.join(shlex.split(command))
+        except ValueError:
+            canonical = ""
+        if canonical not in commands:
+            errors.append(f"Command has no current execution evidence: {command}")
+    expected = {item["criterion_id"] for item in receipt["acceptance_results"]}
+    reported = _unique_ids(_object_items(payload, "acceptance_results"), field="criterion_id", label="criterion", errors=errors)
+    if reported != expected:
+        errors.append("Acceptance criterion IDs must exactly match the host browser results")
+    for item in _object_items(payload, "results") + _object_items(payload, "acceptance_results"):
+        if item.get("passed") is not True:
+            errors.append("Report v2 results require boolean true backed by host evidence")
+        references = item.get("evidence_ids", [])
+        if not references or not set(references).issubset(required_ids):
+            errors.append("Every passing result requires current host evidence_ids")
+            continue
+        criterion = item.get("criterion_id")
+        if criterion:
+            if item.get("requirement") != criterion.rsplit("/AC-", 1)[0]:
+                errors.append(f"Requirement does not own criterion {criterion}")
+            observed = {case["criterion_id"] for identifier in references
+                        for case in (executions[identifier]["result"]["data"].get("acceptance_results") or [])
+                        if case.get("status") == "passed"}
+            if criterion not in observed:
+                errors.append(f"Evidence does not observe criterion {criterion}")
+    return errors
 
 
 def validate_stage_result(layout: ProjectLayout, stage: StageSpec) -> tuple[bool, dict[str, Any], str | None]:
@@ -256,6 +365,12 @@ def run_declared_gates(
     allow_destructive: bool,
     allow_dependency_install: bool = True,
 ) -> tuple[bool, list[dict[str, Any]]]:
+    from .validation_service import WEB_PIPELINES, validate_candidate
+    from .projects import load_project
+    project = load_project(layout)
+    if project.get("pipeline") in WEB_PIPELINES and stage.name in {"implementation", "verification"}:
+        candidate = validate_candidate(layout)
+        return bool(candidate["passed"]), candidate["records"]
     registry = ToolRegistry()
     all_passed = True
     records: list[dict[str, Any]] = []

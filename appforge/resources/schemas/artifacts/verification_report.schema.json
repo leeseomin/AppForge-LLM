@@ -15,7 +15,10 @@
   "properties": {
     "schema_version": {
       "type": "string",
-      "const": "1.0"
+      "enum": [
+        "1.0",
+        "2.0"
+      ]
     },
     "summary": {
       "type": "string",
@@ -47,12 +50,23 @@
             "minLength": 1
           },
           "passed": {
-            "type": "string",
-            "minLength": 1
+            "type": [
+              "boolean",
+              "string"
+            ]
           },
           "evidence": {
             "type": "string",
             "minLength": 1
+          },
+          "evidence_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "pattern": "^exec-[a-f0-9]{32}$"
+            },
+            "uniqueItems": true
           }
         },
         "additionalProperties": true
@@ -74,10 +88,25 @@
             "minLength": 1
           },
           "passed": {
+            "type": [
+              "boolean",
+              "string"
+            ]
+          },
+          "evidence": {
             "type": "string",
             "minLength": 1
           },
-          "evidence": {
+          "evidence_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "pattern": "^exec-[a-f0-9]{32}$"
+            },
+            "uniqueItems": true
+          },
+          "criterion_id": {
             "type": "string",
             "minLength": 1
           }
@@ -105,8 +134,59 @@
         "minLength": 1
       },
       "minItems": 0
+    },
+    "execution_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^exec-[a-f0-9]{32}$"
+      },
+      "uniqueItems": true
     }
   },
   "additionalProperties": true,
-  "title": "OpenAppForge verification_report"
+  "title": "OpenAppForge verification_report",
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": "2.0"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "execution_ids"
+        ],
+        "properties": {
+          "results": {
+            "items": {
+              "required": [
+                "evidence_ids"
+              ],
+              "properties": {
+                "passed": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "acceptance_results": {
+            "items": {
+              "required": [
+                "evidence_ids",
+                "criterion_id"
+              ],
+              "properties": {
+                "passed": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

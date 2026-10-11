@@ -6,6 +6,8 @@ from typing import Any
 from .constants import STATE_FILE_NAME
 from .models import PipelineSpec, ProjectLayout
 from .util import atomic_write_json, read_json, utc_now
+from .evidence import POLICY_VERSION, artifact_digests, policy_digest, read_host, write_host
+from .snapshots import digest, source_manifest
 
 VALID_STATUSES = {"in_progress", "completed", "awaiting_human", "failed", "blocked"}
 
@@ -43,9 +45,23 @@ def write_checkpoint(
         "review": review or {},
         "driver": driver or {},
         "metadata": metadata or {},
+        "verification_policy": POLICY_VERSION,
+        "policy_digest": policy_digest(pipeline),
+        "source_snapshot": digest(source_manifest(layout.root)),
+        "artifact_digests": artifact_digests(layout.root, pipeline.stage(stage).produces),
     }
     path = checkpoint_path(layout, stage)
+    # Retain review history, but a rerun must never reuse later completions.
+    if status == "in_progress":
+        index = [item.name for item in pipeline.stages].index(stage)
+        for later in pipeline.stages[index + 1:]:
+            stale = read_checkpoint(layout, later.name)
+            if stale:
+                stale = {**stale, "status": "stale", "invalidated_by": stage}
+                atomic_write_json(checkpoint_path(layout, later.name), stale)
+                write_host(layout.root, checkpoint_path(layout, later.name).name, stale)
     atomic_write_json(path, payload)
+    write_host(layout.root, path.name, payload)
     _update_state(layout, pipeline, stage, status)
     return path
 
@@ -55,20 +71,50 @@ def read_checkpoint(layout: ProjectLayout, stage: str) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+def checkpoint_is_current(layout: ProjectLayout, pipeline: PipelineSpec, stage: str,
+                          *, check_source: bool = False) -> bool:
+    cp = read_checkpoint(layout, stage)
+    return bool(cp and cp == read_host(layout.root, checkpoint_path(layout, stage).name)
+                and cp.get("pipeline_version") == pipeline.version
+                and cp.get("policy_digest") == policy_digest(pipeline)
+                and cp.get("artifact_digests") == artifact_digests(layout.root, pipeline.stage(stage).produces)
+                and (not check_source or cp.get("source_snapshot") == digest(source_manifest(layout.root))))
+
+
 def completed_stages(layout: ProjectLayout, pipeline: PipelineSpec) -> list[str]:
     completed: list[str] = []
     for stage in pipeline.stages:
         cp = read_checkpoint(layout, stage.name)
-        if cp and cp.get("status") == "completed":
+        if cp and cp.get("status") == "completed" and checkpoint_is_current(layout, pipeline, stage.name):
             completed.append(stage.name)
+        else:
+            break
     return completed
 
 
 def next_stage(layout: ProjectLayout, pipeline: PipelineSpec) -> str | None:
     completed = set(completed_stages(layout, pipeline))
+    ordered = [stage for stage in pipeline.stages if stage.name in completed]
+    if ordered:
+        latest = read_checkpoint(layout, ordered[-1].name) or {}
+        if latest.get("source_snapshot") != digest(source_manifest(layout.root)):
+            for stage in ordered:
+                if stage.name in {"verification", "regression"}:
+                    return stage.name
     for stage in pipeline.stages:
         if stage.name not in completed:
             return stage.name
+    if pipeline.name in {"web-app", "web-app-lite"}:
+        from .validation_service import archive_verification, current_receipt
+        if not current_receipt(layout):
+            return "verification"
+        for stage in reversed(pipeline.stages):
+            cp = read_checkpoint(layout, stage.name) or {}
+            for gate in cp.get("gates", []):
+                if gate.get("name") == "archive_workspace":
+                    archive = (gate.get("result") or {}).get("data", {}).get("archive")
+                    if not archive or archive_verification(layout, layout.root / archive).get("status") != "verified":
+                        return stage.name
     return None
 
 

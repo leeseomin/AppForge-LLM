@@ -6,6 +6,10 @@ A local AI app builder that turns one prompt into a planned, tested, and preview
 
 ## Requirements
 
+Browser verification requires Playwright Chromium. The launchers install it with the Python dependencies; for a manual setup run `uv sync --extra dev` and `.venv/bin/python -m playwright install chromium --only-shell` (Windows: `.venv\Scripts\python.exe`). Linux also needs Playwright's system browser dependencies and bubblewrap for project commands.
+
+Web verification currently covers local HTML/CSS/JavaScript and static production bundles, including TypeScript type checks. Accepted specs must declare a verification profile and browser action/assertion cases. Missing browser runtimes, zero executed tests, failed criteria, or changed ZIP bytes prevent verified downloads. Server/SSR and external-service behavior require additional harnesses and are not covered by the local browser profile.
+
 - Python 3.11+
 - Node.js and npm
 - Bun

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
+import time
 from typing import Any
 
 from appforge.models import ToolResult
@@ -8,18 +10,10 @@ from appforge.models import ToolResult
 from ..base import Tool
 from ..command import CommandPolicy, run_command
 from ..detection import quality_commands
-
-
-_TOOLCHAIN_MISSING_MARKERS = (
-    "command not found",
-    "not found: ",
-    "no such file or directory",
-    "is not recognized as an internal or external command",
-    "cannot find module",
-    "module not found",
-    "err_module_not_found",
-    "npm error enoent",
-)
+from ..command import normalize_command
+from ..test_results import reporter_command, test_summary
+from appforge.evidence import frozen_workspace, record_execution
+from appforge.snapshots import digest, source_manifest
 
 
 def _toolchain_missing_reason(workspace: Path, result: ToolResult) -> str | None:
@@ -32,10 +26,7 @@ def _toolchain_missing_reason(workspace: Path, result: ToolResult) -> str | None
     if data.get("timed_out"):
         return None
     returncode = data.get("returncode")
-    combined = f"{data.get('stdout') or ''}\n{data.get('stderr') or ''}".casefold()
-    if returncode == 127 or any(marker in combined for marker in _TOOLCHAIN_MISSING_MARKERS):
-        if (workspace / "package.json").exists() and not (workspace / "node_modules").exists():
-            return "Node dependencies are not installed; run install_dependencies before this check."
+    if data.get("code") == "COMMAND_RUNNER_UNAVAILABLE" or returncode == 127:
         return "The command runner is not installed in this environment, so the check never executed."
     return None
 
@@ -52,27 +43,72 @@ class _QualityTool(Tool):
                 success=True,
                 data={"skipped": True, "reason": f"No {self.command_key} command detected", "detected_commands": commands},
             )
+        before = digest(source_manifest(workspace))
+        command = normalize_command(command)
+        reporter, report = "unsupported", None
+        if self.command_key == "tests":
+            command, reporter, report = reporter_command(workspace, command)
+        started_ns = time.time_ns()
         result = run_command(
             workspace,
             command,
+            env={"NODE_OPTIONS": f"--test-reporter=junit --test-reporter-destination={json.dumps(str(report))}"} if reporter == "node-junit" else None,
             policy=CommandPolicy(
                 allow_network=bool(inputs.get("allow_network", False)),
                 allow_destructive=False,
                 allow_dependency_install=bool(inputs.get("allow_dependency_install", False)),
                 timeout_seconds=int(inputs.get("timeout", 900)),
+                read_only=frozen_workspace(workspace),
             ),
         )
         result.data["quality_kind"] = self.command_key
         missing_reason = None if result.success else _toolchain_missing_reason(workspace, result)
         if missing_reason:
+            if result.data.get("code") != "COMMAND_RUNNER_UNAVAILABLE" and command[0] in {"npm", "pnpm", "yarn"}:
+                result.data.update(code="PROJECT_COMMAND_UNAVAILABLE", reason="Check the package script and declare its runner, then use install_dependencies", skipped=False)
+                result.data["execution_id"] = record_execution(workspace, self.name, before, result)
+                return result
             result.success = True
             result.data["skipped"] = True
             result.data["reason"] = missing_reason
             result.data["code"] = "TOOLCHAIN_UNAVAILABLE"
             result.error = None
+            result.data["execution_id"] = record_execution(workspace, self.name, before, result)
             return result
         result.data["skipped"] = False
+        if self.command_key == "tests":
+            try:
+                summary = test_summary(reporter, report, str(result.data.get("stdout") or ""))
+                result.data["tests"] = summary
+                if summary["executed"] == 0 or summary["failed"]:
+                    raise ValueError("No tests executed or test failures remain")
+            except (ValueError, OSError) as exc:
+                if result.success:
+                    result.success = False
+                    result.error = str(exc)
+                    result.data["code"] = "TEST_EVIDENCE_MISSING"
+        elif self.command_key == "build" and result.success and self._browser_build(workspace):
+            outputs = [workspace / name / "index.html" for name in ("dist", "build", "out")]
+            fresh = [path for path in outputs if path.is_file() and path.stat().st_mtime_ns >= started_ns]
+            if not fresh:
+                result.success = False
+                result.error = "Production build produced no fresh browser entry point (dist, build, or out/index.html)"
+                result.data["code"] = "BUILD_OUTPUT_MISSING"
+            else:
+                result.data["entrypoint"] = fresh[0].relative_to(workspace).as_posix()
+        result.data["execution_id"] = record_execution(workspace, self.name, before, result)
         return result
+
+    @staticmethod
+    def _browser_build(workspace: Path) -> bool:
+        from appforge.evidence import context_value
+        from appforge.models import ProjectLayout
+        from appforge.projects import load_project
+        if context_value("profile") is not None:
+            return context_value("profile") in {"javascript-web", "typescript-web"}
+        if not (workspace / ".appforge" / "project.json").is_file():
+            return False
+        return load_project(ProjectLayout.from_root(workspace)).get("pipeline") in {"web-app", "web-app-lite"}
 
 
 class RunTestsTool(_QualityTool):
